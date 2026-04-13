@@ -38,5 +38,8 @@ program test1
     print *, q%dequeue()
   end do
   print *, 'queue size =', q%size()
+  print *, 'EXPORT '
+  print *, q%export()
+  print *, '---'
 
   end program
