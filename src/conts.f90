@@ -12,8 +12,9 @@ module conts_mod
   contains
     procedure :: initialize => stack_initialize
     procedure :: push => stack_push, pop => stack_pop
-    procedure :: size => stack_size
+    procedure :: size => stack_size, empty => stack_empty
   end type
+  ! TODO: clear
 
 
   type, public :: queue_t
@@ -26,8 +27,9 @@ module conts_mod
   contains
     procedure :: initialize => queue_initialize
     procedure :: enqueue => queue_enqueue, dequeue => queue_dequeue
-    procedure :: size => queue_size
+    procedure :: size => queue_size, empty => queue_empty
   end type
+  ! TODO: clear
 
 
   integer, parameter :: HMAP_NULL = -1
@@ -39,6 +41,9 @@ module conts_mod
     private
     integer :: index_to_hmap = HMAP_NULL
     integer :: version = 1
+  contains
+    procedure, private :: handle_eq
+    generic :: operator(==) => handle_eq
   end type
 
   type, public :: pqueue_t
@@ -50,11 +55,25 @@ module conts_mod
     integer :: n = 0
     integer :: chunksize = 1
     integer :: ordering = PQUEUE_MIN
+  contains
+    procedure :: initialize => pqueue_initialize
+    procedure :: insert => pqueue_insert, pop => pqueue_pop
+    procedure :: update_priority => pqueue_update_priority
+    procedure :: size => pqueue_size, empty => pqueue_empty
+    procedure :: contains => pqueue_contains
   end type
+  ! TODO: remove(handle)
+  ! TODO: clear
+  ! TODO: get_priority(handle)
 
 
   integer :: efid = error_unit
   integer, parameter :: DEFAULT_CAPACITY = 10
+  integer, parameter, public :: &
+    ERR_OK = 0, &
+    ERR_EMPTY = 1, &
+    ERR_INVALID_HANDLE = 2, &
+    ERR_INVALID_ARG_SIZE = 3
 
 contains
 
@@ -82,7 +101,7 @@ contains
     this%n = 0
     allocate(this%arr(0))
     call stack_increase_capacity(this, new_capacity)
-  end subroutine 
+  end subroutine
 
 
   subroutine queue_initialize(this, chunksize, capacity)
@@ -110,23 +129,15 @@ contains
   end subroutine
 
 
-  subroutine stack_increase_capacity(this, new_capacity, ierr)
+  subroutine stack_increase_capacity(this, new_capacity)
     class(stack_t), intent(inout) :: this
     integer, intent(in) :: new_capacity
-    integer, intent(out), optional :: ierr
 
     integer, allocatable :: tmp(:)
-    integer :: istat
-    character(len=500) :: errmsg
 
-    if (new_capacity <= this%n) error stop 'stack_increase_capacity - internal error'
-    allocate(tmp(new_capacity*this%chunksize), stat=istat, errmsg=errmsg)
-    if (istat/=0) then
-      call handle_error(istat,'stack_increase_capacity - '//trim(errmsg),ierr)
-      return
-    else
-      if (present(ierr)) ierr = 0
-    end if
+    if (new_capacity <= this%n) &
+      & error stop 'stack_increase_capacity - internal error'
+    allocate(tmp(new_capacity*this%chunksize))
     tmp(1:this%n*this%chunksize) = this%arr(1:this%n*this%chunksize)
     call move_alloc(tmp, this%arr)
     this%capacity = new_capacity
@@ -134,24 +145,16 @@ print *, 'stack: new capacity ', new_capacity
   end subroutine stack_increase_capacity
 
 
-  subroutine queue_increase_capacity(this, new_capacity, ierr)
+  subroutine queue_increase_capacity(this, new_capacity)
     class(queue_t), intent(inout) :: this
     integer, intent(in) :: new_capacity
-    integer, intent(out), optional :: ierr
 
     integer, allocatable :: tmp(:)
-    integer :: istat, front, c1, c2
-    character(len=500) :: errmsg
+    integer :: front, c1, c2
 
-    if (new_capacity <= this%n) error stop 'queue_increase_capacity - internal error'
-    allocate(tmp(new_capacity*this%chunksize), stat=istat, errmsg=errmsg)
-    if (istat/=0) then
-      call handle_error(istat,'queue_increase_capacity - '//trim(errmsg),ierr)
-      return
-    else
-      if (present(ierr)) ierr = 0
-    end if
-
+    if (new_capacity <= this%n) &
+      & error stop 'queue_increase_capacity - internal error'
+    allocate(tmp(new_capacity*this%chunksize))
     front = modulo(this%rear-this%n*this%chunksize-1, this%capacity*this%chunksize) + 1
     if (front >= this%rear .and. this%n/=0) then
       c1 = this%capacity*this%chunksize-front+1
@@ -196,21 +199,15 @@ print *, 'queue: new capacity ', new_capacity
     integer, intent(out), optional :: ierr
 
     if (size(newitem) /= this%chunksize) then
-      call handle_error(1, 'stack_push - unexpected size of newitem', ierr)
+      call handle_error(ERR_INVALID_ARG_SIZE, 'stack_push - unexpected size of newitem', ierr)
       return
     else if (this%capacity == 0) then
-      call handle_error(2, 'stack_push - stack is not itialized', ierr)
-      return
-    else if (this%capacity == this%n) then
-      block
-        integer :: ierr1
-        call stack_increase_capacity(this, 2*this%capacity, ierr1)
-        if (ierr1 /= 0) then
-          call handle_error(3, 'stack_push - could not increase capacity', ierr)
-          return
-        end if
-      end block
+      error stop 'stack_push - stack is not initialized'
+    else
+      if (present(ierr)) ierr = ERR_OK
     end if
+    if (this%capacity == this%n) &
+      & call stack_increase_capacity(this, 2*this%capacity)
 
     ! push new item
     block
@@ -229,21 +226,15 @@ print *, 'queue: new capacity ', new_capacity
     integer, intent(out), optional :: ierr
 
     if (size(newitem) /= this%chunksize) then
-      call handle_error(1, 'queue_enqueue - unexpected size of newitem', ierr)
+      call handle_error(ERR_INVALID_ARG_SIZE, 'queue_enqueue - unexpected size of newitem', ierr)
       return
     else if (this%capacity == 0) then
-      call handle_error(2, 'queue_enqueue - queue is not itialized', ierr)
-      return
-    else if (this%capacity == this%n) then
-      block
-        integer :: ierr1
-        call queue_increase_capacity(this, 2*this%capacity, ierr1)
-        if (ierr1 /= 0) then
-          call handle_error(3, 'queue_enqueue - could not increase capacity', ierr)
-          return
-        end if
-      end block
+      error stop 'queue_enqueue - queue is not itialized'
+    else
+      if (present(ierr)) ierr = ERR_OK
     end if
+    if (this%capacity == this%n) &
+      & call queue_increase_capacity(this, 2*this%capacity)
 
     ! enqueue new item
     block
@@ -264,8 +255,10 @@ print *, 'queue: new capacity ', new_capacity
     integer :: pop_item(this%chunksize)
 
     if (this%n < 1) then
-      call handle_error(1, 'stack_pop - empty stack', ierr)
+      call handle_error(ERR_EMPTY, 'stack_pop - empty stack', ierr)
       return
+    else
+      if (present(ierr)) ierr = ERR_OK
     end if
 
     block
@@ -284,8 +277,10 @@ print *, 'queue: new capacity ', new_capacity
     integer :: pop_item(this%chunksize)
 
     if (this%n < 1) then
-      call handle_error(1, 'queue_dequeue - empty queue', ierr)
+      call handle_error(ERR_EMPTY, 'queue_dequeue - empty queue', ierr)
       return
+    else
+      if (present(ierr)) ierr = ERR_OK
     end if
 
     block
@@ -302,43 +297,65 @@ print *, 'queue: new capacity ', new_capacity
     class(stack_t), intent(in) :: this
     integer :: n
     n = this%n
-  end function
+  end function stack_size
 
 
   pure function queue_size(this) result(n)
     class(queue_t), intent(in) :: this
     integer :: n
     n = this%n
-  end function
+  end function queue_size
+
+
+  pure function stack_empty(this) result(is_empty)
+    class(stack_t), intent(in) :: this
+    logical :: is_empty
+    is_empty = this%n == 0
+  end function stack_empty
+
+
+  pure function queue_empty(this) result(is_empty)
+    class(queue_t), intent(in) :: this
+    logical :: is_empty
+    is_empty = this%n == 0
+  end function queue_empty
 
 
   ! ------------------------------
   ! PRIORITY QUEUE implementation
   ! ------------------------------
-  pure function is_higher_priority(a, b, this) result(is)
-    integer, intent(in) :: a, b
+
+  pure function handle_eq(a, b) result(eq)
+    class(handle_t), intent(in) :: a, b
+    logical :: eq
+    eq = a%version==b%version .and. a%index_to_hmap==b%index_to_hmap
+  end function handle_eq
+
+
+  pure function is_higher_priority(pa, pb, this) result(is)
+    integer, intent(in) :: pa, pb
     class(pqueue_t), intent(in) :: this
     logical :: is
     select case(this%ordering)
     case(PQUEUE_MIN) ! assuming lower "P" means higher priority...
-      is = a < b
+      is = pa < pb
     case(PQUEUE_MAX) ! assuming higher "P" means higher priority...
-      is = a > b
+      is = pa > pb
     case default
       error stop 'invalid ORDERING flag in pqueue'
     end select
   end function
 
 
-  pure function is_lower_priority(a, b, this) result(is)
-    integer, intent(in) :: a, b
+  pure function is_lower_priority(pa, pb, this) result(is)
+    integer, intent(in) :: pa, pb
     class(pqueue_t), intent(in) :: this
     logical :: is
     select case(this%ordering)
     case(PQUEUE_MIN) ! assuming lower "P" means higher priority...
-      is = a > b
+      is = pa > pb
     case(PQUEUE_MAX) ! assuming higher "P" means higher priority...
-      is = a < b
+      is = pa < pb
     case default
       error stop 'invalid ORDERING flag in pqueue'
     end select
@@ -360,9 +377,10 @@ print *, 'queue: new capacity ', new_capacity
 
     this%ordering = PQUEUE_MIN
     if (present(ordering)) then
-      ! invalid "ordering" is silently ignored
       if (ordering==PQUEUE_MAX .or. ordering==PQUEUE_MIN) then
         this%ordering = ordering
+      else
+        error stop 'pqueue_initialize - invalid ordering tag'
       end if
     end if
 
@@ -449,10 +467,10 @@ print *, 'queue: new capacity ', new_capacity
     reused_handle = handle
     reused_handle%version = reused_handle%version + 1
     call this%free_handles%enqueue(transfer(reused_handle,INTEGER_MOLD))
-  end subroutine
+  end subroutine return_handle
 
 
-  function get_idheap(this, handle) result(id)
+  pure function get_idheap(this, handle) result(id)
     class(pqueue_t), intent(in) :: this
     type(handle_t), intent(in) :: handle
     integer :: id
@@ -464,18 +482,23 @@ print *, 'queue: new capacity ', new_capacity
     if (handle%index_to_hmap > 0 .and. handle%index_to_hmap <= size(this%hmap)) then
       id = this%hmap(handle%index_to_hmap)
       if (id/=HMAP_NULL) then
+        ! verify version component matches the stored one
         if (this%handles(id)%version/=handle%version) id = HMAP_NULL
       end if
     end if
-  end function
+  end function get_idheap
 
 
-  function pqueue_contains_item(this, handle) result(in_queue)
+  pure function pqueue_contains(this, handle) result(in_queue)
     class(pqueue_t), intent(in) :: this
     type(handle_t), intent(in) :: handle
     logical :: in_queue
+!
+! Use this function to test if "handle" references to an item still in
+! the queue.
+!
     in_queue = get_idheap(this, handle) /= HMAP_NULL
-  end function
+  end function pqueue_contains
 
 
   pure subroutine swap(this, i, j)
@@ -566,16 +589,19 @@ print *, 'queue: new capacity ', new_capacity
     integer, intent(in) :: values(:), priority
     integer, intent(out), optional :: ierr
     type(handle_t) :: handle
-
+!
+! Insert (item, priority) pair to the queue. The "handle" is used to reference
+! this item while it is in the queue. After item is removed from queue,
+! the handle is no longer valid.
+!
     if (size(values) /= this%chunksize) then
-      call handle_error(1, 'pqueue_insert - unexpected size of newitem', ierr)
+      call handle_error(ERR_INVALID_ARG_SIZE, 'pqueue_insert - unexpected size of newitem', ierr)
       return
     else if (.not. allocated(this%values)) then
-      call handle_error(2, 'pqueue_insert - pqueue is not itialized', ierr)
-      return
+      error stop 'pqueue_insert - pqueue is not itialized'
     else
-      if (present(ierr)) ierr=0
-    end if 
+      if (present(ierr)) ierr=ERR_OK
+    end if
 
     call borrow_handle(this, handle)
     this%n = this%n + 1
@@ -587,9 +613,10 @@ print *, 'queue: new capacity ', new_capacity
   end function pqueue_insert
 
 
-  function pqueue_top(this, top_priority, ierr) result(top_value)
+  function pqueue_pop(this, top_priority, top_handle, ierr) result(top_value)
     class(pqueue_t), intent(inout) :: this
     integer, intent(out), optional :: top_priority
+    type(handle_t), intent(out), optional :: top_handle
     integer, intent(out), optional :: ierr
     integer :: top_value(this%chunksize)
 !
@@ -599,19 +626,19 @@ print *, 'queue: new capacity ', new_capacity
 ! then moved down the queue according its priority.
 !
     if (.not. allocated(this%values)) then
-      call handle_error(2, 'pqueue_top - pqueue is not itialized', ierr)
-      return
+      error stop 'pqueue_pop - pqueue is not itialized'
     else if (this%n < 1) then
-      call handle_error(3, 'top: empty queue', ierr)
+      call handle_error(ERR_EMPTY, 'pop: empty queue', ierr)
       return
     else
-      if (present(ierr)) ierr = 0
+      if (present(ierr)) ierr = ERR_OK
     end if
 
     ! swap top with the last item, then copy "top" into output variables
     if (this%n /= 1) call swap(this, 1, this%n)
     top_value = this%values(:, this%n)
     if (present(top_priority)) top_priority = this%priorities(this%n)
+    if (present(top_handle)) top_handle = this%handles(this%n)
 
     ! unmark removed item from the hash-map
     call return_handle(this, this%handles(this%n))
@@ -620,30 +647,27 @@ print *, 'queue: new capacity ', new_capacity
     ! push-down the last item (that is now the first element in the heap)
     this%n = this%n - 1
     if (this%n > 1) call push_down(this, 1)
-  end function
+  end function pqueue_pop
 
 
-  subroutine pqueue_update(this, handle, new_priority, ierr)
+  subroutine pqueue_update_priority(this, handle, new_priority, ierr)
     class(pqueue_t), intent(inout) :: this
     type(handle_t), intent(in) :: handle
     integer, intent(in) :: new_priority
     integer, intent(out), optional :: ierr
 !
-! Update the priority of an item. 
+! Update the priority of an item using handle.
 !
     integer :: id, old_priority
 
-    if (.not. allocated(this%values)) then
-      call handle_error(1, 'pqueue_update - pqueue is not itialized', ierr)
+    if (.not. allocated(this%values)) &
+      & error stop 'pqueue_update - pqueue is not itialized'
+    id = get_idheap(this, handle)
+    if (id == HMAP_NULL) then
+      call handle_error(ERR_INVALID_HANDLE, 'pqueue_update - invalid handle', ierr)
       return
     else
-      id = get_idheap(this, handle)
-      if (id == HMAP_NULL) then
-        call handle_error(2, 'pqueue_update - invalid handle', ierr)
-        return
-      else
-        if (present(ierr)) ierr = 0
-      end if
+      if (present(ierr)) ierr = ERR_OK
     end if
 
     old_priority = this%priorities(id)
@@ -656,7 +680,21 @@ print *, 'queue: new capacity ', new_capacity
       ! priority decreased
       call push_down(this, id)
     end if
-  end subroutine
+  end subroutine pqueue_update_priority
+
+
+  pure function pqueue_size(this) result(n)
+    class(pqueue_t), intent(in) :: this
+    integer :: n
+    n = this%n
+  end function pqueue_size
+
+
+  pure function pqueue_empty(this) result(is_empty)
+    class(pqueue_t), intent(in) :: this
+    logical :: is_empty
+    is_empty = this%n==0
+  end function pqueue_empty
 
 
 
@@ -669,11 +707,12 @@ print *, 'queue: new capacity ', new_capacity
     character(len=*), intent(in) :: msg
     integer, intent(inout), optional :: ierr
 
-    write(efid,'("ERROR ",i0,1x,a)') error_code, msg
+    write(efid,'("ERROR ",a)') msg
     if (present(ierr)) then
       ierr = error_code
     else
-      error stop
+      error stop msg
     end if
   end subroutine handle_error
+
 end module conts_mod
