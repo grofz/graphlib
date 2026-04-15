@@ -54,7 +54,9 @@ module conts_mod
     generic :: write(formatted) => handle_write_formatted
   end type
 
+
   type, extends(container_t), public :: pqueue_t
+    private
     ! "values" ... heap of values inherited from base class
     integer, allocatable :: priorities(:)     ! heap of priorities
     type(handle_t), allocatable :: handles(:) ! heap of handles
@@ -70,6 +72,7 @@ module conts_mod
     procedure :: peek => pqueue_peek
     procedure :: export => pqueue_export, export_priorities => pqueue_export_priorities
     procedure :: export_handles => pqueue_export_handles
+    procedure :: valid => pqueue_valid
   end type
   ! TODO: get_priority(handle)
 
@@ -807,6 +810,55 @@ print *, 'queue: new capacity ', new_capacity
     type(handle_t) :: handles(this%n)
     handles = this%handles(1:this%n)
   end function pqueue_export_handles
+
+
+  pure recursive function validate_heap(this, ind) result(valid)
+    class(pqueue_t), intent(in) :: this
+    integer, intent(in) :: ind
+    logical :: valid
+
+    logical :: left_valid, right_valid
+
+    left_valid = .true.
+    right_valid = .true.
+    if (2*ind <= this%n) left_valid = validate_heap(this, 2*ind) .and. .not. &
+      & is_higher_priority(this%priorities(2*ind), this%priorities(ind), this)
+    if (2*ind+1 <= this%n) right_valid = validate_heap(this, 2*ind+1) .and. .not. &
+      & is_higher_priority(this%priorities(2*ind+1), this%priorities(ind), this)
+    valid = left_valid .and. right_valid
+  end function validate_heap
+
+
+  pure function pqueue_valid(this) result(valid)
+    class(pqueue_t), intent(in) :: this
+    logical :: valid
+
+    if (this%n == NOT_INITIALIZED) then
+      ! uninitialized quueue is assumed valid
+      valid = .true.
+      return
+    end if
+
+    ! capacity = size + free_handles
+    valid = size(this%values, dim=2) == this%n + this%free_handles%size()
+
+    ! active handles
+    block
+      integer :: i
+      do i=1, this%n
+        if (this%hmap(this%handles(i)%index_to_hmap)/=i) then
+          valid = .false.
+          exit
+        end if
+      enddo
+    end block
+
+    ! null items in hmap
+    valid = valid .and. count(this%hmap==HMAP_NULL) == this%free_handles%size()
+
+    ! priority heap is correct
+    valid = valid .and. validate_heap(this, 1)
+  end function pqueue_valid
 
 
   ! -----
