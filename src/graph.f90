@@ -4,12 +4,11 @@
     implicit none (type, external)
     private
 
-    ! Parametrized derived types - to avoid PDT, we must hard-code the array sizes required for
-    ! each implementation
+    ! Parametrized derived types not working with gfortran
+    ! - to avoid PDT, we must hard-code the array sizes required for the actual implementation
     integer, parameter, public :: NIV_PARS = 0, NRV_PARS = 0, NIE_PARS = 0, NRE_PARS = 0
 
     integer, parameter :: DEFAULT_ECAPACITY = 10, DEFAULT_VCAPACITY = 5
-
     integer, parameter :: MAP_NULL = -1, NOT_INITIALIZED = -1
     integer, parameter :: INTEGER_MOLD(0) = [integer ::]
 
@@ -29,7 +28,7 @@
     type vertex_t
       integer  :: ipar(NIV_PARS)
       real(dp) :: rpar(NRV_PARS)
-      integer, allocatable :: ngbs(:) ! outgoing edges
+      integer, allocatable :: ngbs(:) ! list of outgoing edges id
       type(handle_t) :: handle
     end type
 
@@ -44,9 +43,11 @@
       type(vertex_t), allocatable :: vertices(:)
       type(edge_t), allocatable :: edges(:)
       integer, allocatable :: vmap(:), emap(:)
-          ! map handles to vertices/edges position in "vertices"/"edges"
+          ! to store the position of vertices/edges in "vertices"/"edges" arrays
       integer :: nvertices=NOT_INITIALIZED, nedges
-      logical :: is_directed_graph=.false. ! .true. if all edges are "one-way" edged
+      logical :: is_directed_graph=.false.
+        ! .true. = edges are "one-way"
+        ! .false. = edges are bi-directional
       type(queue_t) :: free_vhandles, free_ehandles
     end type
 
@@ -70,7 +71,7 @@
         this%is_directed_graph = .false.
         if (present(is_directed_graph)) this%is_directed_graph = is_directed_graph
 
-        ! reallocate all arrays to 0 size
+        ! reallocate all arrays to zero size
         if (allocated(this%vertices)) deallocate(this%vertices)
         allocate(this%vertices(0))
         if (allocated(this%edges)) deallocate(this%edges)
@@ -123,7 +124,8 @@
         end if
 
         ! reallocate "vertices" and "vmap"
-        allocate(tmp_vertices(new_capacity0), tmp_map(new_capacity0))
+        allocate(tmp_vertices(new_capacity0))
+        allocate(tmp_map(new_capacity0), source=MAP_NULL)
         tmp_vertices(1:old_capacity) = this%vertices
         tmp_map(1:old_capacity) = this%vmap
         call move_alloc(tmp_vertices, this%vertices)
@@ -158,7 +160,8 @@
         end if
 
         ! reallocate "edges" and "vmap"
-        allocate(tmp_edges(new_capacity0), tmp_map(new_capacity0))
+        allocate(tmp_edges(new_capacity0))
+        allocate(tmp_map(new_capacity0), source=MAP_NULL)
         tmp_edges(1:old_capacity) = this%edges
         tmp_map(1:old_capacity) = this%emap
         call move_alloc(tmp_edges, this%edges)
@@ -221,7 +224,7 @@
         type(handle_t), intent(in) :: handle
         integer :: id
 !
-! Return position of a vertex/edge  in array using handle. If handle refers to
+! Return position of a vertex/edge in array using handle. If handle refers to
 ! the vertex/edge no longer in array, MAP_NULL value is returned
 !
         id = MAP_NULL
@@ -231,7 +234,7 @@
             id = this%vmap(handle%index_to_map)
             if (id/=MAP_NULL) then
               ! verify version matches the stored one
-              if (this%vertices(id)%handle%version/=handle%version) id = MAP_NULL
+              if (.not. (this%vertices(id)%handle==handle)) id = MAP_NULL
             end if
           end if
         case(EDGE_HANDLE_TYPE)
@@ -239,7 +242,7 @@
             id = this%emap(handle%index_to_map)
             if (id/=MAP_NULL) then
               ! verify version matches the stored one
-              if (this%edges(id)%handle%version/=handle%version) id = MAP_NULL
+              if (.not. (this%edges(id)%handle==handle)) id = MAP_NULL
             end if
           end if
         case default
@@ -272,6 +275,27 @@
       end function graph_add_vertex
 
 
+      subroutine reallocate_vertex(this, handle, newid)
+        class(graph_t), intent(inout) :: this
+        type(handle_t), intent(in) :: handle
+        integer, intent(in) :: newid
+
+        integer :: oldid
+
+        if (handle%handle_type /= VERTEX_HANDLE_TYPE) &
+            error stop 'reallocate_vertex - wrong handle type' 
+        oldid = get_index_from_handle(this, handle)
+        if (oldid == MAP_NULL) &
+            error stop 'reallocate_vertex - vertex no more exists'
+        if (newid < 1 .or. newid > this%nvertices) &
+            error stop 'reallocate_vertex - newid out of bounds'
+
+        ! copy vertex and update record in "vmap"
+        this%vertices(newid) = this%vertices(oldid)
+        this%vmap(handle%index_to_map) = newid
+      end subroutine reallocate_vertex
+
+
       function graph_add_edge(this, src, dst, ipar, rpar) result(handle)
         class(graph_t), intent(inout) :: this
         type(handle_t), intent(in) :: src, dst
@@ -300,11 +324,11 @@
             error stop 'graph_add_edge - connection already exists'
           else if (.not. this%is_directed_graph) then
             if (get_connection_index(this, idst, isrc) /= MAP_NULL) then
-              error stop 'graph_add_edge - undirected connection already exists'
+              error stop 'graph_add_edge - opposite connection already exists'
             end if
           end if
 
-          ! we are sure there is no connection between SRC and DST
+          ! we verified there is no connection between SRC and DST
           call borrow_handle(this, EDGE_HANDLE_TYPE, handle)
           this%nedges = this%nedges + 1
           associate (new_edge => this%edges(this%nedges))
@@ -314,15 +338,20 @@
             new_edge%rpar = rpar
             new_edge%handle = handle
           end associate
+          this%emap(handle%index_to_map) = this%nedges
 
           ! include new edge to the outgoing edges list
-          ! TODO more effective?
-          this%vertices(isrc)%ngbs = [this%vertices(isrc)%ngbs, handle%index_to_map]
+          ! TODO more effective, without reallocation?
+          this%vertices(isrc)%ngbs = [this%vertices(isrc)%ngbs, this%nedges]
           if (.not. this%is_directed_graph) then
-            this%vertices(idst)%ngbs = [this%vertices(idst)%ngbs, handle%index_to_map]
+            this%vertices(idst)%ngbs = [this%vertices(idst)%ngbs, this%nedges]
           end if
         end block
       end function graph_add_edge
+
+
+      ! TODO
+      ! subroutine reallocate_edge
 
 
       function list_of_ngbs(this, isrc) result(idsts)
@@ -343,18 +372,18 @@
             ia = get_index_from_handle(this, this%edges(ngbs(i))%src_handle)
             ib = get_index_from_handle(this, this%edges(ngbs(i))%dst_handle)
             if (ia==MAP_NULL .or. ib==MAP_NULL) then
-              error stop 'list_of_ngbs - edge has invalid handles'
+              error stop 'list_of_ngbs - edge has invalid handles (vertex no more exists)'
             else if (ia/=isrc .and. ib/=isrc) then
-              error stop 'list_of_ngbs - isrc does not relate to actual edge'
+              error stop 'list_of_ngbs - no edge endpoint is "isrc" (should not happen)'
             end if
 
-            if (.not. this%is_directed_graph) then
+            if (.not. this%is_directed_graph) then ! bi-directional graph
               if (ia==isrc) then
                 idsts(i) = ib
               else if (ib==isrc) then
                 idsts(i) = ia
               else
-                error stop 'list_of_ngbs - should not be reacahble'
+                error stop 'list_of_ngbs - should not be reachable'
               end if
             else ! directed graph
               if (ia==isrc) then
