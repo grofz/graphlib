@@ -43,17 +43,17 @@
 !     !! 3. Copy data to `??dat` arrays
       !! 4. Call vtuio_write
       !! 5. Call `finalize`
-      integer, allocatable  :: pidat(:,:)
-        !! shape = [no of components of data, no of points]
-      integer, allocatable  :: cidat(:,:)
-        !! shape = [no of components of data, no of cells]
-      real(DP), allocatable :: prdat(:,:)
-      real(DP), allocatable :: crdat(:,:)
+!     integer, allocatable  :: pidat(:,:)
+!       !! shape = [no of components of data, no of points]
+!     integer, allocatable  :: cidat(:,:)
+!       !! shape = [no of components of data, no of cells]
+!     real(DP), allocatable :: prdat(:,:)
+!     real(DP), allocatable :: crdat(:,:)
       type(vtuio_meta_t), allocatable :: meta(:)
       integer :: totcomp(0:3) = 0
     contains
       procedure :: add_item => meta_add_item
-      procedure :: reallocate => meta_reallocate
+     !procedure :: reallocate => meta_reallocate
       procedure :: free => meta_free
     end type vtuio_data_t
 
@@ -127,7 +127,7 @@
         !! data structure for additional data
 
       character(len=MAX_BUFFER_LEN/2) :: ch1, ch2
-      integer :: npoints, ncells, i, fid, offset
+      integer :: npoints, ncells, i, j, fid, offset
       real(DP), allocatable :: rdata(:,:)
       integer, allocatable :: idata(:,:)
 
@@ -163,11 +163,17 @@
           do i=1,size(vtudata%meta)
             associate(m=>vtudata%meta(i))
               if (m%iclass==VTUIO_META_POINT+VTUIO_META_R) then
-                call write_data(fid, m%nbytes, trim(m%label), rdata=&
-                    vtudata%prdat(m%start:m%start+m%ncomp-1,:), offset=offset)
+                if (allocated(rdata)) deallocate(rdata)
+                allocate(rdata(m%ncomp,npoints))
+                call write_data(fid, m%nbytes, trim(m%label), rdata=rdata, offset=offset)
+               !call write_data(fid, m%nbytes, trim(m%label), rdata=&
+               !    vtudata%prdat(m%start:m%start+m%ncomp-1,:), offset=offset)
               else if (m%iclass==VTUIO_META_POINT+VTUIO_META_I) then
-                call write_data(fid, m%nbytes, trim(m%label), idata=&
-                    vtudata%pidat(m%start:m%start+m%ncomp-1,:), offset=offset)
+                if (allocated(idata)) deallocate(idata)
+                allocate(idata(m%ncomp,npoints))
+                call write_data(fid, m%nbytes, trim(m%label), idata=idata, offset=offset)
+               !call write_data(fid, m%nbytes, trim(m%label), idata=&
+               !    vtudata%pidat(m%start:m%start+m%ncomp-1,:), offset=offset)
               end if
             end associate
           end do
@@ -188,11 +194,17 @@
           do i=1,size(vtudata%meta)
             associate(m=>vtudata%meta(i))
               if (m%iclass==VTUIO_META_CELL+VTUIO_META_R) then
-                call write_data(fid, m%nbytes, trim(m%label), rdata=&
-                    vtudata%crdat(m%start:m%start+m%ncomp-1,:), offset=offset)
+                if (allocated(rdata)) deallocate(rdata)
+                allocate(rdata(m%ncomp,ncells))
+                call write_data(fid, m%nbytes, trim(m%label), rdata=rdata, offset=offset)
+               !call write_data(fid, m%nbytes, trim(m%label), rdata=&
+               !    vtudata%crdat(m%start:m%start+m%ncomp-1,:), offset=offset)
               else if (m%iclass==VTUIO_META_CELL+VTUIO_META_I) then
-                call write_data(fid, m%nbytes, trim(m%label), idata=&
-                    vtudata%cidat(m%start:m%start+m%ncomp-1,:), offset=offset)
+                if (allocated(idata)) deallocate(idata)
+                allocate(idata(m%ncomp,ncells))
+                call write_data(fid, m%nbytes, trim(m%label), idata=idata, offset=offset)
+               !call write_data(fid, m%nbytes, trim(m%label), idata=&
+               !    vtudata%cidat(m%start:m%start+m%ncomp-1,:), offset=offset)
               end if
             end associate
           end do
@@ -249,11 +261,23 @@
           do i=1,size(vtudata%meta)
             associate(m=>vtudata%meta(i))
               if (m%iclass==VTUIO_META_POINT+VTUIO_META_R) then
-                call write_data(fid, m%nbytes, trim(m%label), rdata=&
-                    vtudata%prdat(m%start:m%start+m%ncomp-1,:))
+                if (allocated(rdata)) deallocate(rdata)
+                allocate(rdata(m%ncomp,npoints))
+                do j=1,npoints
+                  rdata(:,j) = graph%vertices(j)%rpar(m%start:m%start+m%ncomp-1)
+                end do
+                call write_data(fid, m%nbytes, trim(m%label), rdata=rdata)
+               !call write_data(fid, m%nbytes, trim(m%label), rdata=&
+               !    vtudata%prdat(m%start:m%start+m%ncomp-1,:))
               else if (m%iclass==VTUIO_META_POINT+VTUIO_META_I) then
-                call write_data(fid, m%nbytes, trim(m%label), idata=&
-                    vtudata%pidat(m%start:m%start+m%ncomp-1,:))
+                if (allocated(idata)) deallocate(idata)
+                allocate(idata(m%ncomp,npoints))
+                do j=1,npoints
+                  idata(:,j) = graph%vertices(j)%ipar(m%start:m%start+m%ncomp-1)
+                end do
+                call write_data(fid, m%nbytes, trim(m%label), idata=idata)
+               !call write_data(fid, m%nbytes, trim(m%label), idata=&
+               !    vtudata%pidat(m%start:m%start+m%ncomp-1,:))
               end if
             end associate
           end do
@@ -274,11 +298,23 @@
           do i=1,size(vtudata%meta)
             associate(m=>vtudata%meta(i))
               if (m%iclass==VTUIO_META_CELL+VTUIO_META_R) then
-                call write_data(fid, m%nbytes, trim(m%label), rdata=&
-                    vtudata%crdat(m%start:m%start+m%ncomp-1,:))
+                if (allocated(rdata)) deallocate(rdata)
+                allocate(rdata(m%ncomp,ncells))
+                do j=1,ncells
+                  rdata(:,j) = graph%edges(j)%rpar(m%start:m%ncomp-1)
+                end do
+                call write_data(fid, m%nbytes, trim(m%label), rdata=rdata)
+               !call write_data(fid, m%nbytes, trim(m%label), rdata=&
+               !    vtudata%crdat(m%start:m%start+m%ncomp-1,:))
               else if (m%iclass==VTUIO_META_CELL+VTUIO_META_I) then
-                call write_data(fid, m%nbytes, trim(m%label), idata=&
-                    vtudata%cidat(m%start:m%start+m%ncomp-1,:))
+                if (allocated(idata)) deallocate(idata)
+                allocate(idata(m%ncomp,ncells))
+                do j=1,ncells
+                  idata(:,j) = graph%edges(j)%ipar(m%start:m%ncomp-1)
+                end do
+                call write_data(fid, m%nbytes, trim(m%label), idata=idata)
+               !call write_data(fid, m%nbytes, trim(m%label), idata=&
+               !    vtudata%cidat(m%start:m%start+m%ncomp-1,:))
               end if
             end associate
           end do
@@ -816,22 +852,22 @@
     end function meta_add_item
 
 
-    subroutine meta_reallocate(this, npoints, ncells)
-      class(vtuio_data_t), intent(inout) :: this
-      integer, intent(in) :: npoints, ncells
-      allocate(this%pidat(this%totcomp(0), npoints))
-      allocate(this%cidat(this%totcomp(1), ncells))
-      allocate(this%prdat(this%totcomp(2), npoints))
-      allocate(this%crdat(this%totcomp(3), ncells))
-    end subroutine meta_reallocate
+   !subroutine meta_reallocate(this, npoints, ncells)
+   !  class(vtuio_data_t), intent(inout) :: this
+   !  integer, intent(in) :: npoints, ncells
+   !  allocate(this%pidat(this%totcomp(0), npoints))
+   !  allocate(this%cidat(this%totcomp(1), ncells))
+   !  allocate(this%prdat(this%totcomp(2), npoints))
+   !  allocate(this%crdat(this%totcomp(3), ncells))
+   !end subroutine meta_reallocate
 
 
     subroutine meta_free(this)
       class(vtuio_data_t), intent(inout) :: this
-      if (allocated(this%pidat)) deallocate(this%pidat)
-      if (allocated(this%cidat)) deallocate(this%cidat)
-      if (allocated(this%prdat)) deallocate(this%prdat)
-      if (allocated(this%crdat)) deallocate(this%crdat)
+     !if (allocated(this%pidat)) deallocate(this%pidat)
+     !if (allocated(this%cidat)) deallocate(this%cidat)
+     !if (allocated(this%prdat)) deallocate(this%prdat)
+     !if (allocated(this%crdat)) deallocate(this%crdat)
       if (allocated(this%meta)) deallocate(this%meta)
       this%totcomp = 0
     end subroutine meta_free
