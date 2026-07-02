@@ -6,7 +6,7 @@
 
     ! Parametrized derived types not working with gfortran
     ! - to avoid PDT, we must hard-code the array sizes required for the actual implementation
-    integer, parameter, public :: NIV_PARS = 0, NRV_PARS = 0, NIE_PARS = 0, NRE_PARS = 0
+    integer, parameter, public :: NIV_PARS = 1, NRV_PARS = 4, NIE_PARS = 1, NRE_PARS = 0
 
     integer, parameter :: DEFAULT_ECAPACITY = 10, DEFAULT_VCAPACITY = 5
     integer, parameter :: MAP_NULL = -1, NOT_INITIALIZED = -1
@@ -37,6 +37,8 @@
       integer  :: ipar(NIE_PARS)
       real(dp) :: rpar(NRE_PARS)
       type(handle_t) :: handle
+    contains
+      procedure :: vertex_indices => edge_vertex_indices
     end type
 
     type, public :: graph_t
@@ -49,6 +51,12 @@
         ! .true. = edges are "one-way"
         ! .false. = edges are bi-directional
       type(queue_t) :: free_vhandles, free_ehandles
+      integer :: niv, nrv, nie, nre
+        ! store size of "ipar" and "rpar" arrays in vertices and edges
+    contains
+      procedure :: initialize => graph_initialize
+      procedure :: add_vertex => graph_add_vertex
+      procedure :: add_edge   => graph_add_edge
     end type
 
   contains
@@ -99,6 +107,11 @@
           if (present(ecapacity)) new_capacity = ecapacity
           call graph_increase_edges_capacity(this, new_capacity)
         end block
+
+        this%niv = NIV_PARS
+        this%nrv = NRV_PARS
+        this%nie = NIE_PARS
+        this%nre = NRE_PARS
       end subroutine graph_initialize
 
 
@@ -254,7 +267,7 @@
       function graph_add_vertex(this, ipar, rpar) result(handle)
         class(graph_t), intent(inout) :: this
         integer, intent(in) :: ipar(:)
-        real, intent(in) :: rpar(:)
+        real(dp), intent(in) :: rpar(:)
         type(handle_t) :: handle
 
         if (.not. graph_is_initialized(this)) then
@@ -300,7 +313,7 @@
         class(graph_t), intent(inout) :: this
         type(handle_t), intent(in) :: src, dst
         integer, intent(in) :: ipar(:)
-        integer, intent(in) :: rpar(:)
+        real(dp), intent(in) :: rpar(:)
         type(handle_t) :: handle
 
         if (.not. graph_is_initialized(this)) then
@@ -413,5 +426,15 @@
           exit
         end do
       end function get_connection_index
+
+
+      function edge_vertex_indices(this, graph) result(ids)
+        class(edge_t), intent(in) :: this
+        type(graph_t), intent(in) :: graph
+        integer ::ids(2)
+
+        ids(1) = get_index_from_handle(graph, this%src_handle)
+        ids(2) = get_index_from_handle(graph, this%dst_handle)
+      end function edge_vertex_indices
 
   end module graph_mod
