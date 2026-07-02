@@ -2,7 +2,7 @@
     use iso_fortran_env, only : DP=>real64
     use vtuio_mod, only : vtuio_write, vtuio_read
 !   use import_dem2011_mod, only : import_dem2011
-    use graph_mod, only : graph_t, handle_t, graph_add_vertex, graph_add_edge
+    use graph_mod, only : graph_t, handle_t
     implicit none (type, external)
 
     real(DP) :: velo(3), time
@@ -14,6 +14,14 @@
 
     integer, parameter :: mask_for_vtuio(*) = [1, 2, 1, 1]
 
+    interface
+      subroutine graph_export(graph)
+        use graph_mod, only : graph_t, handle_t
+        implicit none (type, external)
+        type(graph_t), intent(in) :: graph
+      end subroutine
+    end interface
+
     ! Initialize graph
     call g%initialize()
 
@@ -21,28 +29,28 @@
     allocate(atom_handles(5), x(3,5))
     velo = [1.0, 1.0, 0.0]
     x(:,1) = real([0.0,0.0,0.0],DP)
-    atom_handles(1) = graph_add_vertex(g, [1], [0.75_DP, x(:,1)])
+    atom_handles(1) = g%add_vertex([1], [0.75_DP, x(:,1)])
 
     velo = [1.0, 2.0, 0.0]
     x(:,2) = real([1.0,0.0,0.0],DP)
-    atom_handles(2) = graph_add_vertex(g, [1], [0.25_DP, x(:,2)])
+    atom_handles(2) = g%add_vertex([1], [0.25_DP, x(:,2)])
 
     velo = [2.0, 1.0, 0.0]
     x(:,3) = real([0.5707,0.6297,0.0],DP)
-    atom_handles(3) = graph_add_vertex(g, [1], [0.10_DP, x(:,3)])
+    atom_handles(3) = g%add_vertex([1], [0.10_DP, x(:,3)])
 
     velo = [0.0, 0.0, 0.1]
     x(:,4) = real([0.0,0.0,1.0],DP)
-    atom_handles(4) = graph_add_vertex(g, [2], [0.05_DP, x(:,4)])
+    atom_handles(4) = g%add_vertex([2], [0.05_DP, x(:,4)])
 
     x(:,5) = real([0.0,0.0,2.0],DP)
-    atom_handles(5) = graph_add_vertex(g, [2], [0.05_DP, x(:,5)])
+    atom_handles(5) = g%add_vertex([2], [0.05_DP, x(:,5)])
 
     allocate(cone_handles(4))
-    cone_handles(1) = graph_add_edge(g, atom_handles(1), atom_handles(2), [10], [real(dp)::])
-    cone_handles(2) = graph_add_edge(g, atom_handles(1), atom_handles(3), [10], [real(dp)::])
-    cone_handles(3) = graph_add_edge(g, atom_handles(1), atom_handles(4), [20], [real(dp)::])
-    cone_handles(4) = graph_add_edge(g, atom_handles(4), atom_handles(5), [20], [real(dp)::])
+    cone_handles(1) = g%add_edge(atom_handles(1), atom_handles(2), [10], [real(dp)::])
+    cone_handles(2) = g%add_edge(atom_handles(1), atom_handles(3), [10], [real(dp)::])
+    cone_handles(3) = g%add_edge(atom_handles(1), atom_handles(4), [20], [real(dp)::])
+    cone_handles(4) = g%add_edge(atom_handles(4), atom_handles(5), [20], [real(dp)::])
 
     call vtuio_write('test', g, mask_for_vtuio, 123.0_DP)
     print *, 'atom_test write finished'
@@ -62,6 +70,9 @@
     end do
     call vtuio_write('test_copy', gnew, mask_for_vtuio, 456.0_DP)
 
+    call graph_export(g)
+    call graph_export(gnew)
+
     print *
     print *, '*** big file ***'
     call vtuio_read('big', gbig, mask_for_vtuio)
@@ -69,5 +80,25 @@
 
 !   g = import_dem2011('tmp')
 !   call g%writevtu('tmpvtu', rem_dbl_edges=.true.)
+    call graph_export(gbig)
 
   end program atom_test
+
+
+  subroutine graph_export(graph)
+    use iso_fortran_env, only : DP=>real64
+    use graph_mod, only : graph_t, handle_t
+    implicit none (type, external)
+    type(graph_t), intent(in) :: graph
+    integer :: i
+    print *,' VERTICES'
+    do i=1, graph%nvertices
+      print *, i, graph%vertices(i)%ipar, graph%vertices(i)%rpar
+      print *
+    end do
+    print *,' EDGES'
+    do i=1, graph%nedges
+      print *, graph%edges(i)%vertex_indices(graph), graph%edges(i)%ipar, graph%edges(i)%rpar
+      print *
+    end do
+  end subroutine graph_export
