@@ -1,6 +1,7 @@
   module graph_mod
     use iso_fortran_env, only : dp => real64, i1b => int8
     use conts_mod, only : queue_t
+    use graph_adjlist_mod, only : adjlist_t, iterator_t
     implicit none (type, external)
     private
 
@@ -28,7 +29,7 @@
     type vertex_t
       integer  :: ipar(NIV_PARS)
       real(dp) :: rpar(NRV_PARS)
-      integer, allocatable :: ngbs(:) ! list of outgoing edges id
+      type(adjlist_t) :: ngbs ! list of outgoing edges id
       type(handle_t) :: handle
     end type
 
@@ -281,14 +282,14 @@
         associate (new_vertex => this%vertices(this%nvertices))
           new_vertex%ipar = ipar
           new_vertex%rpar = rpar
-          allocate (new_vertex%ngbs(0))
+          call new_vertex%ngbs%initialize()
           new_vertex%handle = handle
         end associate
         this%vmap(handle%index_to_map) = this%nvertices
       end function graph_add_vertex
 
 
-      subroutine reallocate_vertex(this, handle, newid)
+      subroutine relocate_vertex(this, handle, newid)
         class(graph_t), intent(inout) :: this
         type(handle_t), intent(in) :: handle
         integer, intent(in) :: newid
@@ -296,17 +297,17 @@
         integer :: oldid
 
         if (handle%handle_type /= VERTEX_HANDLE_TYPE) &
-            error stop 'reallocate_vertex - wrong handle type' 
+            error stop 'relocate_vertex - wrong handle type'
         oldid = get_index_from_handle(this, handle)
         if (oldid == MAP_NULL) &
-            error stop 'reallocate_vertex - vertex no more exists'
+            error stop 'relocate_vertex - vertex no more exists'
         if (newid < 1 .or. newid > this%nvertices) &
-            error stop 'reallocate_vertex - newid out of bounds'
+            error stop 'relocate_vertex - newid out of bounds'
 
         ! copy vertex and update record in "vmap"
         this%vertices(newid) = this%vertices(oldid)
         this%vmap(handle%index_to_map) = newid
-      end subroutine reallocate_vertex
+      end subroutine relocate_vertex
 
 
       function graph_add_edge(this, src, dst, ipar, rpar) result(handle)
@@ -354,60 +355,111 @@
           this%emap(handle%index_to_map) = this%nedges
 
           ! include new edge to the outgoing edges list
-          ! TODO more effective, without reallocation?
-          this%vertices(isrc)%ngbs = [this%vertices(isrc)%ngbs, this%nedges]
+          call this%vertices(isrc)%ngbs%add(this%nedges)
           if (.not. this%is_directed_graph) then
-            this%vertices(idst)%ngbs = [this%vertices(idst)%ngbs, this%nedges]
+            call this%vertices(idst)%ngbs%add(this%nedges)
           end if
         end block
       end function graph_add_edge
 
 
-      ! TODO
-      ! subroutine reallocate_edge
+      subroutine relocate_edge(this, handle, newid)
+        class(graph_t), intent(inout) :: this
+        type(handle_t), intent(in) :: handle
+        integer, intent(in) :: newid
+
+        integer :: oldid, isrc, idst
+
+        if (handle%handle_type /= EDGE_HANDLE_TYPE) &
+            error stop 'relocate_edge - wrong handle type'
+        oldid = get_index_from_handle(this, handle)
+        if (oldid == MAP_NULL) &
+            error stop 'relocate_edge - edge no more exists'
+        if (newid < 1 .or. newid > this%nedges) &
+            error stop 'relocate_edge - newid out of bounds'
+
+        ! copy edge and update record in "emap"
+        this%edges(newid) = this%edges(oldid)
+        this%emap(handle%index_to_map) = newid
+
+        ! update adjacent lists of respective vertices
+        isrc = get_index_from_handle(this, this%edges(newid)%src_handle)
+        if (isrc/=MAP_NULL) call update_ngbs(this%vertices(isrc)%ngbs)
+
+        if (.not. this%is_directed_graph) then
+          idst = get_index_from_handle(this, this%edges(newid)%dst_handle)
+          if (idst/=MAP_NULL) call update_ngbs(this%vertices(idst)%ngbs)
+        end if
+
+      contains
+        subroutine update_ngbs(ngbs) ! internal procedure
+          type(adjlist_t), intent(inout) :: ngbs
+
+          type(iterator_t) :: found_oldid
+          if (ngbs%contains(newid)) &
+              error stop 'relocate edge - newid present in list would lead to duplicity'
+          found_oldid = ngbs%find(oldid)
+          if (.not. ngbs%has_next(found_oldid)) &
+              error stop 'relocate edge - old id not found in adjacent list'
+          call ngbs%remove(oldid, found_oldid)
+          call ngbs%add(newid, skip_duplicity_check=.true.)
+        end subroutine
+
+      end subroutine relocate_edge
 
 
       function list_of_ngbs(this, isrc) result(idsts)
         class(graph_t), intent(in) :: this
         integer, intent(in) :: isrc
-        integer :: idsts(size(this%vertices(isrc)%ngbs))
+        integer :: idsts(this%vertices(isrc)%ngbs%size())
 !
 ! Return an array of neighbors of "isrc" vertex.
-! For directed graph, only outbound neighbours are listed.
 !
-        integer :: i, ia, ib
+        integer :: ipos, iedge, idst
+        type(iterator_t) :: iterator
 
-        associate (ngbs => this%vertices(isrc)%ngbs)
-          do i=1, size(ngbs)
-            if (ngbs(i) <= 0 .or. ngbs(i) > this%nedges) then
-              error stop 'list_of_ngbs - item in ngbs is out of bounds'
-            end if
-            ia = get_index_from_handle(this, this%edges(ngbs(i))%src_handle)
-            ib = get_index_from_handle(this, this%edges(ngbs(i))%dst_handle)
-            if (ia==MAP_NULL .or. ib==MAP_NULL) then
-              error stop 'list_of_ngbs - edge has invalid handles (vertex no more exists)'
-            else if (ia/=isrc .and. ib/=isrc) then
-              error stop 'list_of_ngbs - no edge endpoint is "isrc" (should not happen)'
-            end if
+        iterator = iterator_t()
+        ipos = 0
+        do while (this%vertices(isrc)%ngbs%has_next(iterator))
+          call this%vertices(isrc)%ngbs%next(iterator, iedge)
 
-            if (.not. this%is_directed_graph) then ! bi-directional graph
-              if (ia==isrc) then
-                idsts(i) = ib
-              else if (ib==isrc) then
-                idsts(i) = ia
-              else
-                error stop 'list_of_ngbs - should not be reachable'
-              end if
-            else ! directed graph
-              if (ia==isrc) then
-                idsts(i) = ib
-              else
-                error stop 'list_of_ngbs - wrong source in directed graph'
-              end if
-            end if
-          end do
-        end associate
+          if (iedge <= 0 .or. iedge > this%nedges) then
+            error stop 'list_of_ngbs - item in ngbs is out of bounds'
+          end if
+
+          idst = edge_other_vertex_id(this, iedge, isrc)
+          ! for directed graphs verify, that destination vertex has been selected
+          if (this%is_directed_graph) then
+            if (idst /= get_index_from_handle(this, this%edges(iedge)%dst_handle)) &
+              error stop 'list_of_ngbs - wrong source in directed graph'
+          end if
+
+          ipos = ipos+1
+          if (ipos > size(idsts)) error stop 'list_of_ngbs - something wrong'
+          idsts(ipos) = idst
+        end do
       end function list_of_ngbs
+
+
+      function edge_other_vertex_id(this, iedge, ia) result(ib)
+        class(graph_t), intent(in) :: this
+        integer, intent(in) :: iedge, ia
+        integer ib
+
+        integer :: i1, i2
+
+        i1 = get_index_from_handle(this, this%edges(iedge)%src_handle)
+        i2 = get_index_from_handle(this, this%edges(iedge)%dst_handle)
+        if (i1==MAP_NULL .or. i2==MAP_NULL) then
+          error stop 'edge_other_vertex_id - edge has invalid handles (vertex no more exists)'
+        else if (ia==i1) then
+          ib = i2
+        else if (ia==i2) then
+          ib = i1
+        else
+          error stop 'edge_other_vertex_id - no edge endpoint is "ia" (should not happen)'
+        end if
+      end function edge_other_vertex_id
 
 
       function get_connection_index(this, ia, ib) result(id)
@@ -415,15 +467,17 @@
         integer, intent(in) :: ia, ib
         integer :: id
 
-        integer :: list(size(this%vertices(ia)%ngbs))
-        integer :: i
+        integer :: iedge
+        type(iterator_t) :: iterator
 
         id = MAP_NULL
-        list = list_of_ngbs(this, ia)
-        do i=1, size(list)
-          if (list(i) /= ib) cycle
-          id = this%vertices(ia)%ngbs(i)
-          exit
+        iterator = iterator_t()
+        do while (this%vertices(ia)%ngbs%has_next(iterator))
+          call this%vertices(ia)%ngbs%next(iterator, iedge)
+          if (edge_other_vertex_id(this, iedge, ia) == ib) then
+            id = iedge
+            exit
+          end if
         end do
       end function get_connection_index
 
