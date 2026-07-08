@@ -55,6 +55,11 @@
     call vtuio_write('test', g, mask_for_vtuio, 123.0_DP)
     print *, 'atom_test write finished'
 
+    ! remove some objects
+    call g%remove_vertex(atom_handles(4))
+   !call g%remove_edge(cone_handles(4))
+    call vtuio_write('test_remove', g, mask_for_vtuio, 123.0_DP)
+
     call vtuio_read('test', gnew, mask_for_vtuio, time)
     print *, 'atom_test read finished'
 
@@ -73,6 +78,7 @@
     call graph_export(g)
     call graph_export(gnew)
 
+    stop 7
     print *
     print *, '*** big file ***'
     call vtuio_read('big', gbig, mask_for_vtuio)

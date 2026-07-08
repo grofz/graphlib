@@ -59,6 +59,8 @@
       procedure :: initialize => graph_initialize
       procedure :: add_vertex => graph_add_vertex
       procedure :: add_edge   => graph_add_edge
+      procedure :: remove_vertex => graph_remove_vertex
+      procedure :: remove_edge => graph_remove_edge
     end type
 
   contains
@@ -296,6 +298,45 @@
     end function graph_add_vertex
 
 
+    subroutine graph_remove_vertex(this, handle)
+      class(graph_t), intent(inout) :: this
+      type(handle_t), intent(in) :: handle
+
+      integer :: ivertex
+
+      if (handle%handle_type /= VERTEX_HANDLE_TYPE) &
+          error stop 'graph_remove_vertex - invalid handle type'
+      ivertex = get_index_from_handle(this, handle)
+      if (ivertex == MAP_NULL) &
+          error stop 'graph_remove_vertex - vertex no longer exists'
+
+      ! All outgoing edges will be also automatically removed
+      block
+        type(iterator_t) :: iterator
+        integer :: iedge
+        iterator = iterator_t()
+        do while(this%vertices(ivertex)%ngbs%has_next(iterator))
+          call this%vertices(ivertex)%ngbs%next(iterator, iedge)
+          call graph_remove_edge(this, this%edges(iedge)%handle)
+          iterator = iterator_t()
+        end do
+      end block
+
+      if (this%vertices(ivertex)%ngbs%size()>0) &
+          error stop 'graph_remove_vertex - could not remove outgoing edges'
+
+      ! Nullify vmap and return handle
+      this%vmap(handle%index_to_map) = MAP_NULL
+      call return_handle(this, handle)
+
+      ! Relocate the last vertex to fill "hole" after removed vertex
+      if (ivertex /= this%nvertices) then
+        call relocate_vertex(this, this%vertices(this%nvertices)%handle, ivertex)
+      end if
+      this%nvertices = this%nvertices - 1
+    end subroutine graph_remove_vertex
+
+
     subroutine relocate_vertex(this, handle, newid)
       class(graph_t), intent(inout) :: this
       type(handle_t), intent(in) :: handle
@@ -392,7 +433,8 @@
         if (idst /= MAP_NULL) call this%vertices(idst)%ngbs%remove(iedge)
       end if
 
-      ! Reuse the handle
+      ! Nullify emap entry and reuse the handle
+      this%emap(handle%index_to_map) = MAP_NULL
       call return_handle(this, handle)
 
       ! Relocate the last edge to the "hole" after removed edge
@@ -400,6 +442,7 @@
         call relocate_edge(this, this%edges(this%nedges)%handle, iedge)
       end if
       this%nedges = this%nedges - 1
+print '("Edge ",i0,"--",i0," removed")', isrc, idst
     end subroutine graph_remove_edge
 
 
