@@ -70,7 +70,7 @@
     pure function adjlist_find(this, item) result(iterator)
       class(adjlist_t), intent(in) :: this
       integer, intent(in) :: item
-      type(iterator_t) :: iterator
+      type(iterator_t) iterator
 
       integer :: i
 
@@ -107,7 +107,7 @@
           return
         end if
       end if
-      error stop 'adjlist_next  could not obtain next item'
+      error stop 'adjlist_next - could not obtain next item'
     end subroutine adjlist_next
 
 
@@ -131,7 +131,7 @@
       if (present(skip_duplicity_check)) skip_duplicity_check0 = skip_duplicity_check
 
       if (.not. allocated(this%arr)) &
-        error stop 'adjlist_add - array not initialized'
+          error stop 'adjlist_add - array not initialized'
 
       ! increase capacity if needed
       block
@@ -152,7 +152,7 @@
       ! avoid duplicit entries
       if (.not. skip_duplicity_check0) then
         if (this%contains(item)) &
-          error stop 'adjlist_add - item is already present'
+            error stop 'adjlist_add - item is already present'
       end if
 
       this%n = this%n + 1
@@ -177,9 +177,9 @@
 
       ! verify "id" is sane
       if (id < 1 .or. id > this%n) &
-        error stop 'adjlist_remove - invalid position given, or item not exists'
+          error stop 'adjlist_remove - invalid position given, or item not exists'
       if (this%arr(id) /= item) &
-        error stop 'adjlist_remove - index points to an unexpected item'
+          error stop 'adjlist_remove - index points to an unexpected item'
 
       ! swap removed item with the last item in the array
       if (this%n > 1) this%arr(id) = this%arr(this%n)
@@ -189,7 +189,7 @@
 
     pure function adjlist_size(this) result(n)
       class(adjlist_t), intent(in) :: this
-      integer :: n
+      integer n
 
       n = this%n
     end function adjlist_size
