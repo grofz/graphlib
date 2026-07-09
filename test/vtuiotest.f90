@@ -7,7 +7,7 @@
 
     real(DP) :: velo(3), time
     real(DP), allocatable :: x(:,:), x2(:,:)
-    integer :: i
+    integer :: i, lab_count
 
     type(graph_t) :: g, gnew, gbig
     type(handle_t), allocatable :: atom_handles(:), cone_handles(:)
@@ -20,6 +20,17 @@
         implicit none (type, external)
         type(graph_t), intent(in) :: graph
       end subroutine
+
+      logical function select_edge(e)
+        use graph_mod, only : edge_t
+        implicit none (type, external)
+        type(edge_t), intent(in) :: e
+      end function
+      logical function select_vertex(v)
+        use graph_mod, only : vertex_t
+        implicit none (type, external)
+        type(vertex_t), intent(in) :: v
+      end function
     end interface
 
     ! Initialize graph
@@ -79,6 +90,14 @@ goto 100
     end do
 100 continue
 
+    ! label connected components
+    print *, 'label con com'
+    call g%remove_edge(cone_handles(4))
+    call g%labconcom(1, lab_count=lab_count, open_edge_f=select_edge)
+    print *, 'Label connected components ', lab_count
+    call g%print(output_unit)
+    stop 8
+
 
     ! remove some objects
     print *, 'Test to remove somethinh...'
@@ -122,3 +141,17 @@ goto 100
       print *
     end do
   end subroutine graph_export
+
+      logical function select_edge(e)
+        use graph_mod, only : edge_t
+        implicit none (type, external)
+        type(edge_t), intent(in) :: e
+        select_edge = .true.
+       !select_edge = .false.
+      end function
+      logical function select_vertex(v)
+        use graph_mod, only : vertex_t
+        implicit none (type, external)
+        type(vertex_t), intent(in) :: v
+        select_vertex = .true.
+      end function

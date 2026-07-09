@@ -1,6 +1,6 @@
   module graph_mod
     use iso_fortran_env, only : dp => real64, i1b => int8
-    use conts_mod, only : queue_t
+    use conts_mod, only : queue_t, stack_t
     use graph_adjlist_mod, only : adjlist_t, iterator_t
     implicit none (type, external)
     private
@@ -27,14 +27,14 @@
       generic :: operator(==) => handle_eq
     end type handle_t
 
-    type vertex_t
+    type, public :: vertex_t
       integer  :: ipar(NIV_PARS)
       real(dp) :: rpar(NRV_PARS)
       type(adjlist_t) :: ngbs ! list of outgoing edge ids
       type(handle_t) :: handle
     end type vertex_t
 
-    type edge_t
+    type, public :: edge_t
       type(handle_t) :: src_handle, dst_handle
       integer  :: ipar(NIE_PARS)
       real(dp) :: rpar(NRE_PARS)
@@ -62,7 +62,25 @@
       procedure :: remove_vertex => graph_remove_vertex
       procedure :: remove_edge => graph_remove_edge
       procedure :: print => graph_print
+      procedure :: labconcom => graph_labconcom
     end type graph_t
+
+
+    abstract interface
+      function is_edge_selected(edge) result(is)
+        import edge_t
+        implicit none
+        type(edge_t), intent(in) :: edge
+        logical :: is
+      end function
+
+      function is_vertex_selected(vertex) result(is)
+        import vertex_t
+        implicit none
+        type(vertex_t), intent(in) :: vertex
+        logical :: is
+      end function
+    end interface
 
   contains
 
@@ -690,5 +708,112 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
       ids(1) = get_index_from_handle(graph, this%src_handle)
       ids(2) = get_index_from_handle(graph, this%dst_handle)
     end function edge_vertex_indices
+
+
+    ! --------------------------
+    ! Label connected components
+    ! --------------------------
+    subroutine graph_labconcom(this, mask_label, open_vertex_f, open_edge_f, lab_count)
+      class(graph_t), intent(inout) :: this
+      integer, intent(in) :: mask_label
+      procedure(is_vertex_selected), optional :: open_vertex_f
+      procedure(is_edge_selected), optional :: open_edge_f
+      integer, intent(out), optional :: lab_count
+!
+! Label connected components in the graph. If optional user functions are not
+! provided, all vertices and edges are open.
+!
+! INPUT
+!   this          - graph stucture
+!   mask_label    - position in "vertices(:)%ipar" array where component
+!                   "label" is saved
+!   open_vertex_f - user function to control which vertices can be passed
+!                   through (optional)
+!   open_edge_f   - user function to control which edges can be used (optional)
+! OUTPUT
+!   lab_count     - how many connected components was identified (optional)
+!
+      integer, parameter :: LAB_CLOSED=0, LAB_INPROGRESS=-1
+      integer :: i, j, k, ie, lab_current
+      integer, allocatable :: iedges(:)
+      type(stack_t) :: stack
+
+      ! Mark closed vertices and initialize "labels"
+      do i=1, this%nvertices
+        if (open_vertex(this%vertices(i))) then
+          this%vertices(i)%ipar(mask_label) = LAB_INPROGRESS
+        else
+          this%vertices(i)%ipar(mask_label) = LAB_CLOSED
+        end if
+      end do
+
+      lab_current = 0
+      call stack%initialize(chunksize=size(transfer(i,INTEGER_MOLD)))
+
+      MAIN_LOOP: do i=1, this%nvertices
+        ! Find the next unprocessed vertex and add it to the stack
+        if (this%vertices(i)%ipar(mask_label) /= LAB_INPROGRESS) cycle
+        lab_current = lab_current + 1
+        this%vertices(i)%ipar(mask_label) = lab_current
+        call stack%push(transfer(i,INTEGER_MOLD))
+
+        ! Process the stack and propagate "lab_current"
+        STACK_LOOP: do
+          if (stack%empty()) exit STACK_LOOP
+          j = transfer(stack%pop(), j)
+
+          ! Label and add allowed neighbours to the stack
+          if (allocated(iedges)) deallocate(iedges)
+          allocate(iedges(this%vertices(j)%ngbs%size()))
+          iedges = list_of_outgoing_edges(this, j)
+
+          NGB_LOOP: do ie=1, size(iedges)
+            if (.not. open_edge(this%edges(iedges(ie)))) cycle
+            k = other_vertex_id(this, iedges(ie), j)
+            if (k<1 .or. k>this%nvertices) &
+                error stop 'graph_labconcom - edge other end point vertex is null'
+            ! destination "k" must be unlabeled, closed, or have a current label
+            associate (lab_dst=>this%vertices(k)%ipar(mask_label))
+              if (lab_dst==LAB_INPROGRESS) then
+                lab_dst = lab_current
+                call stack%push(transfer(k,INTEGER_MOLD))
+              else if (lab_dst==LAB_CLOSED .or. lab_dst==lab_current) then
+                continue
+              else
+                ! assertion may fail if there is a one-way edge???
+                ! not sure what to do at the moment
+                error stop 'graph_labconcom - destination is already labeled, are there one-way edges?'
+              end if
+            end associate
+          end do NGB_LOOP
+
+        end do STACK_LOOP
+
+      end do MAIN_LOOP
+
+      if (present(lab_count)) lab_count = lab_current
+
+    contains
+      ! These functions call the user function or return .true. on default
+      ! if user functions are not provided
+      logical function open_vertex(vertex) ! internal procedure
+        type(vertex_t), intent(in) :: vertex
+        if (present(open_vertex_f)) then
+          open_vertex = open_vertex_f(vertex)
+        else
+          open_vertex = .true.
+        end if
+      end function
+
+      logical function open_edge(edge) ! internal procedure
+        type(edge_t), intent(in) :: edge
+        if (present(open_edge_f)) then
+          open_edge = open_edge_f(edge)
+        else
+          open_edge = .true.
+        end if
+      end function
+
+    end subroutine graph_labconcom
 
   end module graph_mod
