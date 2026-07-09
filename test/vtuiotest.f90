@@ -53,18 +53,20 @@
     cone_handles(4) = g%add_edge(atom_handles(4), atom_handles(5), [20], [real(dp)::])
 
     call vtuio_write('test', g, mask_for_vtuio, 123.0_DP)
-    print *, 'atom_test write finished'
-    call g%print(output_unit)
 
-    ! remove some objects
-    call g%remove_vertex(atom_handles(4))
-   !call g%remove_edge(cone_handles(4))
-    call g%print(output_unit)
-    call vtuio_write('test_remove', g, mask_for_vtuio, 123.0_DP)
 
+    ! Read back from file to a new structure
     call vtuio_read('test', gnew, mask_for_vtuio, time)
-    print *, 'atom_test read finished'
 
+    ! Write back a read copy
+    call vtuio_write('test_copy', gnew, mask_for_vtuio, 456.0_DP)
+
+    ! Compare the two
+    print *, 'These dumps should be the same'
+    call g%print(output_unit)
+    call gnew%print(output_unit)
+
+goto 100
     do i=1, min(gnew%nvertices, 100)
       print *, gnew%vertices(i)%rpar(2:4)
       print *, gnew%vertices(i)%rpar(2:4) == g%vertices(i)%rpar(2:4)
@@ -75,10 +77,19 @@
     do i=1, min(gnew%nedges, 100)
       print *, gnew%edges(i)%ipar(1), gnew%edges(i)%ipar(1) == g%edges(i)%ipar(1)
     end do
-    call vtuio_write('test_copy', gnew, mask_for_vtuio, 456.0_DP)
+100 continue
 
-    call graph_export(g)
-    call graph_export(gnew)
+
+    ! remove some objects
+    print *, 'Test to remove somethinh...'
+    call g%remove_vertex(atom_handles(4))
+   !call g%remove_edge(cone_handles(4))
+
+    call g%print(output_unit)
+    call vtuio_write('test_remove', g, mask_for_vtuio, 123.0_DP)
+
+!   call graph_export(g)
+!   call graph_export(gnew)
 
    !stop 7
     print *
@@ -89,7 +100,7 @@
 !   g = import_dem2011('tmp')
 !   call g%writevtu('tmpvtu', rem_dbl_edges=.true.)
 !   call graph_export(gbig)
-    call gbig%print(output_unit)
+!   call gbig%print(output_unit)
 
   end program atom_test
 

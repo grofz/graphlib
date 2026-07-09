@@ -96,7 +96,7 @@ contains
   end function container_empty
 
 
-  subroutine container_clear(this)
+  pure subroutine container_clear(this)
     class(container_t), intent(inout) :: this
 
     if (this%n == NOT_INITIALIZED) error stop 'clear - container not initialized'
@@ -125,7 +125,7 @@ contains
 ! STACK / QUEUE
 ! -------------
 
-  subroutine stack_initialize(this, chunksize, capacity)
+  pure subroutine stack_initialize(this, chunksize, capacity)
     class(stack_t), intent(inout) :: this
     integer, intent(in), optional :: chunksize, capacity
 
@@ -148,7 +148,7 @@ contains
   end subroutine
 
 
-  subroutine queue_initialize(this, chunksize, capacity)
+  pure subroutine queue_initialize(this, chunksize, capacity)
     class(queue_t), intent(inout) :: this
     integer, intent(in), optional :: chunksize, capacity
 
@@ -172,7 +172,7 @@ contains
   end subroutine
 
 
-  subroutine stack_increase_capacity(this, new_capacity)
+  pure subroutine stack_increase_capacity(this, new_capacity)
     class(stack_t), intent(inout) :: this
     integer, intent(in) :: new_capacity
 
@@ -183,11 +183,10 @@ contains
     allocate(tmp(size(this%values,dim=1), new_capacity))
     tmp(:,1:this%n) = this%values
     call move_alloc(tmp, this%values)
-print *, 'stack: new capacity ', size(this%values,dim=2)
   end subroutine stack_increase_capacity
 
 
-  subroutine queue_increase_capacity(this, new_capacity)
+  pure subroutine queue_increase_capacity(this, new_capacity)
     class(queue_t), intent(inout) :: this
     integer, intent(in) :: new_capacity
 
@@ -213,7 +212,6 @@ print *, 'stack: new capacity ', size(this%values,dim=2)
     end if
     call move_alloc(tmp, this%values)
     this%rear = this%n+1
-print *, 'queue: new capacity ', new_capacity
   end subroutine queue_increase_capacity
 
 !
@@ -239,7 +237,7 @@ print *, 'queue: new capacity ', new_capacity
 !  F           R            F = 10-9-1 % 18 + 1 = 1
 
 
-  subroutine stack_push(this, newitem, ierr)
+  pure subroutine stack_push(this, newitem, ierr)
     class(stack_t), intent(inout) :: this
     integer, intent(in) :: newitem(:)
     integer, intent(out), optional :: ierr
@@ -261,7 +259,7 @@ print *, 'queue: new capacity ', new_capacity
   end subroutine stack_push
 
 
-  subroutine queue_enqueue(this, newitem, ierr)
+  pure subroutine queue_enqueue(this, newitem, ierr)
     class(queue_t), intent(inout) :: this
     integer, intent(in) :: newitem(:)
     integer, intent(out), optional :: ierr
@@ -419,7 +417,7 @@ print *, 'queue: new capacity ', new_capacity
   end function
 
 
-  subroutine pqueue_initialize(this, chunksize, capacity, ordering)
+  pure subroutine pqueue_initialize(this, chunksize, capacity, ordering)
     class(pqueue_t), intent(inout) :: this
     integer, intent(in), optional :: chunksize, capacity, ordering
 
@@ -462,7 +460,7 @@ print *, 'queue: new capacity ', new_capacity
   end subroutine pqueue_initialize
 
 
-  subroutine pqueue_increase_capacity(this, new_capacity)
+  pure subroutine pqueue_increase_capacity(this, new_capacity)
     class(pqueue_t), intent(inout) :: this
     integer, intent(in), optional :: new_capacity
 
@@ -515,7 +513,7 @@ print *, 'queue: new capacity ', new_capacity
   end subroutine borrow_handle
 
 
-  subroutine return_handle(this, handle)
+  pure subroutine return_handle(this, handle)
     class(pqueue_t), intent(inout) :: this
     type(handle_t), intent(in) :: handle
 
@@ -705,7 +703,7 @@ print *, 'queue: new capacity ', new_capacity
   end function pqueue_pop
 
 
-  subroutine pqueue_remove(this, handle, ierr)
+  pure subroutine pqueue_remove(this, handle, ierr)
     class(pqueue_t), intent(inout) :: this
     type(handle_t), intent(in) :: handle
     integer, intent(out), optional :: ierr
@@ -865,12 +863,13 @@ print *, 'queue: new capacity ', new_capacity
   ! OTHER
   ! -----
 
-  subroutine handle_error(error_code, msg, ierr)
+  pure subroutine handle_error(error_code, msg, ierr)
     integer, intent(in) :: error_code
     character(len=*), intent(in) :: msg
     integer, intent(inout), optional :: ierr
 
-    write(efid,'("ERROR ",a)') msg
+    !TODO we must review the error handling concept here
+   !write(efid,'("ERROR ",a)') msg
     if (present(ierr)) then
       ierr = error_code
     else

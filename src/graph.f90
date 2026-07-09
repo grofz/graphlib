@@ -85,11 +85,11 @@
 
       select case(handle_type)
       case(VERTEX_HANDLE_TYPE)
-        if (this%free_vhandles%size()==0) call graph_increase_vertices_capacity(this)
+        if (this%free_vhandles%size()==0) call increase_vertices_capacity(this)
         if (this%free_vhandles%size()==0) error stop 'borrow_handle - no more V-handles available'
         handle = transfer(this%free_vhandles%dequeue(), handle)
       case(EDGE_HANDLE_TYPE)
-        if (this%free_ehandles%size()==0) call graph_increase_edges_capacity(this)
+        if (this%free_ehandles%size()==0) call increase_edges_capacity(this)
         if (this%free_ehandles%size()==0) error stop 'borrow_handle - no more E-handles available'
         handle = transfer(this%free_ehandles%dequeue(), handle)
       case default
@@ -184,10 +184,10 @@
         integer :: new_capacity
         new_capacity = DEFAULT_VCAPACITY
         if (present(vcapacity)) new_capacity = vcapacity
-        call graph_increase_vertices_capacity(this, new_capacity)
+        call increase_vertices_capacity(this, new_capacity)
         new_capacity = DEFAULT_ECAPACITY
         if (present(ecapacity)) new_capacity = ecapacity
-        call graph_increase_edges_capacity(this, new_capacity)
+        call increase_edges_capacity(this, new_capacity)
       end block
 
       this%niv = NIV_PARS
@@ -203,7 +203,7 @@
     end function graph_is_initialized
 
 
-    subroutine graph_increase_vertices_capacity(this, new_capacity)
+    subroutine increase_vertices_capacity(this, new_capacity)
       class(graph_t), intent(inout) :: this
       integer, intent(in), optional :: new_capacity
 
@@ -236,10 +236,10 @@
           call this%free_vhandles%enqueue(transfer(new_handle, INTEGER_MOLD))
         end do
       end block
-    end subroutine graph_increase_vertices_capacity
+    end subroutine increase_vertices_capacity
 
 
-    subroutine graph_increase_edges_capacity(this, new_capacity)
+    subroutine increase_edges_capacity(this, new_capacity)
       class(graph_t), intent(inout) :: this
       integer, intent(in), optional :: new_capacity
 
@@ -272,7 +272,7 @@
           call this%free_ehandles%enqueue(transfer(new_handle, INTEGER_MOLD))
         end do
       end block
-    end subroutine graph_increase_edges_capacity
+    end subroutine increase_edges_capacity
 
 
     function graph_add_vertex(this, ipar, rpar) result(handle)
@@ -312,6 +312,7 @@
           error stop 'graph_remove_vertex - vertex no longer exists'
 
       ! All outgoing edges will be also automatically removed
+!goto 111
       block
         type(iterator_t) :: iterator
         integer :: iedge
@@ -326,6 +327,8 @@
       ! Defensive - could be removed later
       if (this%vertices(ivertex)%ngbs%size()>0) &
           error stop 'graph_remove_vertex - could not remove outgoing edges'
+!111 continue
+
       ! Nullify vmap and return handle
       this%vmap(handle%index_to_map) = MAP_NULL
       call return_handle(this, handle)
@@ -383,10 +386,10 @@
           error stop 'graph_add_edge - vertex not exists (invalid handle)'
         end if
         ! check if connection already exists
-        if (get_connection_index(this, isrc, idst) /= MAP_NULL) then
+        if (find_edge_id(this, isrc, idst) /= MAP_NULL) then
           error stop 'graph_add_edge - connection already exists'
         else if (.not. this%is_directed_graph) then
-          if (get_connection_index(this, idst, isrc) /= MAP_NULL) then
+          if (find_edge_id(this, idst, isrc) /= MAP_NULL) then
             error stop 'graph_add_edge - opposite connection already exists'
           end if
         end if
@@ -512,6 +515,8 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
       do i=1, this%nvertices
         write(fid, '("V-",i0,", connected to")', advance='no') &
           this%vertices(i)%handle%index_to_map
+        if (allocated(ngbsid)) deallocate(ngbsid)
+        allocate(ngbsid(this%vertices(i)%ngbs%size()))
         ngbsid = list_of_ngbs(this, i)
         do j=1, size(ngbsid)
           write(fid,'(" V-",i0)', advance='no') &
@@ -550,87 +555,140 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
     end subroutine graph_print
 
 
-      function list_of_ngbs(this, isrc) result(idsts)
-        class(graph_t), intent(in) :: this
-        integer, intent(in) :: isrc
-        integer :: idsts(this%vertices(isrc)%ngbs%size())
+    ! ----------------------
+    ! Graph helper functions
+    ! ----------------------
+    pure function list_of_ngbs(this, isrc) result(idsts)
+      class(graph_t), intent(in) :: this
+      integer, intent(in) :: isrc
+      integer :: idsts(this%vertices(isrc)%ngbs%size())
 !
 ! Return an array of neighbors of "isrc" vertex.
 !
-        integer :: ipos, iedge, idst
-        type(iterator_t) :: iterator
+      integer :: ipos, iedge, idst
+      type(iterator_t) :: iterator
 
-        iterator = iterator_t()
-        ipos = 0
-        do while (this%vertices(isrc)%ngbs%has_next(iterator))
-          call this%vertices(isrc)%ngbs%next(iterator, iedge)
+      iterator = iterator_t()
+      ipos = 0
+      do while (this%vertices(isrc)%ngbs%has_next(iterator))
+        call this%vertices(isrc)%ngbs%next(iterator, iedge)
 
-          if (iedge <= 0 .or. iedge > this%nedges) then
-            error stop 'list_of_ngbs - item in ngbs is out of bounds'
-          end if
-
-          idst = edge_other_vertex_id(this, iedge, isrc)
-          ! for directed graphs verify, that destination vertex has been selected
-          if (this%is_directed_graph) then
-            if (idst /= get_index_from_handle(this, this%edges(iedge)%dst_handle)) &
-              error stop 'list_of_ngbs - wrong source in directed graph'
-          end if
-
-          ipos = ipos+1
-          if (ipos > size(idsts)) error stop 'list_of_ngbs - something wrong'
-          idsts(ipos) = idst
-        end do
-      end function list_of_ngbs
-
-
-      function edge_other_vertex_id(this, iedge, ia) result(ib)
-        class(graph_t), intent(in) :: this
-        integer, intent(in) :: iedge, ia
-        integer ib
-
-        integer :: i1, i2
-
-        i1 = get_index_from_handle(this, this%edges(iedge)%src_handle)
-        i2 = get_index_from_handle(this, this%edges(iedge)%dst_handle)
-        if (i1==MAP_NULL .or. i2==MAP_NULL) then
-          error stop 'edge_other_vertex_id - edge has invalid handles (vertex no more exists)'
-        else if (ia==i1) then
-          ib = i2
-        else if (ia==i2) then
-          ib = i1
-        else
-          error stop 'edge_other_vertex_id - no edge endpoint is "ia" (should not happen)'
+        if (iedge <= 0 .or. iedge > this%nedges) then
+          error stop 'list_of_ngbs - item in ngbs is out of bounds'
         end if
-      end function edge_other_vertex_id
+
+        idst = other_vertex_id(this, iedge, isrc)
+        ! for directed graphs verify, that destination vertex has been selected
+        if (this%is_directed_graph) then
+          if (idst /= get_index_from_handle(this, this%edges(iedge)%dst_handle)) &
+            error stop 'list_of_ngbs - wrong source in directed graph'
+        end if
+
+        ipos = ipos+1
+        if (ipos > size(idsts)) error stop 'list_of_ngbs - something wrong'
+        idsts(ipos) = idst
+      end do
+    end function list_of_ngbs
 
 
-      function get_connection_index(this, ia, ib) result(id)
-        class(graph_t), intent(in) :: this
-        integer, intent(in) :: ia, ib
-        integer :: id
+    pure function list_of_outgoing_edges(this, isrc) result(iedges)
+      class(graph_t), intent(in) :: this
+      integer, intent(in) :: isrc
+      integer :: iedges(this%vertices(isrc)%ngbs%size())
+!
+! Return an array of edge positions in "edges" array.
+!
+      type(iterator_t) :: iterator
+      integer :: i
 
-        integer :: iedge
-        type(iterator_t) :: iterator
-
-        id = MAP_NULL
-        iterator = iterator_t()
-        do while (this%vertices(ia)%ngbs%has_next(iterator))
-          call this%vertices(ia)%ngbs%next(iterator, iedge)
-          if (edge_other_vertex_id(this, iedge, ia) == ib) then
-            id = iedge
-            exit
-          end if
-        end do
-      end function get_connection_index
+      iterator = iterator_t()
+      do i=1, this%vertices(isrc)%ngbs%size()
+        if (.not. this%vertices(isrc)%ngbs%has_next(iterator)) &
+            error stop 'list_of_outgoing_edges - something wrong'
+        call this%vertices(isrc)%ngbs%next(iterator, iedges(i))
+      end do
+    end function list_of_outgoing_edges
 
 
-      function edge_vertex_indices(this, graph) result(ids)
-        class(edge_t), intent(in) :: this
-        type(graph_t), intent(in) :: graph
-        integer ::ids(2)
+    pure function other_vertex_id(this, iedge, ia) result(ib)
+      class(graph_t), intent(in) :: this
+      integer, intent(in) :: iedge, ia
+      integer ib
+!
+! Given the edge and one of its end-point vertices, return index of the other
+! end-point vertex.
+!
+! INPUT
+!   this  - graph object
+!   iedge - position of the edge in "edges" array
+!   ia    - position of one vertex in "vertices" array
+! OUTPUT
+!   ib    - position of the other vertex in "vertices" array
+!
+      integer :: i1, i2
 
-        ids(1) = get_index_from_handle(graph, this%src_handle)
-        ids(2) = get_index_from_handle(graph, this%dst_handle)
-      end function edge_vertex_indices
+      if (ia==MAP_NULL) &
+          error stop 'other_vertex_id - "ia" must not be null'
+
+      i1 = get_index_from_handle(this, this%edges(iedge)%src_handle)
+      i2 = get_index_from_handle(this, this%edges(iedge)%dst_handle)
+      if (ia==i1) then
+        ib = i2
+      else if (ia==i2) then
+        ib = i1
+      else
+        error stop 'other_vertex_id - no edge endpoint vertex matches to "ia"'
+      end if
+
+      if (ib==MAP_NULL) then
+        ! TODO - should this be an error?
+        error stop 'other_vertex_id - other end point vertex no longer exists'
+      end if
+    end function other_vertex_id
+
+
+    pure function find_edge_id(this, ia, ib) result(id)
+      class(graph_t), intent(in) :: this
+      integer, intent(in) :: ia, ib
+      integer :: id
+!
+! Given two vertices, find the edge that connects them and return its index.
+! Return "MAP_NULL" if no such edge exists.
+!
+! Only an edge from "ia" to "ib" is found in directed graph.
+!
+! INPUT
+!   this   - graph object
+!   ia, ib - position of two vertices in "vertices" array
+! OUTPUT
+!   id     - position of the found edge in "edges" array or MAP_NULL
+!
+      integer :: iedge
+      type(iterator_t) :: iterator
+
+      id = MAP_NULL
+      ! Iterate through adjacency list of "ia" vertex
+      iterator = iterator_t()
+      do while (this%vertices(ia)%ngbs%has_next(iterator))
+        call this%vertices(ia)%ngbs%next(iterator, iedge)
+        if (other_vertex_id(this, iedge, ia) /= ib) cycle
+        ! Other vertex is "ib"
+        id = iedge
+        exit
+      end do
+    end function find_edge_id
+
+
+    ! -------------------
+    ! Edge TPB procedures
+    ! -------------------
+    pure function edge_vertex_indices(this, graph) result(ids)
+      class(edge_t), intent(in) :: this
+      type(graph_t), intent(in) :: graph
+      integer ::ids(2)
+
+      ids(1) = get_index_from_handle(graph, this%src_handle)
+      ids(2) = get_index_from_handle(graph, this%dst_handle)
+    end function edge_vertex_indices
 
   end module graph_mod
