@@ -30,9 +30,9 @@
     type vertex_t
       integer  :: ipar(NIV_PARS)
       real(dp) :: rpar(NRV_PARS)
-      type(adjlist_t) :: ngbs ! list of outgoing edges ids
+      type(adjlist_t) :: ngbs ! list of outgoing edge ids
       type(handle_t) :: handle
-    end type
+    end type vertex_t
 
     type edge_t
       type(handle_t) :: src_handle, dst_handle
@@ -61,7 +61,8 @@
       procedure :: add_edge   => graph_add_edge
       procedure :: remove_vertex => graph_remove_vertex
       procedure :: remove_edge => graph_remove_edge
-    end type
+      procedure :: print => graph_print
+    end type graph_t
 
   contains
 
@@ -85,11 +86,11 @@
       select case(handle_type)
       case(VERTEX_HANDLE_TYPE)
         if (this%free_vhandles%size()==0) call graph_increase_vertices_capacity(this)
-        if (this%free_vhandles%size()==0) error stop 'borrow_handle - no more handles available V'
+        if (this%free_vhandles%size()==0) error stop 'borrow_handle - no more V-handles available'
         handle = transfer(this%free_vhandles%dequeue(), handle)
       case(EDGE_HANDLE_TYPE)
         if (this%free_ehandles%size()==0) call graph_increase_edges_capacity(this)
-        if (this%free_ehandles%size()==0) error stop 'borrow_handle - no more handles available E'
+        if (this%free_ehandles%size()==0) error stop 'borrow_handle - no more E-handles available'
         handle = transfer(this%free_ehandles%dequeue(), handle)
       case default
         error stop 'borrow_handle: unknown handle_type'
@@ -122,7 +123,7 @@
       integer id
 !
 ! Return position of a vertex/edge in array using handle. If handle refers to
-! the vertex/edge that is no longer in array, MAP_NULL is returned
+! the vertex/edge that is no longer in array, MAP_NULL is returned.
 !
       id = MAP_NULL
       select case(handle%handle_type)
@@ -314,17 +315,17 @@
       block
         type(iterator_t) :: iterator
         integer :: iedge
-        iterator = iterator_t()
-        do while(this%vertices(ivertex)%ngbs%has_next(iterator))
+        do
+          iterator = iterator_t()
+          if (.not. this%vertices(ivertex)%ngbs%has_next(iterator)) exit
           call this%vertices(ivertex)%ngbs%next(iterator, iedge)
           call graph_remove_edge(this, this%edges(iedge)%handle)
-          iterator = iterator_t()
         end do
       end block
 
+      ! Defensive - could be removed later
       if (this%vertices(ivertex)%ngbs%size()>0) &
           error stop 'graph_remove_vertex - could not remove outgoing edges'
-
       ! Nullify vmap and return handle
       this%vmap(handle%index_to_map) = MAP_NULL
       call return_handle(this, handle)
@@ -487,8 +488,66 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
         call ngbs%remove(oldid, found_oldid)
         call ngbs%add(newid, skip_duplicity_check=.true.)
       end subroutine
-
     end subroutine relocate_edge
+
+
+    subroutine graph_print(this, fid)
+      class(graph_t), intent(in) :: this
+      integer, intent(in) :: fid
+
+      integer :: i, j, v1, v2
+      integer, allocatable :: ngbsid(:)
+      character(len=:), allocatable :: str_graph_type
+
+      if (this%is_directed_graph) then
+        str_graph_type = 'Directed graph'
+      else
+        str_graph_type = 'Undirected graph'
+      end if
+      write(fid,'("--- graph dump ---")')
+      write(fid, '(a," with ",i0," vertices and ",i0," edges")') &
+        str_graph_type, this%nvertices, this%nedges
+
+      ! information about vertices
+      do i=1, this%nvertices
+        write(fid, '("V-",i0,", connected to")', advance='no') &
+          this%vertices(i)%handle%index_to_map
+        ngbsid = list_of_ngbs(this, i)
+        do j=1, size(ngbsid)
+          write(fid,'(" V-",i0)', advance='no') &
+            this%vertices(ngbsid(j))%handle%index_to_map
+        end do
+        if (size(ngbsid)==0) then
+          write(fid,'(" no one:")')
+        else
+          write(fid,'(":")')
+        end if
+        if (this%niv>0) write(fid,*) this%vertices(i)%ipar
+        if (this%nrv>0) write(fid,*) this%vertices(i)%rpar
+      end do
+
+      ! information about edges
+      do i=1, this%nedges
+        v1 = get_index_from_handle(this, this%edges(i)%src_handle)
+        v2 = get_index_from_handle(this, this%edges(i)%dst_handle)
+        if (v1==MAP_NULL) then
+          v1=v1
+        else
+          v1=this%vertices(v1)%handle%index_to_map
+        end if
+        if (v2==MAP_NULL) then
+          v2=v2
+        else
+          v2=this%vertices(v2)%handle%index_to_map
+        end if
+        write(fid, '("E-",i0," connecting V-",i0," and V-",i0,":")') &
+          this%edges(i)%handle%index_to_map, v1, v2
+        if (this%nie>0) write(fid,*) this%edges(i)%ipar
+        if (this%nre>0) write(fid,*) this%edges(i)%rpar
+      end do
+
+      write(fid,'("--- end of graph dump ---",/)')
+    end subroutine graph_print
 
 
       function list_of_ngbs(this, isrc) result(idsts)

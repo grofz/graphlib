@@ -1,5 +1,5 @@
   program atom_test
-    use iso_fortran_env, only : DP=>real64
+    use iso_fortran_env, only : DP=>real64, output_unit
     use vtuio_mod, only : vtuio_write, vtuio_read
 !   use import_dem2011_mod, only : import_dem2011
     use graph_mod, only : graph_t, handle_t
@@ -54,10 +54,12 @@
 
     call vtuio_write('test', g, mask_for_vtuio, 123.0_DP)
     print *, 'atom_test write finished'
+    call g%print(output_unit)
 
     ! remove some objects
     call g%remove_vertex(atom_handles(4))
    !call g%remove_edge(cone_handles(4))
+    call g%print(output_unit)
     call vtuio_write('test_remove', g, mask_for_vtuio, 123.0_DP)
 
     call vtuio_read('test', gnew, mask_for_vtuio, time)
@@ -78,7 +80,7 @@
     call graph_export(g)
     call graph_export(gnew)
 
-    stop 7
+   !stop 7
     print *
     print *, '*** big file ***'
     call vtuio_read('big', gbig, mask_for_vtuio)
@@ -86,7 +88,8 @@
 
 !   g = import_dem2011('tmp')
 !   call g%writevtu('tmpvtu', rem_dbl_edges=.true.)
-    call graph_export(gbig)
+!   call graph_export(gbig)
+    call gbig%print(output_unit)
 
   end program atom_test
 
