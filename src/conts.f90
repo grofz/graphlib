@@ -1,5 +1,5 @@
 module conts_mod
-  use, intrinsic :: iso_fortran_env, only : error_unit
+  use, intrinsic :: iso_fortran_env, only : error_unit, dp=>real64
   implicit none (type, external)
   private
 
@@ -41,8 +41,9 @@ module conts_mod
 
 
   integer, parameter :: HMAP_NULL = -1
-  integer, parameter :: PQUEUE_MIN = 1, & ! lower P is higher priority
-                        PQUEUE_MAX = 2    ! higher P is higher priority
+  integer, parameter, public :: &
+    PQUEUE_MIN = 1, & ! lower P is higher priority
+    PQUEUE_MAX = 2    ! higher P is higher priority
 
   type, public :: handle_t
     private
@@ -58,7 +59,7 @@ module conts_mod
   type, extends(container_t), public :: pqueue_t
     private
     ! "values" ... heap of values inherited from base class
-    integer, allocatable :: priorities(:)     ! heap of priorities
+    real(DP), allocatable :: priorities(:)     ! heap of priorities
     type(handle_t), allocatable :: handles(:) ! heap of handles
     integer, allocatable :: hmap(:)           ! handle to map to item's position in heaps
     type(queue_t) :: free_handles
@@ -388,7 +389,7 @@ contains
 
 
   pure function is_higher_priority(pa, pb, this) result(is)
-    integer, intent(in) :: pa, pb
+    real(dp), intent(in) :: pa, pb
     class(pqueue_t), intent(in) :: this
     logical :: is
     select case(this%ordering)
@@ -403,7 +404,7 @@ contains
 
 
   pure function is_lower_priority(pa, pb, this) result(is)
-    integer, intent(in) :: pa, pb
+    real(dp), intent(in) :: pa, pb
     class(pqueue_t), intent(in) :: this
     logical :: is
     select case(this%ordering)
@@ -466,6 +467,7 @@ contains
 
     integer :: old_capacity, new_capacity0
     integer, allocatable :: tmp2(:,:), tmp1(:)
+    real(dp), allocatable :: tmp3(:)
     type(handle_t), allocatable :: tmp_handles(:)
 
     old_capacity = size(this%values, dim=2)
@@ -479,9 +481,9 @@ contains
     tmp2(:,1:old_capacity) = this%values
     call move_alloc(tmp2, this%values)
 
-    allocate(tmp1(new_capacity0))
-    tmp1(1:old_capacity) = this%priorities
-    call move_alloc(tmp1, this%priorities)
+    allocate(tmp3(new_capacity0))
+    tmp3(1:old_capacity) = this%priorities
+    call move_alloc(tmp3, this%priorities)
 
     allocate(tmp_handles(new_capacity0))
     tmp_handles(1:old_capacity) = this%handles
@@ -565,6 +567,7 @@ contains
 !
     integer :: tmp(size(this%values,dim=1)), idi, idj
     type(handle_t) :: tmp_handle
+    real(dp) :: tmp_real
 
     ! find positions of items in the hash-map
     idi = this%handles(i)%index_to_hmap
@@ -577,9 +580,9 @@ contains
     tmp_handle = this%handles(i)
     this%handles(i) = this%handles(j)
     this%handles(j) = tmp_handle
-    tmp(1) = this%priorities(i)
+    tmp_real = this%priorities(i)
     this%priorities(i) = this%priorities(j)
-    this%priorities(j) = tmp(1)
+    this%priorities(j) = tmp_real
 
     ! update hash-map
     this%hmap(idi) = j
@@ -641,7 +644,8 @@ contains
 
   function pqueue_insert(this, values, priority, ierr) result(handle)
     class(pqueue_t), intent(inout) :: this
-    integer, intent(in) :: values(:), priority
+    integer, intent(in) :: values(:)
+    real(dp), intent(in) :: priority
     integer, intent(out), optional :: ierr
     type(handle_t) :: handle
 !
@@ -670,7 +674,7 @@ contains
 
   function pqueue_pop(this, top_priority, top_handle, ierr) result(top_value)
     class(pqueue_t), intent(inout) :: this
-    integer, intent(out), optional :: top_priority
+    real(dp), intent(out), optional :: top_priority
     type(handle_t), intent(out), optional :: top_handle
     integer, intent(out), optional :: ierr
     integer :: top_value(size(this%values,dim=1))
@@ -735,7 +739,7 @@ contains
 
   function pqueue_peek(this, top_priority, top_handle, ierr) result(top_value)
     class(pqueue_t), intent(in) :: this
-    integer, intent(out), optional :: top_priority
+    real(dp), intent(out), optional :: top_priority
     type(handle_t), intent(out), optional :: top_handle
     integer, intent(out), optional :: ierr
     integer :: top_value(size(this%values,dim=1))
@@ -759,12 +763,13 @@ contains
   subroutine pqueue_update_priority(this, handle, new_priority, ierr)
     class(pqueue_t), intent(inout) :: this
     type(handle_t), intent(in) :: handle
-    integer, intent(in) :: new_priority
+    real(dp), intent(in) :: new_priority
     integer, intent(out), optional :: ierr
 !
 ! Update the priority of an item using handle.
 !
-    integer :: id, old_priority
+    integer :: id
+    real(dp) :: old_priority
 
     if (this%n == NOT_INITIALIZED) &
       & error stop 'pqueue_update - pqueue is not itialized'
@@ -785,6 +790,8 @@ contains
     else if (is_lower_priority(new_priority, old_priority, this)) then
       ! priority decreased
       call push_down(this, id)
+    else
+      error stop 'pqueue_update_priority - priority seems unchanged'
     end if
   end subroutine pqueue_update_priority
 
@@ -798,7 +805,7 @@ contains
 
   pure function pqueue_export_priorities(this) result(priorities)
     class(pqueue_t), intent(in) :: this
-    integer :: priorities(this%n)
+    real(dp) :: priorities(this%n)
     priorities = this%priorities(1:this%n)
   end function pqueue_export_priorities
 

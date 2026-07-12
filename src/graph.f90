@@ -1,13 +1,14 @@
   module graph_mod
     use iso_fortran_env, only : dp => real64, i1b => int8
-    use conts_mod, only : queue_t, stack_t
+    use conts_mod, only : queue_t, stack_t, pqueue_t, pqueue_handle_t=>handle_t, &
+      PQUEUE_MIN
     use graph_adjlist_mod, only : adjlist_t, iterator_t
     implicit none (type, external)
     private
 
     ! Sadly, parametrized derived type (PDT) not working reliably with compilers.
     ! To avoid PDT, lets hard-code the array sizes required for the actual implementation
-    integer, parameter, public :: NIV_PARS = 1, NRV_PARS = 4, NIE_PARS = 1, NRE_PARS = 0
+    integer, parameter, public :: NIV_PARS = 1, NRV_PARS = 7, NIE_PARS = 1, NRE_PARS = 2
 
     ! Other constants
     integer, parameter :: DEFAULT_ECAPACITY = 10, DEFAULT_VCAPACITY = 5
@@ -63,20 +64,24 @@
       procedure :: remove_edge => graph_remove_edge
       procedure :: print => graph_print
       procedure :: labconcom => graph_labconcom
+      procedure :: shortest_path => graph_shortest_path
+      procedure :: maxflow => graph_maxflow
     end type graph_t
 
 
     abstract interface
-      function is_edge_selected(edge) result(is)
-        import edge_t
+      pure function is_edge_selected(this, edge) result(is)
+        import graph_t, edge_t
         implicit none
+        class(graph_t), intent(in) :: this
         type(edge_t), intent(in) :: edge
         logical :: is
       end function
 
-      function is_vertex_selected(vertex) result(is)
-        import vertex_t
+      pure function is_vertex_selected(this, vertex) result(is)
+        import graph_t, vertex_t
         implicit none
+        class(graph_t), intent(in) :: this
         type(vertex_t), intent(in) :: vertex
         logical :: is
       end function
@@ -713,9 +718,9 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
     ! --------------------------
     ! Label connected components
     ! --------------------------
-    subroutine graph_labconcom(this, mask_label, open_vertex_f, open_edge_f, lab_count)
+    subroutine graph_labconcom(this, position_label, open_vertex_f, open_edge_f, lab_count)
       class(graph_t), intent(inout) :: this
-      integer, intent(in) :: mask_label
+      integer, intent(in) :: position_label
       procedure(is_vertex_selected), optional :: open_vertex_f
       procedure(is_edge_selected), optional :: open_edge_f
       integer, intent(out), optional :: lab_count
@@ -724,56 +729,55 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
 ! provided, all vertices and edges are open.
 !
 ! INPUT
-!   this          - graph stucture
-!   mask_label    - position in "vertices(:)%ipar" array where component
-!                   "label" is saved
-!   open_vertex_f - user function to control which vertices can be passed
-!                   through (optional)
-!   open_edge_f   - user function to control which edges can be used (optional)
+!   this           - graph stucture
+!   position_label - position in "vertices(:)%ipar" array where component
+!                    "label" is saved
+!   open_vertex_f  - user function to control which vertices can be passed
+!                    through (optional)
+!   open_edge_f    - user function to control which edges can be used (optional)
 ! OUTPUT
-!   lab_count     - how many connected components was identified (optional)
+!   lab_count      - how many connected components was identified (optional)
 !
       integer, parameter :: LAB_CLOSED=0, LAB_INPROGRESS=-1
-      integer :: i, j, k, ie, lab_current
-      integer, allocatable :: iedges(:)
+      integer :: i, j, k, iedge, lab_current
+      type(iterator_t) :: iterator
       type(stack_t) :: stack
 
       ! Mark closed vertices and initialize "labels"
       do i=1, this%nvertices
-        if (open_vertex(this%vertices(i))) then
-          this%vertices(i)%ipar(mask_label) = LAB_INPROGRESS
-        else
-          this%vertices(i)%ipar(mask_label) = LAB_CLOSED
-        end if
+        associate(lab=>this%vertices(i)%ipar(position_label))
+          if (open_vertex(this, this%vertices(i), open_vertex_f)) then
+            lab = LAB_INPROGRESS
+          else
+            lab = LAB_CLOSED
+          end if
+        end associate
       end do
 
       lab_current = 0
       call stack%initialize(chunksize=size(transfer(i,INTEGER_MOLD)))
 
       MAIN_LOOP: do i=1, this%nvertices
-        ! Find the next unprocessed vertex and add it to the stack
-        if (this%vertices(i)%ipar(mask_label) /= LAB_INPROGRESS) cycle
+        ! Find the next unprocessed vertex and add it to the empty stack
+        if (this%vertices(i)%ipar(position_label) /= LAB_INPROGRESS) cycle
         lab_current = lab_current + 1
-        this%vertices(i)%ipar(mask_label) = lab_current
+        this%vertices(i)%ipar(position_label) = lab_current
         call stack%push(transfer(i,INTEGER_MOLD))
 
         ! Process the stack and propagate "lab_current"
-        STACK_LOOP: do
-          if (stack%empty()) exit STACK_LOOP
+        STACK_LOOP: do while (.not. stack%empty())
           j = transfer(stack%pop(), j)
 
           ! Label and add allowed neighbours to the stack
-          if (allocated(iedges)) deallocate(iedges)
-          allocate(iedges(this%vertices(j)%ngbs%size()))
-          iedges = list_of_outgoing_edges(this, j)
-
-          NGB_LOOP: do ie=1, size(iedges)
-            if (.not. open_edge(this%edges(iedges(ie)))) cycle
-            k = other_vertex_id(this, iedges(ie), j)
+          iterator = iterator_t()
+          NGB_LOOP: do while (this%vertices(j)%ngbs%has_next(iterator))
+            call this%vertices(j)%ngbs%next(iterator, iedge)
+            if (.not. open_edge(this, this%edges(iedge), open_edge_f)) cycle
+            k = other_vertex_id(this, iedge, j)
             if (k<1 .or. k>this%nvertices) &
                 error stop 'graph_labconcom - edge other end point vertex is null'
             ! destination "k" must be unlabeled, closed, or have a current label
-            associate (lab_dst=>this%vertices(k)%ipar(mask_label))
+            associate (lab_dst=>this%vertices(k)%ipar(position_label))
               if (lab_dst==LAB_INPROGRESS) then
                 lab_dst = lab_current
                 call stack%push(transfer(k,INTEGER_MOLD))
@@ -793,27 +797,462 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
 
       if (present(lab_count)) lab_count = lab_current
 
-    contains
-      ! These functions call the user function or return .true. on default
-      ! if user functions are not provided
-      logical function open_vertex(vertex) ! internal procedure
-        type(vertex_t), intent(in) :: vertex
-        if (present(open_vertex_f)) then
-          open_vertex = open_vertex_f(vertex)
-        else
-          open_vertex = .true.
-        end if
-      end function
-
-      logical function open_edge(edge) ! internal procedure
-        type(edge_t), intent(in) :: edge
-        if (present(open_edge_f)) then
-          open_edge = open_edge_f(edge)
-        else
-          open_edge = .true.
-        end if
-      end function
-
     end subroutine graph_labconcom
+
+
+    ! -----------------------------
+    ! Dijkstra shortest path search
+    ! -----------------------------
+    subroutine graph_shortest_path(this, position_distance, position_cost, &
+        start_vertex, target_vertex, open_vertex_f, open_edge_f, path)
+      class(graph_t), intent(inout) :: this
+      integer, intent(in) :: position_distance, position_cost
+      type(handle_t), intent(in) :: start_vertex
+      type(handle_t), intent(in), optional :: target_vertex
+      procedure(is_vertex_selected), optional :: open_vertex_f
+      procedure(is_edge_selected), optional :: open_edge_f
+      type(handle_t), allocatable, intent(out), optional :: path(:)
+!
+! Find the shortest path between two vertices using Dijkstra's algorithm.
+!
+! INPUT
+!   this              - graph structure, distance field updated on return
+!   position_distance - position in "vertices%rpar" for the distance from
+!                       the starting vertex on return (OUT)
+!   position_cost     - position in "edges%rpar" where the cost traversing
+!                       the edge is stored (IN)
+!   start_vertex      - handle to the starting vertex
+!   target_vertex     - handle to the target vertex (optional)
+!   open_vertex_f     - user function to control which vertices can be passed
+!                       through (optional)
+!   open_edge_f       - user function to control which edges can be used
+!                       (optional)
+! OUTPUT
+!   path              - array of vertex handles on the shortest path (optional)
+!
+      logical, allocatable :: visited(:)
+      integer, allocatable :: prev_id(:)
+      real(dp) :: cost_to_ngb
+      integer :: id_start, id_target, i, id_current, id_ngb, iedge
+      type(pqueue_t) :: pqueue
+      type(pqueue_handle_t), allocatable :: handles(:)
+      type(iterator_t) :: iterator
+
+      ! Find starting and target vertex positions in "vertices" array
+      id_start = get_index_from_handle(this, start_vertex)
+      if (id_start==MAP_NULL .or. start_vertex%handle_type/=VERTEX_HANDLE_TYPE) &
+          error stop 'graph_shortest_path - starting vertex not identified'
+      if (present(target_vertex)) then
+        id_target = get_index_from_handle(this, target_vertex)
+        if (id_target==MAP_NULL .or. target_vertex%handle_type/=VERTEX_HANDLE_TYPE) &
+            error stop 'graph_shortest_path - target vertex not identified'
+      else
+        ! target vertex not provided: search shortest path to every vertex
+        ! reachable from start
+        id_target = MAP_NULL
+      end if
+
+      ! Local working arrays. Set initial values.
+      allocate(visited(this%nvertices), source=.false.)
+      allocate(prev_id(this%nvertices), source=MAP_NULL)
+      this%vertices(1:this%nvertices)%rpar(position_distance) = huge(cost_to_ngb)
+      call pqueue%initialize(chunksize=size(transfer(i,INTEGER_MOLD)), ordering=PQUEUE_MIN)
+      allocate(handles(this%nvertices))
+
+      ! Insert starting vertex to the queue
+      if (open_vertex(this, this%vertices(id_start), open_vertex_f)) then
+        associate(d=>this%vertices(id_start)%rpar(position_distance))
+          d = 0.0_dp
+          handles(id_start) = pqueue%insert(transfer(id_start,INTEGER_MOLD), d)
+        end associate
+      end if
+
+      MAIN_LOOP: do
+        if (pqueue%empty()) exit MAIN_LOOP
+        id_current = transfer(pqueue%pop(), i)
+        visited(id_current) = .true.
+        if (id_current==id_target) exit MAIN_LOOP
+
+        iterator = iterator_t()
+        NGB_LOOP: do while (this%vertices(id_current)%ngbs%has_next(iterator))
+          call this%vertices(id_current)%ngbs%next(iterator, iedge)
+          if (.not. open_edge(this, this%edges(iedge), open_edge_f)) cycle
+          id_ngb = other_vertex_id(this, iedge, id_current)
+          if (id_ngb<1 .or. id_ngb>this%nvertices) &
+              error stop 'graph_shortest_path - other end point of edge does not exist'
+          if (.not. open_vertex(this, this%vertices(id_ngb), open_vertex_f)) cycle
+          if (visited(id_ngb)) cycle
+
+          ! id_ngb is an unvisited neighbour of id_current
+          associate(d=>this%vertices(id_ngb)%rpar(position_distance))
+            cost_to_ngb = this%vertices(id_current)%rpar(position_distance) + &
+                        & this%edges(iedge)%rpar(position_cost)
+            if (cost_to_ngb < d) then
+              ! shorter path found to ngb
+              d = cost_to_ngb
+              prev_id(id_ngb) = id_current
+              if (pqueue%contains(handles(id_ngb))) then
+                call pqueue%update_priority(handles(id_ngb), cost_to_ngb)
+              else
+                handles(id_ngb) = pqueue%insert(transfer(id_ngb,INTEGER_MOLD), cost_to_ngb)
+              end if
+            end if
+          end associate
+        end do NGB_LOOP
+      end do MAIN_LOOP
+
+      ! Back track from target to construct the path
+      if (present(path)) then
+        if (.not. present(target_vertex)) &
+            error stop 'graph_shortest_path - can not return path if target not given'
+        block
+          type(stack_t) :: stack
+
+          call stack%initialize(chunksize=size(transfer(i,INTEGER_MOLD)))
+          id_current = id_target
+          do while (prev_id(id_current)/=MAP_NULL)
+            call stack%push(transfer(id_current,INTEGER_MOLD))
+            id_current = prev_id(id_current)
+          end do
+          ! add starting vertex to the path
+          if (id_current==id_start) call stack%push(transfer(id_current,INTEGER_MOLD))
+          ! the stack will be empty, if target vertex is unreachable
+
+          ! copy stack content to the output array
+          allocate(path(stack%size()))
+          do i=1, size(path)
+            if (stack%empty()) error stop 'graph_shortest_path - stack unexpectedly empty'
+            path(i) = this%vertices(transfer(stack%pop(),i))%handle
+          end do
+        end block
+      end if
+
+    end subroutine graph_shortest_path
+
+
+    ! ---------------------------------------
+    ! Edmonds-Karp algorithm for maximum flow
+    ! ---------------------------------------
+    subroutine graph_maxflow(this, source, sink, position_capacity, flow, &
+        position_mincutlabel, position_flow, open_vertex_f, open_edge_f)
+      class(graph_t), intent(inout) :: this
+      type(handle_t), intent(in) :: source, sink
+      integer, intent(in) :: position_capacity
+      real(dp), intent(out) :: flow
+      integer, intent(in), optional :: position_mincutlabel
+      integer, intent(in), optional :: position_flow
+      procedure(is_vertex_selected), optional :: open_vertex_f
+      procedure(is_edge_selected), optional :: open_edge_f
+!
+!
+!
+      real(dp), allocatable :: forward_capacity(:), backward_capacity(:)
+      integer, allocatable :: prev_edge(:), pair_edge(:)
+      integer :: source_id, sink_id
+      real(dp) :: additional_flow
+      type(stack_t) :: added_edges
+
+      ! Set up working arrays
+      allocate(forward_capacity(this%nedges), backward_capacity(this%nedges))
+      allocate(prev_edge(this%nvertices))
+
+      block
+        ! Capacity of all open edges (and edges between open vertices) set
+        ! to their capacity stored in "edge%rpar" array.
+        ! Capacity of closed edges set to zero (disabling them)
+        integer :: i, ia, ib
+        do i=1, this%nedges
+          forward_capacity(i) = 0.0_dp
+          backward_capacity(i) = 0.0_dp
+          if (open_edge(this, this%edges(i), open_edge_f)) then
+            ia = get_index_from_handle(this, this%edges(i)%src_handle)
+            ib = get_index_from_handle(this, this%edges(i)%dst_handle)
+            ! orphaned edges will be ignored
+            if (ia==MAP_NULL .or. ib==MAP_NULL) cycle
+            if (.not. open_vertex(this, this%vertices(ia), open_vertex_f)) cycle
+            if (.not. open_vertex(this, this%vertices(ib), open_vertex_f)) cycle
+
+            ! edge is open and both end-points are also open
+            forward_capacity(i) = this%edges(i)%rpar(position_capacity)
+            backward_capacity(i) = forward_capacity(i)
+          end if
+        end do
+
+        ! Verify sink and source vertices exist and are open
+        source_id = get_index_from_handle(this, source)
+        sink_id = get_index_from_handle(this, sink)
+        if (source_id==MAP_NULL .or. sink_id==MAP_NULL) then
+          error stop 'graph_max_flow - source/sink not found in graph'
+        else if (source%handle_type/=VERTEX_HANDLE_TYPE .or. sink%handle_type/=VERTEX_HANDLE_TYPE) then
+          error stop 'graph_max_flow - source/sink handles of unexpected type'
+        else if (.not. open_vertex(this, this%vertices(source_id), open_vertex_f)) then
+          error stop 'graph_max_flow - source is not open'
+        else if (.not. open_vertex(this, this%vertices(sink_id), open_vertex_f)) then
+          error stop 'graph_max_flow - sink is not open'
+        else
+          ! all assertions are ok
+          continue
+        end if
+      end block
+
+      ! For directed graphs, reverse edges must be added to the graph. This means
+      ! that "forward_capacity" will be reallocated, "backward_capacity" will no
+      ! longer be needed. Reference "pair_edge" will be used instead
+      if (this%is_directed_graph) then
+        block
+          type(handle_t) :: edge
+          integer :: nreverse_edges, i, ireverse
+          real(dp), allocatable :: tmp_forward_capacity(:)
+
+          ! count edges with non-zero capacity
+          nreverse_edges = count(forward_capacity > 0.0_dp)
+
+          ! for each non-zero capacity edge, a reverse edge is added
+          call added_edges%initialize(chunksize=size(transfer(edge,INTEGER_MOLD)))
+          allocate(tmp_forward_capacity(this%nedges+nreverse_edges), source=0.0_dp)
+          allocate(pair_edge(this%nedges+nreverse_edges))
+          do i=1,this%nedges
+            if (.not. (forward_capacity(i)>0.0_dp)) cycle
+            associate(e=>this%edges(i))
+              edge = this%add_edge(e%dst_handle, e%src_handle, e%ipar, e%rpar)
+            end associate
+            ireverse = get_index_from_handle(this, edge)
+            call added_edges%push(transfer(edge,INTEGER_MOLD))
+            pair_edge(i) = ireverse
+            pair_edge(ireverse) = i
+            tmp_forward_capacity(i) = forward_capacity(i)
+            tmp_forward_capacity(ireverse) = 0.0_dp
+          end do
+          call move_alloc(tmp_forward_capacity, forward_capacity)
+          deallocate(backward_capacity)
+          allocate(backward_capacity(0)) ! assert not be used later accidentaly
+        end block
+      else
+        allocate(pair_edge(0)) ! array not needed for undirected graphs
+      end if
+
+      ! CORE OF THE ALGORITHM
+      ! Augment flow as long as possible
+      flow = 0.0_dp
+      do
+        ! Find shortest path using edges with remaining capacity
+        call bfs_shortest_path(this, forward_capacity, backward_capacity, &
+            source_id,sink_id, prev_edge)
+        if (prev_edge(sink_id)==MAP_NULL) exit
+        ! The flow can be augmented. How much flow can we send?
+        call process_path(this, forward_capacity, backward_capacity, &
+            source_id, sink_id, prev_edge, pair_edge, additional_flow, .false.)
+print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
+        ! Update capacity of the network
+        call process_path(this, forward_capacity, backward_capacity, &
+            source_id, sink_id, prev_edge, pair_edge, additional_flow, .true., &
+            position_flow)
+        flow = flow + additional_flow
+      end do
+
+      ! Do minimum cut partition
+      if (present(position_mincutlabel)) then
+        block
+          integer, parameter :: SOURCE_REACHABLE=1, SINK_REACHABLE=2, CLOSED=0
+          integer :: i
+          call bfs_shortest_path(this, forward_capacity, backward_capacity, &
+              source_id, sink_id, prev_edge)
+          do i=1,this%nvertices
+            associate(label=>this%vertices(i)%ipar(position_mincutlabel))
+              if (.not. open_vertex(this, this%vertices(i), open_vertex_f)) then
+                label = CLOSED
+              else if (i==source_id) then
+                label = SOURCE_REACHABLE
+              else if (prev_edge(i)/=MAP_NULL) then
+                label = SOURCE_REACHABLE
+              else
+                label = SINK_REACHABLE
+              end if
+            end associate
+          end do
+        end block
+      end if
+
+      ! Remove reverse edges added for directed graph
+      if (this%is_directed_graph) then
+        block
+          type(handle_t) :: edge
+          do while(.not. added_edges%empty())
+            edge = transfer(added_edges%pop(), edge)
+            call this%remove_edge(edge)
+          end do
+        end block
+      end if
+
+    end subroutine graph_maxflow
+
+
+    subroutine bfs_shortest_path(this, forward_capacity, backward_capacity, source_id, sink_id, prev_edge)
+      class(graph_t), intent(in) :: this
+      real(dp), intent(in) :: forward_capacity(:), backward_capacity(:)
+      integer, intent(in) :: source_id, sink_id
+      integer, intent(out) :: prev_edge(:)
+!
+! BFS from source to sink using only edges with non-zero capacity
+!
+      type(queue_t) :: q
+      integer :: current_id, iedge, ngb_id
+      type(iterator_t) :: iterator
+
+      call q%initialize(chunksize=size(transfer(current_id,INTEGER_MOLD)))
+      call q%enqueue(transfer(source_id,INTEGER_MOLD))
+      prev_edge = MAP_NULL
+
+      do while(.not. q%empty() .and. prev_edge(sink_id)==MAP_NULL)
+        current_id = transfer(q%dequeue(), current_id)
+        iterator = iterator_t()
+        NGBS_LOOP: do while (this%vertices(current_id)%ngbs%has_next(iterator))
+          call this%vertices(current_id)%ngbs%next(iterator, iedge)
+          ngb_id = other_vertex_id(this, iedge, current_id)
+
+          ! Skip edges with zero capacity
+          if (ngb_id==MAP_NULL) then
+            error stop 'bfs_shortest_path - ngb is null'
+          else if (ngb_id == get_index_from_handle(this,this%edges(iedge)%dst_handle)) then
+            ! forward edge
+            if (forward_capacity(iedge)<=0.0_dp) cycle
+          else if (ngb_id == get_index_from_handle(this,this%edges(iedge)%src_handle)) then
+            ! backward edge
+            ! no backward edge can appear in directed graph
+            if (this%is_directed_graph) error stop &
+                'bfs_shortest_path - assertion for directed graph fails'
+            if (backward_capacity(iedge)<=0.0_dp) cycle
+          else
+            error stop 'bfs_shortest_path - should not reach this branch'
+          end if
+
+          ! Skip edges going back to already traversed vertices
+          if (ngb_id==source_id .or. prev_edge(ngb_id)/=MAP_NULL) cycle
+
+          ! Add next node to the queue
+          prev_edge(ngb_id) = iedge
+          call q%enqueue(transfer(ngb_id,INTEGER_MOLD))
+        end do NGBS_LOOP
+      end do
+      ! Now it is possible use "prev_edge(sink_id)" to see if path from
+      ! source to sink was found and back-track the path back to source.
+    end subroutine bfs_shortest_path
+
+
+    subroutine process_path(this, forward_capacity, backward_capacity, &
+        source_id, sink_id, prev_edge, pair_edge, additional_flow, &
+        updating_flow, position_flow)
+      class(graph_t), intent(inout) :: this
+      real(dp), intent(inout) :: forward_capacity(:), backward_capacity(:)
+      integer, intent(in) :: source_id, sink_id, prev_edge(:), pair_edge(:)
+      real(dp), intent(inout) :: additional_flow
+      logical, intent(in) :: updating_flow
+      integer, intent(in), optional :: position_flow
+!
+! to be added
+!
+      real(dp) :: capacity
+      integer :: current_id, next_id
+      logical :: is_forward_edge
+
+      if (present(position_flow) .and. .not. updating_flow) &
+          error stop 'position_flow argument can be given in update mode only'
+
+      if (.not. updating_flow) additional_flow = huge(additional_flow)
+
+      current_id = sink_id
+      do while (prev_edge(current_id) /= MAP_NULL)
+        next_id = other_vertex_id(this, prev_edge(current_id), current_id)
+
+        if (next_id==MAP_NULL) then
+          error stop 'process_path - ngb is null'
+        else if (next_id == get_index_from_handle(this,this%edges(prev_edge(current_id))%src_handle)) then
+          is_forward_edge = .true.
+          capacity = forward_capacity(prev_edge(current_id))
+        else if (next_id == get_index_from_handle(this,this%edges(prev_edge(current_id))%dst_handle)) then
+          ! backward edge
+          ! no backward edge can appear in directed graph
+          if (this%is_directed_graph) error stop &
+              'process_path - assertion for directed graph fails'
+          is_forward_edge = .false.
+          capacity = backward_capacity(prev_edge(current_id))
+        else
+          error stop 'process_path - should not reach this branch'
+        end if
+
+        if (updating_flow) then
+          if (this%is_directed_graph) then
+            associate (fcap=>forward_capacity(prev_edge(current_id)), &
+                bcap=>forward_capacity( pair_edge(prev_edge(current_id)) ) )
+              fcap = fcap - additional_flow
+              bcap = bcap + additional_flow
+            end associate
+            if (present(position_flow)) then
+              associate (f=>this%edges(prev_edge(current_id))%rpar(position_flow), &
+                  b=>this%edges(pair_edge(prev_edge(current_id)))%rpar(position_flow))
+                f = f + additional_flow
+                b = b - additional_flow
+              end associate
+            end if
+          else
+            ! undirected graph
+            associate (fcap=>forward_capacity(prev_edge(current_id)), &
+                bcap=>backward_capacity(prev_edge(current_id)))
+              if (is_forward_edge) then
+                fcap = fcap - additional_flow
+                bcap = bcap + additional_flow
+              else
+                fcap = fcap + additional_flow
+                bcap = bcap - additional_flow
+              end if
+            end associate
+            if (present(position_flow)) then
+              associate (f=>this%edges(prev_edge(current_id))%rpar(position_flow))
+                if (is_forward_edge) then
+                  f = f + additional_flow
+                else
+                  f = f - additional_flow
+                end if
+              end associate
+            end if
+          end if
+        else
+          ! just looking for the bottleneck
+          if (capacity < additional_flow) additional_flow = capacity
+        end if
+
+        current_id = next_id
+      end do
+
+      ! verify source reached
+      if (current_id /= source_id) error stop 'process_path - could not reach source'
+    end subroutine process_path
+
+
+    ! ------------------------------------------------------------------
+    ! These functions call the user function or return .true. on default
+    ! if user functions are not provided
+    ! ------------------------------------------------------------------
+    logical function open_vertex(this, vertex, open_vertex_f)
+      class(graph_t), intent(in) :: this
+      type(vertex_t), intent(in) :: vertex
+      procedure(is_vertex_selected), optional :: open_vertex_f
+      if (present(open_vertex_f)) then
+        open_vertex = open_vertex_f(this, vertex)
+      else
+        open_vertex = .true.
+      end if
+    end function
+
+    logical function open_edge(this, edge, open_edge_f)
+      class(graph_t), intent(in) :: this
+      type(edge_t), intent(in) :: edge
+      procedure(is_edge_selected), optional :: open_edge_f
+      if (present(open_edge_f)) then
+        open_edge = open_edge_f(this, edge)
+      else
+        open_edge = .true.
+      end if
+    end function
 
   end module graph_mod

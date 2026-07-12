@@ -38,22 +38,11 @@
 
     type, public :: vtuio_data_t
       !! 1. Call `add_item` to add additional data fields
-!TODO not implemented yet
-!     !! 2. Call `reallocate` to allocate arrays
-!     !! 3. Copy data to `??dat` arrays
-      !! 4. Call vtuio_write
-      !! 5. Call `finalize`
-!     integer, allocatable  :: pidat(:,:)
-!       !! shape = [no of components of data, no of points]
-!     integer, allocatable  :: cidat(:,:)
-!       !! shape = [no of components of data, no of cells]
-!     real(DP), allocatable :: prdat(:,:)
-!     real(DP), allocatable :: crdat(:,:)
+      !! 2. Call vtuio_write
+      !! 3. Call `finalize`
       type(vtuio_meta_t), allocatable :: meta(:)
-      integer :: totcomp(0:3) = 0
     contains
       procedure :: add_item => meta_add_item
-     !procedure :: reallocate => meta_reallocate
       procedure :: free => meta_free
     end type vtuio_data_t
 
@@ -301,7 +290,7 @@
                 if (allocated(rdata)) deallocate(rdata)
                 allocate(rdata(m%ncomp,ncells))
                 do j=1,ncells
-                  rdata(:,j) = graph%edges(j)%rpar(m%start:m%ncomp-1)
+                  rdata(:,j) = graph%edges(j)%rpar(m%start:m%start+m%ncomp-1)
                 end do
                 call write_data(fid, m%nbytes, trim(m%label), rdata=rdata)
                !call write_data(fid, m%nbytes, trim(m%label), rdata=&
@@ -310,7 +299,7 @@
                 if (allocated(idata)) deallocate(idata)
                 allocate(idata(m%ncomp,ncells))
                 do j=1,ncells
-                  idata(:,j) = graph%edges(j)%ipar(m%start:m%ncomp-1)
+                  idata(:,j) = graph%edges(j)%ipar(m%start:m%start+m%ncomp-1)
                 end do
                 call write_data(fid, m%nbytes, trim(m%label), idata=idata)
                !call write_data(fid, m%nbytes, trim(m%label), idata=&
@@ -829,47 +818,30 @@
     ! Organize real and integer data
     ! ==============================
 
-    function meta_add_item(this, label, iclass, ncomp, nbytes) result(start)
+    subroutine meta_add_item(this, label, start, iclass, ncomp, nbytes)
       class(vtuio_data_t), intent(inout) :: this
       character(len=*), intent(in) :: label
-      integer(I1B), intent(in) :: iclass
+      integer, intent(in) :: iclass
         !! use VTUIO_META_POINT/CELL + VTUIO_META_R/I to select the correct
         !! value
       integer, intent(in) :: ncomp, nbytes
-      integer :: start
+      integer, intent(in) :: start
 
       if (.not. allocated(this%meta)) allocate(this%meta(0))
 
-      if (iclass < 0 .or. iclass > ubound(this%totcomp,1)) &
+      if (iclass < 0 .or. iclass > 3) &
           error stop 'meta_add_item - invalid iclass'
       if (ncomp /= 1 .and. ncomp /=3) &
           print '("WARNING: expected scalar or 3d-vector")'
 
-      start = this%totcomp(iclass) + 1
-      this%totcomp(iclass) = this%totcomp(iclass) + ncomp
       this%meta = [this%meta, &
           vtuio_meta_t(start,ncomp,nbytes,label,int(iclass,I1B))]
-    end function meta_add_item
-
-
-   !subroutine meta_reallocate(this, npoints, ncells)
-   !  class(vtuio_data_t), intent(inout) :: this
-   !  integer, intent(in) :: npoints, ncells
-   !  allocate(this%pidat(this%totcomp(0), npoints))
-   !  allocate(this%cidat(this%totcomp(1), ncells))
-   !  allocate(this%prdat(this%totcomp(2), npoints))
-   !  allocate(this%crdat(this%totcomp(3), ncells))
-   !end subroutine meta_reallocate
+    end subroutine meta_add_item
 
 
     subroutine meta_free(this)
       class(vtuio_data_t), intent(inout) :: this
-     !if (allocated(this%pidat)) deallocate(this%pidat)
-     !if (allocated(this%cidat)) deallocate(this%cidat)
-     !if (allocated(this%prdat)) deallocate(this%prdat)
-     !if (allocated(this%crdat)) deallocate(this%crdat)
       if (allocated(this%meta)) deallocate(this%meta)
-      this%totcomp = 0
     end subroutine meta_free
 
   end module vtuio_mod

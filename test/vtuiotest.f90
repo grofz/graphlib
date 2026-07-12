@@ -1,6 +1,6 @@
   program atom_test
-    use iso_fortran_env, only : DP=>real64, output_unit
-    use vtuio_mod, only : vtuio_write, vtuio_read
+    use iso_fortran_env, only : DP=>real64, output_unit, I1=>int8
+    use vtuio_mod, only : vtuio_write, vtuio_read, vtuio_data_t
 !   use import_dem2011_mod, only : import_dem2011
     use graph_mod, only : graph_t, handle_t
     implicit none (type, external)
@@ -11,6 +11,7 @@
 
     type(graph_t) :: g, gnew, gbig
     type(handle_t), allocatable :: atom_handles(:), cone_handles(:)
+    type(vtuio_data_t) :: vtudata
 
     integer, parameter :: mask_for_vtuio(*) = [1, 2, 1, 1]
 
@@ -21,14 +22,16 @@
         type(graph_t), intent(in) :: graph
       end subroutine
 
-      logical function select_edge(e)
-        use graph_mod, only : edge_t
+      pure logical function select_edge(this, e)
+        use graph_mod, only : edge_t, graph_t
         implicit none (type, external)
+        class(graph_t), intent(in) :: this
         type(edge_t), intent(in) :: e
       end function
-      logical function select_vertex(v)
-        use graph_mod, only : vertex_t
+      pure logical function select_vertex(this, v)
+        use graph_mod, only : vertex_t, graph_t
         implicit none (type, external)
+        class(graph_t), intent(in) :: this
         type(vertex_t), intent(in) :: v
       end function
     end interface
@@ -40,22 +43,22 @@
     allocate(atom_handles(5), x(3,5))
     velo = [1.0, 1.0, 0.0]
     x(:,1) = real([0.0,0.0,0.0],DP)
-    atom_handles(1) = g%add_vertex([1], [0.75_DP, x(:,1)])
+    atom_handles(1) = g%add_vertex([1], [0.75_DP, x(:,1), velo])
 
     velo = [1.0, 2.0, 0.0]
     x(:,2) = real([1.0,0.0,0.0],DP)
-    atom_handles(2) = g%add_vertex([1], [0.25_DP, x(:,2)])
+    atom_handles(2) = g%add_vertex([1], [0.25_DP, x(:,2), velo])
 
     velo = [2.0, 1.0, 0.0]
     x(:,3) = real([0.5707,0.6297,0.0],DP)
-    atom_handles(3) = g%add_vertex([1], [0.10_DP, x(:,3)])
+    atom_handles(3) = g%add_vertex([1], [0.10_DP, x(:,3), velo])
 
     velo = [0.0, 0.0, 0.1]
     x(:,4) = real([0.0,0.0,1.0],DP)
-    atom_handles(4) = g%add_vertex([2], [0.05_DP, x(:,4)])
+    atom_handles(4) = g%add_vertex([2], [0.05_DP, x(:,4), velo])
 
     x(:,5) = real([0.0,0.0,2.0],DP)
-    atom_handles(5) = g%add_vertex([2], [0.05_DP, x(:,5)])
+    atom_handles(5) = g%add_vertex([2], [0.05_DP, x(:,5), velo])
 
     allocate(cone_handles(4))
     cone_handles(1) = g%add_edge(atom_handles(1), atom_handles(2), [10], [real(dp)::])
@@ -63,7 +66,8 @@
     cone_handles(3) = g%add_edge(atom_handles(1), atom_handles(4), [20], [real(dp)::])
     cone_handles(4) = g%add_edge(atom_handles(4), atom_handles(5), [20], [real(dp)::])
 
-    call vtuio_write('test', g, mask_for_vtuio, 123.0_DP)
+    call vtudata%add_item('velocity',start=5,iclass=2,ncomp=3,nbytes=4)
+    call vtuio_write('test', g, mask_for_vtuio, time=123.0_DP, vtudata=vtudata)
 
 
     ! Read back from file to a new structure
@@ -142,16 +146,18 @@ goto 100
     end do
   end subroutine graph_export
 
-      logical function select_edge(e)
-        use graph_mod, only : edge_t
+      pure logical function select_edge(this, e)
+        use graph_mod, only : edge_t, graph_t
         implicit none (type, external)
+        class(graph_t), intent(in) :: this
         type(edge_t), intent(in) :: e
         select_edge = .true.
        !select_edge = .false.
       end function
-      logical function select_vertex(v)
-        use graph_mod, only : vertex_t
+      pure logical function select_vertex(this, v)
+        use graph_mod, only : vertex_t, graph_t
         implicit none (type, external)
+        class(graph_t), intent(in) :: this
         type(vertex_t), intent(in) :: v
         select_vertex = .true.
       end function
