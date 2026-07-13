@@ -66,6 +66,7 @@
       procedure :: labconcom => graph_labconcom
       procedure :: shortest_path => graph_shortest_path
       procedure :: maxflow => graph_maxflow
+      procedure :: betweenness => graph_betweenness
     end type graph_t
 
 
@@ -886,8 +887,6 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
           call this%vertices(id_current)%ngbs%next(iterator, iedge)
           if (.not. open_edge(this, this%edges(iedge), open_edge_f)) cycle
           id_ngb = other_vertex_id(this, iedge, id_current)
-          if (id_ngb<1 .or. id_ngb>this%nvertices) &
-              error stop 'graph_shortest_path - other end point of edge does not exist'
           if (.not. open_vertex(this, this%vertices(id_ngb), open_vertex_f)) cycle
           if (visited(id_ngb)) cycle
 
@@ -1272,6 +1271,163 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       ! verify source reached
       if (current_id /= source_id) error stop 'process_path - could not reach source'
     end subroutine process_path
+
+
+    ! -------------------------------
+    ! Betweenness (Brandes algorithm)
+    ! -------------------------------
+    subroutine graph_betweenness(this, position_cost, position_eb, open_vertex_f, &
+        open_edge_f)
+      class(graph_t), intent(inout) :: this
+      integer, intent(in) :: position_cost
+      integer, intent(in) :: position_eb
+      procedure(is_vertex_selected), optional :: open_vertex_f
+      procedure(is_edge_selected), optional :: open_edge_f
+!
+! TBA
+!
+      logical, allocatable :: open_e(:)
+      integer :: i, ia, ib, id_s
+      real(dp), allocatable :: dist(:) 
+        ! shortest distance from "s" to "v"
+      type(stack_t), allocatable :: prev(:)
+        ! list of immediate predecessors of "v" on shortest paths
+      integer, allocatable :: sigma(:)
+        ! the number of unique shortest paths from "s" to "v"
+      type(pqueue_t) :: pqueue
+      type(stack_t) :: stack
+      type(pqueue_handle_t), allocatable :: phas(:)
+      logical, allocatable :: visited(:)
+      real(dp), allocatable :: delta(:)
+        ! dependency of the source on vertex "v"
+      integer, parameter :: DIST_SHORTER=1, DIST_SAME=0, DIST_LONGER=-1
+
+
+      ! Mark open edges
+      allocate(open_e(this%nedges), source=.false.)
+      do i=1, this%nedges
+        if (.not. open_edge(this, this%edges(i), open_edge_f)) cycle
+        ia = get_index_from_handle(this, this%edges(i)%src_handle)
+        ib = get_index_from_handle(this, this%edges(i)%dst_handle)
+        if (ia==MAP_NULL .or. ib==MAP_NULL) cycle
+        if (.not. open_vertex(this, this%vertices(ia), open_vertex_f)) cycle
+        if (.not. open_vertex(this, this%vertices(ib), open_vertex_f)) cycle
+        open_e(i) = .true.
+      end do
+print *, open_e
+
+      ! Local Dijkstra arrays
+      allocate(dist(this%nvertices), prev(this%nvertices), sigma(this%nvertices))
+      allocate(phas(this%nvertices), visited(this%nvertices))
+      do i=1, this%nvertices
+        call prev(i)%initialize(size(transfer(id_s,INTEGER_MOLD)))
+      end do
+      call pqueue%initialize(chunksize=size(transfer(id_s,INTEGER_MOLD)))
+      call stack%initialize(chunksize=size(transfer(id_s,INTEGER_MOLD)))
+      allocate(delta(this%nvertices))
+
+      ! Initialize edge betweeness
+      this%edges(1:this%nedges)%rpar(position_eb) = 0.0_dp
+
+      ! Loop over all source vectors
+      SRC_LOOP: do id_s=1, this%nvertices
+        if (.not. open_vertex(this, this%vertices(id_s), open_vertex_f)) cycle
+
+        ! Initialize Dijkstra's search from source
+        dist = huge(dist)
+        do i=1, this%nvertices
+          call prev(i)%clear()
+          phas(i) = pqueue_handle_t()
+        end do
+        sigma = 0
+        visited = .false.
+
+        dist(id_s) = 0.0_dp
+        sigma(id_s) = 1
+        phas(id_s) = pqueue%insert(transfer(id_s,INTEGER_MOLD), dist(id_s))
+
+        ! STEP 1 - Modified Dijkstra loop
+        DJIKSTRA_LOOP: do while (.not. pqueue%empty())
+          block
+            integer :: id_v, id_u, edge_uv
+            real(dp) :: dist_to_v
+            type(iterator_t) :: iterator
+            ! dequeue vertex and push it to the stack for later use
+            id_u = transfer(pqueue%pop(), id_u)
+            call stack%push(transfer(id_u,INTEGER_MOLD))
+            visited(id_u) = .true.
+
+            iterator = iterator_t()
+            NGB_LOOP: do while(this%vertices(id_u)%ngbs%has_next(iterator))
+              call this%vertices(id_u)%ngbs%next(iterator, edge_uv)
+              if (.not. open_e(edge_uv)) cycle
+              id_v = other_vertex_id(this, edge_uv, id_u)
+              if (visited(id_v)) cycle
+
+              dist_to_v = dist(id_u) + this%edges(edge_uv)%rpar(position_cost)
+              select case(compare_dist(dist_to_v, dist(id_v)))
+              case(DIST_SHORTER)
+                dist(id_v) = dist_to_v
+                call prev(id_v)%clear()
+                call prev(id_v)%push(transfer(edge_uv,INTEGER_MOLD))
+                sigma(id_v) = sigma(id_u)
+                if (pqueue%contains(phas(id_v))) then
+                  call pqueue%update_priority(phas(id_v), dist_to_v)
+                else
+                  phas(id_v) = pqueue%insert(transfer(id_v,INTEGER_MOLD), dist_to_v)
+                end if
+              case(DIST_SAME)
+                call prev(id_v)%push(transfer(edge_uv,INTEGER_MOLD))
+                sigma(id_v) = sigma(id_v) + sigma(id_u)
+              end select
+            end do NGB_LOOP
+          end block
+        end do DJIKSTRA_LOOP
+
+        ! STEP 2 - Backward pass
+        delta = 0.0_dp
+        BACKPASS_LOOP: do while(.not. stack%empty())
+          block
+            integer :: id_v, id_u, iedge
+            real(dp) :: delta_edge
+            id_v = transfer(stack%pop(), id_v)
+            do while (.not. prev(id_v)%empty())
+              iedge = transfer(prev(id_v)%pop(), iedge)
+              id_u = other_vertex_id(this, iedge, id_v)
+              delta_edge = real(sigma(id_u),dp)/real(sigma(id_v),dp)*(1.0_dp+delta(id_v))
+              ! accumulate global edge beteenness
+              associate(c=>this%edges(iedge)%rpar(position_eb))
+                c = c + delta_edge
+              end associate
+              ! pass it to a predecessor node
+              delta(id_u) = delta(id_u) + delta_edge
+            end do
+          end block
+        end do BACKPASS_LOOP
+
+      end do SRC_LOOP
+
+      ! Divide by two for undirected graphs
+      if (.not. this%is_directed_graph) then
+        associate(eb=>this%edges(1:this%nedges)%rpar(position_eb))
+          eb = 0.5_dp * eb
+print *, 'EB ',eb
+        end associate
+      end if
+
+    contains
+      integer function compare_dist(new, old)
+        real(dp), intent(in) :: old, new
+        real(dp), parameter :: EPS = 1.0e5 * epsilon(1.0_dp)
+        if (abs(old-new) < EPS) then
+          compare_dist = DIST_SAME
+        else if (new < old) then
+          compare_dist = DIST_SHORTER
+        else
+          compare_dist = DIST_LONGER
+        end if
+      end function
+    end subroutine graph_betweenness
 
 
     ! ------------------------------------------------------------------

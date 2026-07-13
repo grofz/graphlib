@@ -54,6 +54,9 @@ module conts_mod
     generic :: operator(==) => handle_eq
     generic :: write(formatted) => handle_write_formatted
   end type
+  interface handle_t
+    module procedure handle_initialize
+  end interface
 
 
   type, extends(container_t), public :: pqueue_t
@@ -386,6 +389,13 @@ contains
     logical :: eq
     eq = a%version==b%version .and. a%index_to_hmap==b%index_to_hmap
   end function handle_eq
+
+
+  pure function handle_initialize() result(new)
+    type(handle_t) :: new
+    new%version = 1
+    new%index_to_hmap = HMAP_NULL
+  end function handle_initialize
 
 
   pure function is_higher_priority(pa, pb, this) result(is)
