@@ -16,8 +16,8 @@
 
 
     ! Initialize graph
-    call g%initialize(is_directed_graph=.true.)
-!   call g%initialize()
+!   call g%initialize(is_directed_graph=.true.)
+    call g%initialize()
 !   allocate(atom_handles(4), cone_handles(4))
     allocate(atom_handles(6), cone_handles(9))
 

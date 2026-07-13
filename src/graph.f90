@@ -633,22 +633,27 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
     end function list_of_outgoing_edges
 
 
-    pure function other_vertex_id(this, iedge, ia) result(ib)
+    pure function other_vertex_id(this, iedge, ia, allow_orphaned_edge) result(ib)
       class(graph_t), intent(in) :: this
       integer, intent(in) :: iedge, ia
       integer ib
+      logical, intent(in), optional :: allow_orphaned_edge !default = .false.
 !
 ! Given the edge and one of its end-point vertices, return index of the other
 ! end-point vertex.
+! Throws an error if other end-point vertex no longer exists unless optional
+! "allow_orphaned_edge" argument is set to .true.
 !
 ! INPUT
 !   this  - graph object
 !   iedge - position of the edge in "edges" array
 !   ia    - position of one vertex in "vertices" array
+!   allow_orphaned_edge - (optional) other vertex may no longer exist
 ! OUTPUT
 !   ib    - position of the other vertex in "vertices" array
 !
       integer :: i1, i2
+      logical :: ignore
 
       if (ia==MAP_NULL) &
           error stop 'other_vertex_id - "ia" must not be null'
@@ -664,8 +669,11 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
       end if
 
       if (ib==MAP_NULL) then
-        ! TODO - should this be an error?
-        error stop 'other_vertex_id - other end point vertex no longer exists'
+        ! How an orphaned edge is treated?
+        ignore = .false.
+        if (present(allow_orphaned_edge)) ignore = allow_orphaned_edge
+        if (.not. ignore) error stop &
+            'other_vertex_id - other end point vertex no longer exists'
       end if
     end function other_vertex_id
 
@@ -944,8 +952,29 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
       procedure(is_vertex_selected), optional :: open_vertex_f
       procedure(is_edge_selected), optional :: open_edge_f
 !
+! Maximum flow from the source to sink.
 !
+! INPUT
+!   this              - the graph (vertex/edge data updated)
+!   source            - handle to the source vertex
+!   sink              - handle to the sink vertex
+!   position_capacity - "edges/rpar" array item giving the edge capacity
+!   open_vertex_f     - user function to select open verices (OPTIONAL)
+!   open_edge_f       - user functoin to select open edges (OPTIONAL)
 !
+! OUTPUT
+!   flow                 - the maximum flow from source to sink
+!   position_mincutlabel - (OPTIONAL) partition the graph's vertices into two
+!                          disjoint subsets that minimizes the total capacity
+!                          of edges connecting the two subsets.
+!                          "vertices/ipar" array item is labeled as
+!                            0 - no flow through vertex (closed vertex)
+!                            1 - source connected subset
+!                            2 - sink connected subset
+!   position_flow        - (OPTIONAL)"edges/rpar" array item to save flow along
+!                          the edge
+!
+      integer, parameter :: SOURCE_REACHABLE=1, SINK_REACHABLE=2, CLOSED=0
       real(dp), allocatable :: forward_capacity(:), backward_capacity(:)
       integer, allocatable :: prev_edge(:), pair_edge(:)
       integer :: source_id, sink_id
@@ -954,12 +983,16 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
 
       ! Set up working arrays
       allocate(forward_capacity(this%nedges), backward_capacity(this%nedges))
+        ! Remaining capacity for forward and backward flow, backward_capacity
+        ! is used for undirected graphs only. For directed graphs reverse
+        ! edges are temporarily added to the graph.
       allocate(prev_edge(this%nvertices))
+        ! Keep track to the incoming edge is.
 
       block
-        ! Capacity of all open edges (and edges between open vertices) set
-        ! to their capacity stored in "edge%rpar" array.
-        ! Capacity of closed edges set to zero (disabling them)
+        ! Capacity of all open edges (and edges connecting open vertices) is set
+        ! to their capacity given in "edges/rpar" array.
+        ! Capacity of closed edges set to zero (to disabling them)
         integer :: i, ia, ib
         do i=1, this%nedges
           forward_capacity(i) = 0.0_dp
@@ -967,7 +1000,7 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
           if (open_edge(this, this%edges(i), open_edge_f)) then
             ia = get_index_from_handle(this, this%edges(i)%src_handle)
             ib = get_index_from_handle(this, this%edges(i)%dst_handle)
-            ! orphaned edges will be ignored
+            ! orphaned edges will be silently ignored
             if (ia==MAP_NULL .or. ib==MAP_NULL) cycle
             if (.not. open_vertex(this, this%vertices(ia), open_vertex_f)) cycle
             if (.not. open_vertex(this, this%vertices(ib), open_vertex_f)) cycle
@@ -995,9 +1028,16 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
         end if
       end block
 
+      ! Stack to store handles to temporarily added reverse edges.
+      ! Used for directed graphs only.
+      block
+        type(handle_t) :: edge
+        call added_edges%initialize(chunksize=size(transfer(edge,INTEGER_MOLD)))
+      end block
+
       ! For directed graphs, reverse edges must be added to the graph. This means
       ! that "forward_capacity" will be reallocated, "backward_capacity" will no
-      ! longer be needed. Reference "pair_edge" will be used instead
+      ! longer be needed. Reference "pair_edge" will be used instead.
       if (this%is_directed_graph) then
         block
           type(handle_t) :: edge
@@ -1008,7 +1048,6 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
           nreverse_edges = count(forward_capacity > 0.0_dp)
 
           ! for each non-zero capacity edge, a reverse edge is added
-          call added_edges%initialize(chunksize=size(transfer(edge,INTEGER_MOLD)))
           allocate(tmp_forward_capacity(this%nedges+nreverse_edges), source=0.0_dp)
           allocate(pair_edge(this%nedges+nreverse_edges))
           do i=1,this%nedges
@@ -1020,6 +1059,8 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
             call added_edges%push(transfer(edge,INTEGER_MOLD))
             pair_edge(i) = ireverse
             pair_edge(ireverse) = i
+            ! The capacity of reverse edges is initially stored to zero as
+            ! required by the algorithm.
             tmp_forward_capacity(i) = forward_capacity(i)
             tmp_forward_capacity(ireverse) = 0.0_dp
           end do
@@ -1031,13 +1072,13 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
         allocate(pair_edge(0)) ! array not needed for undirected graphs
       end if
 
-      ! CORE OF THE ALGORITHM
-      ! Augment flow as long as possible
+      ! The main loop of Edmonds-Karp
+      ! Augment flow as long as path with non-zero capacity exists
       flow = 0.0_dp
       do
-        ! Find shortest path using edges with remaining capacity
+        ! Find shortest path using edges with non-zero remaining capacity
         call bfs_shortest_path(this, forward_capacity, backward_capacity, &
-            source_id,sink_id, prev_edge)
+            source_id, sink_id, prev_edge)
         if (prev_edge(sink_id)==MAP_NULL) exit
         ! The flow can be augmented. How much flow can we send?
         call process_path(this, forward_capacity, backward_capacity, &
@@ -1050,10 +1091,9 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
         flow = flow + additional_flow
       end do
 
-      ! Do minimum cut partition
+      ! Make minimum cut partition (optional)
       if (present(position_mincutlabel)) then
         block
-          integer, parameter :: SOURCE_REACHABLE=1, SINK_REACHABLE=2, CLOSED=0
           integer :: i
           call bfs_shortest_path(this, forward_capacity, backward_capacity, &
               source_id, sink_id, prev_edge)
@@ -1067,6 +1107,9 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
                 label = SOURCE_REACHABLE
               else
                 label = SINK_REACHABLE
+                ! NOTE - actually we do not know if this vertex had any connection
+                !        with sink. Additional check for isolated vertices may be
+                !        added later (TODO)
               end if
             end associate
           end do
@@ -1074,26 +1117,29 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       end if
 
       ! Remove reverse edges added for directed graph
-      if (this%is_directed_graph) then
-        block
-          type(handle_t) :: edge
-          do while(.not. added_edges%empty())
-            edge = transfer(added_edges%pop(), edge)
-            call this%remove_edge(edge)
-          end do
-        end block
-      end if
+      block
+        type(handle_t) :: edge
+        do while(.not. added_edges%empty())
+          edge = transfer(added_edges%pop(), edge)
+          call this%remove_edge(edge)
+        end do
+      end block
 
     end subroutine graph_maxflow
 
 
-    subroutine bfs_shortest_path(this, forward_capacity, backward_capacity, source_id, sink_id, prev_edge)
+    subroutine bfs_shortest_path(this, forward_capacity, backward_capacity, &
+        source_id, sink_id, prev_edge)
       class(graph_t), intent(in) :: this
       real(dp), intent(in) :: forward_capacity(:), backward_capacity(:)
       integer, intent(in) :: source_id, sink_id
       integer, intent(out) :: prev_edge(:)
 !
-! BFS from source to sink using only edges with non-zero capacity
+! BFS from source to sink using only edges with non-zero capacity.
+! The path (if exists) can be tracked using "prev_edge" array.
+! Undirected graphs: traversing edge as SRC-<DST uses forward_capacity,
+! traversing edge as DST->SRC uses backward_capacity.
+! Directed graphs: backward_capacity is not used.
 !
       type(queue_t) :: q
       integer :: current_id, iedge, ngb_id
@@ -1111,9 +1157,7 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
           ngb_id = other_vertex_id(this, iedge, current_id)
 
           ! Skip edges with zero capacity
-          if (ngb_id==MAP_NULL) then
-            error stop 'bfs_shortest_path - ngb is null'
-          else if (ngb_id == get_index_from_handle(this,this%edges(iedge)%dst_handle)) then
+          if (ngb_id == get_index_from_handle(this,this%edges(iedge)%dst_handle)) then
             ! forward edge
             if (forward_capacity(iedge)<=0.0_dp) cycle
           else if (ngb_id == get_index_from_handle(this,this%edges(iedge)%src_handle)) then
@@ -1129,7 +1173,7 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
           ! Skip edges going back to already traversed vertices
           if (ngb_id==source_id .or. prev_edge(ngb_id)/=MAP_NULL) cycle
 
-          ! Add next node to the queue
+          ! Add next node to the queue, mark which edge was used to come-in
           prev_edge(ngb_id) = iedge
           call q%enqueue(transfer(ngb_id,INTEGER_MOLD))
         end do NGBS_LOOP
@@ -1149,7 +1193,9 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       logical, intent(in) :: updating_flow
       integer, intent(in), optional :: position_flow
 !
-! to be added
+! Back-track the path and
+!  (i) find the bottleneck remaining capacity, or
+!  (ii) update remaining capacity along the path.
 !
       real(dp) :: capacity
       integer :: current_id, next_id
@@ -1164,9 +1210,7 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       do while (prev_edge(current_id) /= MAP_NULL)
         next_id = other_vertex_id(this, prev_edge(current_id), current_id)
 
-        if (next_id==MAP_NULL) then
-          error stop 'process_path - ngb is null'
-        else if (next_id == get_index_from_handle(this,this%edges(prev_edge(current_id))%src_handle)) then
+        if (next_id == get_index_from_handle(this,this%edges(prev_edge(current_id))%src_handle)) then
           is_forward_edge = .true.
           capacity = forward_capacity(prev_edge(current_id))
         else if (next_id == get_index_from_handle(this,this%edges(prev_edge(current_id))%dst_handle)) then
@@ -1181,6 +1225,7 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
         end if
 
         if (updating_flow) then
+          ! Update capaciry mode
           if (this%is_directed_graph) then
             associate (fcap=>forward_capacity(prev_edge(current_id)), &
                 bcap=>forward_capacity( pair_edge(prev_edge(current_id)) ) )
@@ -1217,7 +1262,7 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
             end if
           end if
         else
-          ! just looking for the bottleneck
+          ! Looking for the bottleneck mode
           if (capacity < additional_flow) additional_flow = capacity
         end if
 
