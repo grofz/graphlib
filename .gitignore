@@ -4,3 +4,6 @@
 *.x
 .mod
 *.swp
+*.vtu
+log
+lib*.a
