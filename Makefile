@@ -39,7 +39,8 @@ MODOBJECTS = \
 
 MAIN1 = build_test/vtuiotest.o
 MAIN2 = build_test/maxflowtest.o
-ALLOBJECTS = $(MODOBJECTS) $(MAIN1) $(MAIN2)
+MAIN3 = build_test/betweennesstest.o
+ALLOBJECTS = $(MODOBJECTS) $(MAIN1) $(MAIN2) $(MAIN3)
 
 # dependent libraries
 #ldir = ./lib/odepack
@@ -51,17 +52,21 @@ OUTLIB = libgraph.a
 ifdef OS
 	EXE1 = test_vtuio.exe
 	EXE2 = test_maxflow.exe
+	EXE3 = test_betweeness.exe
 else
 	EXE1 = $(BINDIR)/test_vtuio.x
 	EXE2 = $(BINDIR)/test_maxflow.x
+	EXE3 = $(BINDIR)/test_betweeness.x
 endif
 
 # default goal and dependencies
-all: $(EXE1) $(EXE2) $(OUTLIB)
+all: $(EXE1) $(EXE2) $(EXE3) $(OUTLIB)
 
 $(EXE1) : $(MODOBJECTS) $(MAIN1)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
 $(EXE2) : $(MODOBJECTS) $(MAIN2)
+	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
+$(EXE3) : $(MODOBJECTS) $(MAIN3)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
 
 $(OUTLIB) : $(MODOBJECTS)
@@ -80,6 +85,8 @@ build_test/vtuiotest.o : $(MODOBJECTS)
 
 build_test/maxflowtest.o : $(MODOBJECTS)
 
+build_test/betweenesstest.o : $(MODOBJECTS)
+
 #.f.o:
 build_test/%.o : test/%.f90
 	$(FC) $(FFLAGS) -J$(JDIR) -c $< -o $@
@@ -88,5 +95,5 @@ $(DIR)/%.o : src/%.f90
 
 # one phoney target
 clean :
-	-rm -f $(DIR)/*.o build_test/*.o $(JDIR)/*.mod $(EXE1) $(EXE2) $(OUTLIB)
+	-rm -f $(DIR)/*.o build_test/*.o $(JDIR)/*.mod $(EXE1) $(EXE2) $(EXE3) $(OUTLIB)
 # end of makefile

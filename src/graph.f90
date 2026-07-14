@@ -1276,17 +1276,18 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
     ! -------------------------------
     ! Betweenness (Brandes algorithm)
     ! -------------------------------
-    subroutine graph_betweenness(this, position_cost, position_eb, open_vertex_f, &
-        open_edge_f)
+    subroutine graph_betweenness(this, position_cost, position_eb, position_vb, &
+        is_normalized, open_vertex_f, open_edge_f)
       class(graph_t), intent(inout) :: this
       integer, intent(in) :: position_cost
-      integer, intent(in) :: position_eb
+      integer, intent(in) :: position_eb, position_vb
+      logical, intent(in), optional :: is_normalized
       procedure(is_vertex_selected), optional :: open_vertex_f
       procedure(is_edge_selected), optional :: open_edge_f
 !
 ! TBA
 !
-      logical, allocatable :: open_e(:)
+      logical, allocatable :: open_e(:), open_v(:)
       integer :: i, ia, ib, id_s
       real(dp), allocatable :: dist(:) 
         ! shortest distance from "s" to "v"
@@ -1302,19 +1303,21 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
         ! dependency of the source on vertex "v"
       integer, parameter :: DIST_SHORTER=1, DIST_SAME=0, DIST_LONGER=-1
 
+      ! Mark open edges and count open_vertices
+      allocate(open_v(this%nvertices), source=.false.)
+      do i=1, this%nvertices
+        if (open_vertex(this, this%vertices(i), open_vertex_f)) &
+            open_v(i) = .true.
+      end do
 
-      ! Mark open edges
       allocate(open_e(this%nedges), source=.false.)
       do i=1, this%nedges
         if (.not. open_edge(this, this%edges(i), open_edge_f)) cycle
         ia = get_index_from_handle(this, this%edges(i)%src_handle)
         ib = get_index_from_handle(this, this%edges(i)%dst_handle)
         if (ia==MAP_NULL .or. ib==MAP_NULL) cycle
-        if (.not. open_vertex(this, this%vertices(ia), open_vertex_f)) cycle
-        if (.not. open_vertex(this, this%vertices(ib), open_vertex_f)) cycle
-        open_e(i) = .true.
+        if (open_v(ia) .and. open_v(ib)) open_e(i) = .true.
       end do
-print *, open_e
 
       ! Local Dijkstra arrays
       allocate(dist(this%nvertices), prev(this%nvertices), sigma(this%nvertices))
@@ -1326,8 +1329,9 @@ print *, open_e
       call stack%initialize(chunksize=size(transfer(id_s,INTEGER_MOLD)))
       allocate(delta(this%nvertices))
 
-      ! Initialize edge betweeness
+      ! Initialize edge and vertex betweeness
       this%edges(1:this%nedges)%rpar(position_eb) = 0.0_dp
+      this%vertices(1:this%nvertices)%rpar(position_vb) = 0.0_dp
 
       ! Loop over all source vectors
       SRC_LOOP: do id_s=1, this%nvertices
@@ -1402,18 +1406,63 @@ print *, open_e
               ! pass it to a predecessor node
               delta(id_u) = delta(id_u) + delta_edge
             end do
+            if (id_v /= id_s) then
+              associate(c=>this%vertices(id_v)%rpar(position_vb))
+                c = c + delta(id_v)
+              end associate
+            end if
           end block
         end do BACKPASS_LOOP
 
       end do SRC_LOOP
 
-      ! Divide by two for undirected graphs
+      ! Divide by two for undirected graphs (all paths were counted twice)
       if (.not. this%is_directed_graph) then
         associate(eb=>this%edges(1:this%nedges)%rpar(position_eb))
           eb = 0.5_dp * eb
-print *, 'EB ',eb
+        end associate
+        associate(vb=>this%vertices(1:this%nvertices)%rpar(position_vb))
+          vb = 0.5_dp * vb
         end associate
       end if
+
+      ! Normalize the scores (optional)
+      block
+        logical :: is_normalized0
+        real(dp) :: v_denominator, e_denominator
+        integer :: n
+        is_normalized0 = .false. ! default behaviour
+        if (present(is_normalized)) is_normalized0 = is_normalized
+        if (is_normalized0) then
+          n = count(open_v)
+          ! Vertices
+          ! directed graphs: total ordered pairs of nodes (paths s-->t  and
+          !                  t-->s are counted as separate pairs).
+          ! undirected graphs: total unordered pairs of nodes in the graph,
+          !                    excluding the target node itself.
+          v_denominator = real((n-1)*(n-2),dp)
+          ! Edges
+          ! directed graphs: total possible unique ordered pairs of nodes in
+          !                  the entire graph.
+          ! undirected graphs: total possible unique unordered pairs of nodes
+          !                    in the entire graph.
+          e_denominator = real(n*(n-1),dp)
+          if (.not. this%is_directed_graph) then
+            v_denominator = v_denominator * 0.5_dp
+            e_denominator = e_denominator * 0.5_dp
+          end if
+
+          associate(eb=>this%edges(1:this%nedges)%rpar(position_eb))
+            eb = eb / e_denominator
+          end associate
+          associate(vb=>this%vertices(1:this%nvertices)%rpar(position_vb))
+            vb = vb / v_denominator
+          end associate
+        end if
+      end block
+
+      ! Clean-up
+      deallocate(phas) ! must be deallocated explicitly, got run time error
 
     contains
       integer function compare_dist(new, old)
