@@ -20,9 +20,9 @@ JDIR = include
 #   $ make DEBUG=yes
 #
 ifdef DEBUG
-  FFLAGS =-Og -g -Wall -Wextra -pedantic -std=gnu -fimplicit-none -fcheck=all -fbacktrace -fPIC
+  FFLAGS =-Og -g -Wall -Wextra -pedantic -std=gnu -fimplicit-none -fcheck=all -fbacktrace -fPIC -fmax-errors=5
 else
-  FFLAGS =-Ofast -Wall -Wextra -pedantic -std=gnu -fimplicit-none -fbacktrace -fPIC
+  FFLAGS =-Ofast -Wall -Wextra -pedantic -std=gnu -fimplicit-none -fbacktrace -fPIC -fmax-errors=5
 endif
 
 # compiler and linker

@@ -21,6 +21,14 @@ program betweeness
       real(dp), allocatable, intent(out) :: evb(:), eeb(:)
     end subroutine
   end interface
+  interface
+    pure elemental function almost_equal(a,b) result(res)
+      use iso_fortran_env, only : dp=>real64
+      implicit none
+      real(dp), intent(in) :: a, b
+      logical :: res
+    end function
+  end interface
   procedure(test_graph_ai) :: test_graph1, test_graph2, test_graph3, test_graph4
   type(vtuio_data_t) :: vtudata
 
@@ -49,27 +57,26 @@ program betweeness
       call g%betweenness(pos_cost, position_eb=pos_eb, position_vb=pos_vb, is_normalized=.true.)
     end if
     print '("Vertex central betweenness: expected/got")'
-    print '(*(g0.6,1x))', expected_vb
-    print '(*(g0.6,1x))', g%vertices(1:g%nvertices)%rpar(pos_vb)
+    print '(*(g0,1x))', expected_vb
+    print '(*(g0,1x))', g%vertices(1:g%nvertices)%rpar(pos_vb)
     print '("Edge central betweenness: expected/got")'
-    print '(*(g0.6,1x))', expected_eb
-    print '(*(g0.6,1x))', g%edges(1:g%nedges)%rpar(pos_eb)
-    print '("Passed? ",l1)', all(g%vertices(1:g%nvertices)%rpar(pos_vb)==expected_vb)
-    print '("Passed? ",l1)', all(g%edges(1:g%nedges)%rpar(pos_eb)==expected_eb)
+    print '(*(g0,1x))', expected_eb
+    print '(*(g0,1x))', g%edges(1:g%nedges)%rpar(pos_eb)
+    print '("Passed? ",l1)', all(almost_equal(g%vertices(1:g%nvertices)%rpar(pos_vb), expected_vb))
+    print '("Passed? ",l1)', all(almost_equal(g%edges(1:g%nedges)%rpar(pos_eb), expected_eb))
     print *
     if (i==1) call vtuio_write('aa', g, mask_for_vtuio, vtudata=vtudata)
     if (i==4) call vtuio_write('cc', g, mask_for_vtuio, vtudata=vtudata)
   end do
-  stop 1
 
   block
     call g%initialize()
-    call vtuio_read('LM50V04', g, mask_for_vtuio)
+    call vtuio_read('LM60', g, mask_for_vtuio)
     g%edges(1:g%nedges)%rpar(pos_cost) = 1.0_dp
     print *, 'Calculating betweenness....'
     call g%betweenness(pos_cost, position_eb=pos_eb, position_vb=pos_vb, is_normalized=.true.)
     print *, '...ok'
-    call vtuio_write('bb.vtu', g, mask_for_vtuio, vtudata=vtudata)
+    call vtuio_write('LM60_b', g, mask_for_vtuio, vtudata=vtudata)
   end block
 
  !call g%print(output_unit)
@@ -299,3 +306,14 @@ subroutine test_graph4(g, is_directed, expected_vb, expected_eb)
   expected_vb = real([43,25,70,40,13,0,0,36,0,0,0,0,0,0,0],dp)
   expected_eb = real([0],dp) / 20.0_dp
 end subroutine test_graph4
+
+
+pure elemental function almost_equal(a,b) result(res)
+  use iso_fortran_env, only : dp=>real64
+  implicit none
+  real(dp), intent(in) :: a, b
+  logical :: res
+  real(dp), parameter :: eps = 5.0_dp*epsilon(1.0_dp)
+
+  res = abs(a-b) < eps * max(1.0_dp, abs(a), abs(b))
+end function

@@ -68,7 +68,7 @@
       procedure :: remove_vertex => graph_remove_vertex
       procedure :: remove_edge => graph_remove_edge
       procedure :: print => graph_print
-      procedure :: labconcom => graph_labconcom
+      procedure :: connected_components => graph_connected_components
       procedure :: shortest_path => graph_shortest_path
       procedure :: maxflow => graph_maxflow
       procedure :: betweenness => graph_betweenness
@@ -732,99 +732,124 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
     ! --------------------------
     ! Label connected components
     ! --------------------------
-    subroutine graph_labconcom(this, position_label, open_vertex_f, open_edge_f, lab_count)
+    subroutine graph_connected_components(this, position_label, &
+        vselector, eselector, lab_count)
       class(graph_t), intent(inout) :: this
       integer, intent(in) :: position_label
-      procedure(is_vertex_selected), optional :: open_vertex_f
-      procedure(is_edge_selected), optional :: open_edge_f
+      procedure(is_vertex_selected), optional :: vselector
+      procedure(is_edge_selected), optional :: eselector
       integer, intent(out), optional :: lab_count
 !
-! Label connected components in the graph. If optional user functions are not
-! provided, all vertices and edges are open.
+! Identify connected components of an undirected graph.
+! (NOTE - directed graphs are left as the future work)
+!
+! The routine assigns an integer component label to each selected vertex.
+! Vertices and edges can be restricted using optional selector functions.
+! If no selectors are provided, all vertices and edges are considered.
+!
+! Only selected vertices are modified. Vertices excluded by the selection
+! remain unchanged. An edge contributes to connectivity only if it is selected
+! and both of its endpoint vertices are selected.
+!
+! Component labels are assigned consecutively starting from 1.
+! Labels of unselected vertices are not modified.
 !
 ! INPUT
-!   this           - graph stucture
-!   position_label - position in "vertices(:)%ipar" array where component
-!                    "label" is saved
-!   open_vertex_f  - user function to control which vertices can be passed
-!                    through (optional)
-!   open_edge_f    - user function to control which edges can be used (optional)
-! OUTPUT
-!   lab_count      - how many connected components was identified (optional)
+!   this           - graph structure
+!   position_label - position in the vertices(:)/ipar array where component
+!                    labels are stored
+!   vselector      - optional function selecting vertices that participate in
+!                    the component search
+!   eselector      - optional function selecting edges that participate in
+!                    the component search
 !
-      integer, parameter :: LAB_CLOSED=0, LAB_INPROGRESS=-1
+! OUTPUT
+!   lab_count      - optional number of connected components identified
+!
+      integer, parameter :: LAB_INPROGRESS=-1
       integer :: i, j, k, iedge, lab_current
       type(iterator_t) :: iterator
       type(stack_t) :: stack
+      logical, allocatable :: vmask(:), emask(:)
 
-      ! Mark closed vertices and initialize "labels"
-      do i=1, this%nvertices
-        associate(lab=>this%vertices(i)%ipar(position_label))
-          if (open_vertex(this, this%vertices(i), open_vertex_f)) then
-            lab = LAB_INPROGRESS
-          else
-            lab = LAB_CLOSED
-          end if
-        end associate
-      end do
+      ! At the moment only for undirected graphs
+      if (this%is_directed_graph) &
+          error stop 'graph_connected_components - graph must be undirected'
 
+      call graph_build_selection_masks(this, vmask, emask, &
+          vselector=vselector, eselector=eselector)
+
+      ! Initialize "labels" for selected vertices
+      where (vmask) &
+          this%vertices(1:this%nvertices)%ipar(position_label) = LAB_INPROGRESS
+
+      ! Identified components counter
       lab_current = 0
+
+      ! Stack for deep-first graph traversal (DFS)
       call stack%initialize(chunksize=size(transfer(i,INTEGER_MOLD)))
 
       MAIN_LOOP: do i=1, this%nvertices
         ! Find the next unprocessed vertex and add it to the empty stack
+        if (.not. vmask(i)) cycle
         if (this%vertices(i)%ipar(position_label) /= LAB_INPROGRESS) cycle
         lab_current = lab_current + 1
         this%vertices(i)%ipar(position_label) = lab_current
         call stack%push(transfer(i,INTEGER_MOLD))
 
         ! Process the stack and propagate "lab_current"
-        STACK_LOOP: do while (.not. stack%empty())
+        DFS_LOOP: do while (.not. stack%empty())
           j = transfer(stack%pop(), j)
 
           ! Label and add allowed neighbours to the stack
           iterator = iterator_t()
           NGB_LOOP: do while (this%vertices(j)%ngbs%has_next(iterator))
             call this%vertices(j)%ngbs%next(iterator, iedge)
-            if (.not. open_edge(this, this%edges(iedge), open_edge_f)) cycle
+            if (.not. emask(iedge)) cycle
             k = other_vertex_id(this, iedge, j)
-            if (k<1 .or. k>this%nvertices) &
-                error stop 'graph_labconcom - edge other end point vertex is null'
-            ! destination "k" must be unlabeled, closed, or have a current label
+            ! Assert "k" is selected as edges to unselected vertices should
+            ! have been unselected by "build_selection_masks"
+            if (.not. vmask(k)) error stop &
+                'graph_connected_components - selected edge has an unselected endpoint'
+            ! According to its label, a neighbor "k" can be:
+            !   - unvisited selected vertex: assign current component
+            !     and push to stack
+            !   - already assigned to this component: ignore
+            ! Other labels indicate an inconsistent graph traversal.
             associate (lab_dst=>this%vertices(k)%ipar(position_label))
               if (lab_dst==LAB_INPROGRESS) then
                 lab_dst = lab_current
                 call stack%push(transfer(k,INTEGER_MOLD))
-              else if (lab_dst==LAB_CLOSED .or. lab_dst==lab_current) then
+              else if (lab_dst==lab_current) then
                 continue
               else
-                ! assertion may fail if there is a one-way edge???
-                ! not sure what to do at the moment
-                error stop 'graph_labconcom - destination is already labeled, are there one-way edges?'
+                ! assertion may fail in directed graphs, but should not happen
+                ! in undirected graphs
+                error stop 'graph_connected_components - neighbour is already labeled, traversal inconsistency'
               end if
             end associate
           end do NGB_LOOP
 
-        end do STACK_LOOP
+        end do DFS_LOOP
 
       end do MAIN_LOOP
 
       if (present(lab_count)) lab_count = lab_current
 
-    end subroutine graph_labconcom
+    end subroutine graph_connected_components
 
 
     ! -----------------------------
     ! Dijkstra shortest path search
     ! -----------------------------
     subroutine graph_shortest_path(this, position_distance, position_cost, &
-        start_vertex, target_vertex, open_vertex_f, open_edge_f, path)
+        start_vertex, target_vertex, vselector, eselector, path)
       class(graph_t), intent(inout) :: this
       integer, intent(in) :: position_distance, position_cost
       type(handle_t), intent(in) :: start_vertex
       type(handle_t), intent(in), optional :: target_vertex
-      procedure(is_vertex_selected), optional :: open_vertex_f
-      procedure(is_edge_selected), optional :: open_edge_f
+      procedure(is_vertex_selected), optional :: vselector
+      procedure(is_edge_selected), optional :: eselector
       type(handle_t), allocatable, intent(out), optional :: path(:)
 !
 ! Find the shortest path between two vertices using Dijkstra's algorithm.
@@ -844,7 +869,7 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
 ! OUTPUT
 !   path              - array of vertex handles on the shortest path (optional)
 !
-      logical, allocatable :: visited(:)
+      logical, allocatable :: visited(:), vmask(:), emask(:)
       integer, allocatable :: prev_id(:)
       real(dp) :: cost_to_ngb
       integer :: id_start, id_target, i, id_current, id_ngb, iedge
@@ -866,6 +891,9 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
         id_target = MAP_NULL
       end if
 
+      ! Build selection masks
+      call graph_build_selection_masks(this, vmask, emask, vselector=vselector, eselector=eselector)
+
       ! Local working arrays. Set initial values.
       allocate(visited(this%nvertices), source=.false.)
       allocate(prev_id(this%nvertices), source=MAP_NULL)
@@ -874,7 +902,7 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
       allocate(handles(this%nvertices))
 
       ! Insert starting vertex to the queue
-      if (open_vertex(this, this%vertices(id_start), open_vertex_f)) then
+      if (vmask(id_start)) then
         associate(d=>this%vertices(id_start)%rpar(position_distance))
           d = 0.0_dp
           handles(id_start) = pqueue%insert(transfer(id_start,INTEGER_MOLD), d)
@@ -890,9 +918,9 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
         iterator = iterator_t()
         NGB_LOOP: do while (this%vertices(id_current)%ngbs%has_next(iterator))
           call this%vertices(id_current)%ngbs%next(iterator, iedge)
-          if (.not. open_edge(this, this%edges(iedge), open_edge_f)) cycle
+          if (.not. emask(iedge)) cycle
           id_ngb = other_vertex_id(this, iedge, id_current)
-          if (.not. open_vertex(this, this%vertices(id_ngb), open_vertex_f)) cycle
+          if (.not. vmask(id_ngb)) cycle
           if (visited(id_ngb)) cycle
 
           ! id_ngb is an unvisited neighbour of id_current
@@ -946,15 +974,15 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
     ! Edmonds-Karp algorithm for maximum flow
     ! ---------------------------------------
     subroutine graph_maxflow(this, source, sink, position_capacity, flow, &
-        position_mincutlabel, position_flow, open_vertex_f, open_edge_f)
+        position_mincutlabel, position_flow, vselector, eselector)
       class(graph_t), intent(inout) :: this
       type(handle_t), intent(in) :: source, sink
       integer, intent(in) :: position_capacity
       real(dp), intent(out) :: flow
       integer, intent(in), optional :: position_mincutlabel
       integer, intent(in), optional :: position_flow
-      procedure(is_vertex_selected), optional :: open_vertex_f
-      procedure(is_edge_selected), optional :: open_edge_f
+      procedure(is_vertex_selected), optional :: vselector
+      procedure(is_edge_selected), optional :: eselector
 !
 ! Maximum flow from the source to sink.
 !
@@ -963,8 +991,8 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
 !   source            - handle to the source vertex
 !   sink              - handle to the sink vertex
 !   position_capacity - "edges/rpar" array item giving the edge capacity
-!   open_vertex_f     - user function to select open verices (OPTIONAL)
-!   open_edge_f       - user functoin to select open edges (OPTIONAL)
+!   vselector         - user function to select open verices (OPTIONAL)
+!   eselector         - user functoin to select open edges (OPTIONAL)
 !
 ! OUTPUT
 !   flow                 - the maximum flow from source to sink
@@ -984,6 +1012,7 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
       integer :: source_id, sink_id
       real(dp) :: additional_flow
       type(stack_t) :: added_edges
+      logical, allocatable :: vmask(:), emask(:)
 
       ! Set up working arrays
       allocate(forward_capacity(this%nedges), backward_capacity(this%nedges))
@@ -993,6 +1022,9 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
       allocate(prev_edge(this%nvertices))
         ! Keep track to the incoming edge is.
 
+      ! Select open edges and vertices
+      call graph_build_selection_masks(this, vmask, emask, vselector=vselector, eselector=eselector)
+
       block
         ! Capacity of all open edges (and edges connecting open vertices) is set
         ! to their capacity given in "edges/rpar" array.
@@ -1001,13 +1033,20 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
         do i=1, this%nedges
           forward_capacity(i) = 0.0_dp
           backward_capacity(i) = 0.0_dp
-          if (open_edge(this, this%edges(i), open_edge_f)) then
+          if (emask(i)) then
+            ! these checks are being done in "build_selection_masks" and can be removed
+            ! after testing TODO
             ia = get_index_from_handle(this, this%edges(i)%src_handle)
             ib = get_index_from_handle(this, this%edges(i)%dst_handle)
             ! orphaned edges will be silently ignored
-            if (ia==MAP_NULL .or. ib==MAP_NULL) cycle
-            if (.not. open_vertex(this, this%vertices(ia), open_vertex_f)) cycle
-            if (.not. open_vertex(this, this%vertices(ib), open_vertex_f)) cycle
+            if (ia==MAP_NULL .or. ib==MAP_NULL) then
+              error stop 'graph_maxflow - selection mask builder not working ok1'
+              cycle
+            end if
+            if (.not. (vmask(ia) .and. vmask(ib))) then
+              error stop 'graph_maxflow - selection mask builder not working ok2'
+              cycle
+            end if
 
             ! edge is open and both end-points are also open
             forward_capacity(i) = this%edges(i)%rpar(position_capacity)
@@ -1022,9 +1061,9 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
           error stop 'graph_max_flow - source/sink not found in graph'
         else if (source%handle_type/=VERTEX_HANDLE_TYPE .or. sink%handle_type/=VERTEX_HANDLE_TYPE) then
           error stop 'graph_max_flow - source/sink handles of unexpected type'
-        else if (.not. open_vertex(this, this%vertices(source_id), open_vertex_f)) then
+        else if (.not. vmask(source_id)) then
           error stop 'graph_max_flow - source is not open'
-        else if (.not. open_vertex(this, this%vertices(sink_id), open_vertex_f)) then
+        else if (.not. vmask(sink_id)) then
           error stop 'graph_max_flow - sink is not open'
         else
           ! all assertions are ok
@@ -1103,7 +1142,7 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
               source_id, sink_id, prev_edge)
           do i=1,this%nvertices
             associate(label=>this%vertices(i)%ipar(position_mincutlabel))
-              if (.not. open_vertex(this, this%vertices(i), open_vertex_f)) then
+              if (.not. vmask(i)) then
                 label = CLOSED
               else if (i==source_id) then
                 label = SOURCE_REACHABLE
@@ -1282,19 +1321,19 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
     ! Betweenness (Brandes algorithm)
     ! -------------------------------
     subroutine graph_betweenness(this, position_cost, position_eb, position_vb, &
-        is_normalized, open_vertex_f, open_edge_f)
+        is_normalized, vselector, eselector)
       class(graph_t), intent(inout) :: this
       integer, intent(in) :: position_cost
       integer, intent(in) :: position_eb, position_vb
       logical, intent(in), optional :: is_normalized
-      procedure(is_vertex_selected), optional :: open_vertex_f
-      procedure(is_edge_selected), optional :: open_edge_f
+      procedure(is_vertex_selected), optional :: vselector
+      procedure(is_edge_selected), optional :: eselector
 !
 ! TBA
 !
       logical, allocatable :: open_e(:), open_v(:)
       integer :: i, ia, ib, id_s
-      real(dp), allocatable :: dist(:) 
+      real(dp), allocatable :: dist(:)
         ! shortest distance from "s" to "v"
       type(stack_t), allocatable :: prev(:)
         ! list of immediate predecessors of "v" on shortest paths
@@ -1308,21 +1347,9 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
         ! dependency of the source on vertex "v"
       integer, parameter :: DIST_SHORTER=1, DIST_SAME=0, DIST_LONGER=-1
 
-      ! Mark open edges and count open_vertices
-      allocate(open_v(this%nvertices), source=.false.)
-      do i=1, this%nvertices
-        if (open_vertex(this, this%vertices(i), open_vertex_f)) &
-            open_v(i) = .true.
-      end do
 
-      allocate(open_e(this%nedges), source=.false.)
-      do i=1, this%nedges
-        if (.not. open_edge(this, this%edges(i), open_edge_f)) cycle
-        ia = get_index_from_handle(this, this%edges(i)%src_handle)
-        ib = get_index_from_handle(this, this%edges(i)%dst_handle)
-        if (ia==MAP_NULL .or. ib==MAP_NULL) cycle
-        if (open_v(ia) .and. open_v(ib)) open_e(i) = .true.
-      end do
+      ! Mark open edges and count open_vertices
+      call graph_build_selection_masks(this, open_v, open_e, vselector=vselector, eselector=eselector)
 
       ! Local Dijkstra arrays
       allocate(dist(this%nvertices), prev(this%nvertices), sigma(this%nvertices))
@@ -1340,7 +1367,7 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
 
       ! Loop over all source vectors
       SRC_LOOP: do id_s=1, this%nvertices
-        if (.not. open_vertex(this, this%vertices(id_s), open_vertex_f)) cycle
+        if (.not. open_v(id_s)) cycle
 if (mod(id_s,500)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvertices
 
         ! Initialize Dijkstra's search from source
@@ -1485,30 +1512,105 @@ if (mod(id_s,500)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nverti
     end subroutine graph_betweenness
 
 
-    ! ------------------------------------------------------------------
-    ! These functions call the user function or return .true. on default
-    ! if user functions are not provided
-    ! ------------------------------------------------------------------
-    logical function open_vertex(this, vertex, open_vertex_f)
+    ! ----------------------
+    ! Edge / Vertex selector
+    ! ----------------------
+    subroutine graph_build_selection_masks(this, vmask, emask, vmask_provided, &
+        emask_provided, vselector, eselector)
       class(graph_t), intent(in) :: this
-      type(vertex_t), intent(in) :: vertex
-      procedure(is_vertex_selected), optional :: open_vertex_f
-      if (present(open_vertex_f)) then
-        open_vertex = open_vertex_f(this, vertex)
-      else
-        open_vertex = .true.
-      end if
-    end function
+      logical, intent(inout), allocatable :: vmask(:), emask(:)
+      logical, intent(in), optional :: vmask_provided(:), emask_provided(:)
+      procedure(is_vertex_selected), optional :: vselector
+      procedure(is_edge_selected), optional :: eselector
+!
+! Build vertex and edge selection masks from user-provided masks or selector
+! functions.
+!
+! This routine creates logical masks identifying the vertices and edges to be
+! considered by graph algorithms. Selection can be specified either by providing
+! logical mask arrays or by supplying selector functions. If neither is provided,
+! all vertices and edges are selected.
+!
+! A mask array and a selector function cannot be provided simultaneously for the
+! same entity type. Edge selection is additionally restricted by vertex
+! selection: an edge is selected only if both of its endpoint vertices are
+! selected. (Every selected edge connects two selected endpoints)
+!
+! Existing allocated output masks are reused if they have the correct size;
+! otherwise they are reallocated.
+!
+! Arguments:
+!   this            - Graph object.
+!   vmask, emask    - Output vertex and edge selection masks.
+!   vmask_provided,
+!   emask_provided  - Optional user-provided vertex and edge masks.
+!   vselector,
+!   eselector       - Optional vertex and edge selector functions.
+!
+      integer :: ia, ib, ie
 
-    logical function open_edge(this, edge, open_edge_f)
-      class(graph_t), intent(in) :: this
-      type(edge_t), intent(in) :: edge
-      procedure(is_edge_selected), optional :: open_edge_f
-      if (present(open_edge_f)) then
-        open_edge = open_edge_f(this, edge)
-      else
-        open_edge = .true.
+      ! Only mask array or selector function can by provided, not both
+      if (present(emask_provided) .and. present(eselector)) error stop &
+          'build_selection_masks - both edge mask and selector function provided'
+      if (present(vmask_provided) .and. present(vselector)) error stop &
+          'build_selection_masks - both vertex mask and selector function provided'
+
+      ! Assert provided masks have correct size
+      if (present(vmask_provided)) then
+        if (size(vmask_provided)/=this%nvertices) error stop &
+            'build_selection_masks - vmask_provided has wrong size'
       end if
-    end function
+      if (present(emask_provided)) then
+        if (size(emask_provided)/=this%nedges) error stop &
+            'build_selection_masks - emask_provided has wrong size'
+      end if
+
+      ! Verify output mask arrays allocated to correct size.
+      ! Allocate / reallocate if needed
+      if (allocated(vmask)) then
+        if (size(vmask) /= this%nvertices) deallocate(vmask)
+      end if
+      if (allocated(emask)) then
+        if (size(emask) /= this%nedges) deallocate(emask)
+      end if
+      if (.not. allocated(vmask)) allocate(vmask(this%nvertices))
+      if (.not. allocated(emask)) allocate(emask(this%nedges))
+
+      ! Build selection array for verices first...
+      if (present(vmask_provided)) then
+        vmask = vmask_provided
+      else if (present(vselector)) then
+        do ia=1, this%nvertices
+          vmask(ia) = vselector(this, this%vertices(ia))
+        end do
+      else
+        vmask = .true.
+      end if
+
+      ! ...and build selection array for edges next
+      if (present(emask_provided)) then
+        emask = emask_provided
+      else if (present(eselector)) then
+        do ie=1, this%nedges
+          emask(ie) = eselector(this, this%edges(ie))
+        end do
+      else
+        emask = .true.
+      end if
+
+      do ie=1, this%nedges
+        ! close edges with closed vertex as one of its ends
+        if (.not. emask(ie)) cycle
+        ia = get_index_from_handle(this, this%edges(ie)%src_handle)
+        ib = get_index_from_handle(this, this%edges(ie)%dst_handle)
+        if (ia==MAP_NULL .or. ib==MAP_NULL) then
+          ! dangling edge not selected
+          emask(ie) = .false.
+        else if (.not. (vmask(ia) .and. vmask(ib))) then
+          ! one of vertices is closed
+          emask(ie) = .false.
+        end if
+      end do
+    end subroutine graph_build_selection_masks
 
   end module graph_mod
