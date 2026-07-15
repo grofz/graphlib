@@ -9,6 +9,11 @@
     ! Sadly, parametrized derived type (PDT) not working reliably with compilers.
     ! To avoid PDT, lets hard-code the array sizes required for the actual implementation
     integer, parameter, public :: NIV_PARS = 1, NRV_PARS = 7, NIE_PARS = 1, NRE_PARS = 2
+    ! Legend
+    ! V/IPAR = [type]
+    ! V/RPAR = [radius, x, y, z, ?, ?, ?]
+    ! E/IPAR = [type]
+    ! E/RPAR = [cost, ?]
 
     ! Other constants
     integer, parameter :: DEFAULT_ECAPACITY = 10, DEFAULT_VCAPACITY = 5
@@ -1336,6 +1341,7 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       ! Loop over all source vectors
       SRC_LOOP: do id_s=1, this%nvertices
         if (.not. open_vertex(this, this%vertices(id_s), open_vertex_f)) cycle
+if (mod(id_s,500)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvertices
 
         ! Initialize Dijkstra's search from source
         dist = huge(dist)
@@ -1462,7 +1468,7 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       end block
 
       ! Clean-up
-      deallocate(phas) ! must be deallocated explicitly, got run time error
+      deallocate(phas) ! got run time error
 
     contains
       integer function compare_dist(new, old)
