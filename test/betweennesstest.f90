@@ -53,6 +53,14 @@ program betweeness
 
     if (i==4) then
       call g%betweenness(pos_cost, position_eb=pos_eb, position_vb=pos_vb, is_normalized=.false.)
+    else if (i==1) then
+      block
+        logical, allocatable :: vmask(:)
+        allocate (vmask(g%nvertices),source=.true.)
+        where (g%vertices(1:g%nvertices)%ipar(1)==2) vmask = .false.
+        call g%betweenness(pos_cost, position_eb=pos_eb, position_vb=pos_vb, &
+            is_normalized=.true.,vmask=vmask)
+      end block
     else
       call g%betweenness(pos_cost, position_eb=pos_eb, position_vb=pos_vb, is_normalized=.true.)
     end if
@@ -94,11 +102,12 @@ subroutine test_graph1(g, is_directed, expected_vb, expected_eb)
   type(handle_t), allocatable :: edges(:), vertices(:)
   real(dp) :: v_rpar(NRV_PARS), e_rpar(NRE_PARS)
   integer :: v_ipar(NIV_PARS), e_ipar(NIE_PARS)
+  integer, parameter :: pos_cost=1, pos_eb=2, pos_vb=5
 
   print '("Graph 1  directed =",l1)', is_directed
   call g%initialize(is_directed_graph=is_directed)
 
-  allocate(vertices(0:4))
+  allocate(vertices(0:5))
   v_ipar = 1
   v_rpar = 0.0_dp
   v_rpar(4) = 0.5_dp
@@ -113,20 +122,29 @@ subroutine test_graph1(g, is_directed, expected_vb, expected_eb)
   vertices(3) = g%add_vertex(v_ipar, v_rpar)
   v_rpar(2:4) = real([2.0, 2.0, 0.0], dp)
   vertices(4) = g%add_vertex(v_ipar, v_rpar)
+  ! edge which should not be selected
+  v_rpar(2:4) = real([2.0, 2.0, 0.0], dp)
+  v_rpar(pos_vb) = 77.0 ! see if it remains
+  v_ipar(1) = 2
+  vertices(5) = g%add_vertex(v_ipar, v_rpar)
 
   e_ipar = 10
   e_rpar = 0.0_dp
   e_rpar(1) = 1.0_dp
-  allocate(edges(5))
+  allocate(edges(6))
   edges(1) = g%add_edge(vertices(0),vertices(1),e_ipar,e_rpar)
   edges(2) = g%add_edge(vertices(1),vertices(2),e_ipar,e_rpar)
   edges(3) = g%add_edge(vertices(2),vertices(3),e_ipar,e_rpar)
   edges(4) = g%add_edge(vertices(0),vertices(3),e_ipar,e_rpar)
   edges(5) = g%add_edge(vertices(2),vertices(4),e_ipar,e_rpar)
 
+  ! will not be selected
+  e_rpar(pos_eb) = 42.0 ! see if it remains
+  edges(6) = g%add_edge(vertices(4),vertices(5),e_ipar,e_rpar)
+
   ! undirected
-  expected_vb = real([0.5,1.0,3.5,1.0,0.0],dp) / 6.0_dp
-  expected_eb = real([2.5,3.5,3.5,2.5,4.0],dp) / 10.0_dp
+  expected_vb = real([0.5,1.0,3.5,1.0,0.0,77.0*6.0],dp) / 6.0_dp
+  expected_eb = real([2.5,3.5,3.5,2.5,4.0, 420.0],dp) / 10.0_dp
 end subroutine test_graph1
 
 
@@ -304,7 +322,8 @@ subroutine test_graph4(g, is_directed, expected_vb, expected_eb)
   edges(14) = g%add_edge(vertices(7),vertices(13),e_ipar,e_rpar)
   ! directed
   expected_vb = real([43,25,70,40,13,0,0,36,0,0,0,0,0,0,0],dp)
-  expected_eb = real([0],dp) / 20.0_dp
+  allocate(expected_eb(size(edges)), source=0.0_dp) ! do not knwo results yet
+ !expected_eb = real([0],dp) / 20.0_dp
 end subroutine test_graph4
 
 

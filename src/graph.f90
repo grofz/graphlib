@@ -1,5 +1,5 @@
   module graph_mod
-    use iso_fortran_env, only : dp => real64, i1b => int8
+    use iso_fortran_env, only : dp => real64, i1b => int8, i8b => int64
     use conts_mod, only : queue_t, stack_t, pqueue_t, pqueue_handle_t=>handle_t, &
       PQUEUE_MIN
     use graph_adjlist_mod, only : adjlist_t, iterator_t
@@ -733,11 +733,12 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
     ! Label connected components
     ! --------------------------
     subroutine graph_connected_components(this, position_label, &
-        vselector, eselector, lab_count)
+        vselector, eselector, vmask, emask, lab_count)
       class(graph_t), intent(inout) :: this
       integer, intent(in) :: position_label
       procedure(is_vertex_selected), optional :: vselector
       procedure(is_edge_selected), optional :: eselector
+      logical, intent(in), optional :: vmask(:), emask(:)
       integer, intent(out), optional :: lab_count
 !
 ! Identify connected components of an undirected graph.
@@ -762,6 +763,8 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
 !                    the component search
 !   eselector      - optional function selecting edges that participate in
 !                    the component search
+!   vmask, emask   - optional array selecting vetices and edges participating in
+!                    the component search
 !
 ! OUTPUT
 !   lab_count      - optional number of connected components identified
@@ -770,17 +773,18 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
       integer :: i, j, k, iedge, lab_current
       type(iterator_t) :: iterator
       type(stack_t) :: stack
-      logical, allocatable :: vmask(:), emask(:)
+      logical, allocatable :: vmask0(:), emask0(:)
 
       ! At the moment only for undirected graphs
       if (this%is_directed_graph) &
           error stop 'graph_connected_components - graph must be undirected'
 
-      call graph_build_selection_masks(this, vmask, emask, &
-          vselector=vselector, eselector=eselector)
+      call graph_build_selection_masks(this, vmask0, emask0, &
+          vselector=vselector, eselector=eselector, vmask_provided=vmask, &
+          emask_provided=emask)
 
       ! Initialize "labels" for selected vertices
-      where (vmask) &
+      where (vmask0) &
           this%vertices(1:this%nvertices)%ipar(position_label) = LAB_INPROGRESS
 
       ! Identified components counter
@@ -791,7 +795,7 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
 
       MAIN_LOOP: do i=1, this%nvertices
         ! Find the next unprocessed vertex and add it to the empty stack
-        if (.not. vmask(i)) cycle
+        if (.not. vmask0(i)) cycle
         if (this%vertices(i)%ipar(position_label) /= LAB_INPROGRESS) cycle
         lab_current = lab_current + 1
         this%vertices(i)%ipar(position_label) = lab_current
@@ -805,11 +809,11 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
           iterator = iterator_t()
           NGB_LOOP: do while (this%vertices(j)%ngbs%has_next(iterator))
             call this%vertices(j)%ngbs%next(iterator, iedge)
-            if (.not. emask(iedge)) cycle
+            if (.not. emask0(iedge)) cycle
             k = other_vertex_id(this, iedge, j)
             ! Assert "k" is selected as edges to unselected vertices should
             ! have been unselected by "build_selection_masks"
-            if (.not. vmask(k)) error stop &
+            if (.not. vmask0(k)) error stop &
                 'graph_connected_components - selected edge has an unselected endpoint'
             ! According to its label, a neighbor "k" can be:
             !   - unvisited selected vertex: assign current component
@@ -862,9 +866,9 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
 !                       the edge is stored (IN)
 !   start_vertex      - handle to the starting vertex
 !   target_vertex     - handle to the target vertex (optional)
-!   open_vertex_f     - user function to control which vertices can be passed
+!   vselector         - user function to control which vertices can be passed
 !                       through (optional)
-!   open_edge_f       - user function to control which edges can be used
+!   eselector         - user function to control which edges can be used
 !                       (optional)
 ! OUTPUT
 !   path              - array of vertex handles on the shortest path (optional)
@@ -1317,39 +1321,60 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
     end subroutine process_path
 
 
+! TODO make a version for unweighted graps
+! - position_cost to be optional
+! - using "dist_dijkstra" real array, and "dist_bfs" integer arrray
+! - factor out the djiksta code to special procudeure
+! - write out special procedure for BFS search
     ! -------------------------------
     ! Betweenness (Brandes algorithm)
     ! -------------------------------
     subroutine graph_betweenness(this, position_cost, position_eb, position_vb, &
-        is_normalized, vselector, eselector)
+        is_normalized, vselector, eselector, vmask, emask)
       class(graph_t), intent(inout) :: this
       integer, intent(in) :: position_cost
       integer, intent(in) :: position_eb, position_vb
       logical, intent(in), optional :: is_normalized
       procedure(is_vertex_selected), optional :: vselector
       procedure(is_edge_selected), optional :: eselector
+      logical, intent(in), optional :: vmask(:), emask(:)
 !
-! TBA
+!  Compute edge and vertex betweenness centrality using Brandes' algorithm.
+!  Shortest paths are computed using Dijkstra's algorithm and edge costs stored
+!  in "edges(:)%rpar(position_cost)".
+!  Optional vertex and edge selectors restrict the computation to a selected
+!  subgraph. Betweenness values are accumulated only for selected vertices and
+!  edges. Vertices and edges excluded from the selection are left unchanged.
 !
-      logical, allocatable :: open_e(:), open_v(:)
+!  For undirected graphs, the accumulated scores are divided by two because every
+!  shortest path is encountered twice.
+!
+!  If requested, the scores are normalized according to the number of selected
+!  vertices.
+!
+      logical, allocatable :: vmask0(:), emask0(:)
       integer :: i, ia, ib, id_s
       real(dp), allocatable :: dist(:)
         ! shortest distance from "s" to "v"
       type(stack_t), allocatable :: prev(:)
         ! list of immediate predecessors of "v" on shortest paths
-      integer, allocatable :: sigma(:)
+      integer(I8B), allocatable :: sigma(:)
         ! the number of unique shortest paths from "s" to "v"
       type(pqueue_t) :: pqueue
       type(stack_t) :: stack
       type(pqueue_handle_t), allocatable :: phas(:)
+        ! handles to vertices added to Dijksta's priority queue
       logical, allocatable :: visited(:)
+        ! denote visited nodes during Dijksta search
       real(dp), allocatable :: delta(:)
         ! dependency of the source on vertex "v"
       integer, parameter :: DIST_SHORTER=1, DIST_SAME=0, DIST_LONGER=-1
 
 
-      ! Mark open edges and count open_vertices
-      call graph_build_selection_masks(this, open_v, open_e, vselector=vselector, eselector=eselector)
+      ! Mark selected edges and count selected_vertices
+      call graph_build_selection_masks(this, vmask0, emask0, &
+          vselector=vselector, eselector=eselector, &
+          vmask_provided=vmask, emask_provided=emask)
 
       ! Local Dijkstra arrays
       allocate(dist(this%nvertices), prev(this%nvertices), sigma(this%nvertices))
@@ -1362,12 +1387,14 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       allocate(delta(this%nvertices))
 
       ! Initialize edge and vertex betweeness
-      this%edges(1:this%nedges)%rpar(position_eb) = 0.0_dp
-      this%vertices(1:this%nvertices)%rpar(position_vb) = 0.0_dp
+      where (emask0) &
+          this%edges(1:this%nedges)%rpar(position_eb) = 0.0_dp
+      where (vmask0) &
+          this%vertices(1:this%nvertices)%rpar(position_vb) = 0.0_dp
 
-      ! Loop over all source vectors
+      ! Main loop over all source vectors
       SRC_LOOP: do id_s=1, this%nvertices
-        if (.not. open_v(id_s)) cycle
+        if (.not. vmask0(id_s)) cycle
 if (mod(id_s,500)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvertices
 
         ! Initialize Dijkstra's search from source
@@ -1376,11 +1403,11 @@ if (mod(id_s,500)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nverti
           call prev(i)%clear()
           phas(i) = pqueue_handle_t()
         end do
-        sigma = 0
+        sigma = 0_I8B
         visited = .false.
 
         dist(id_s) = 0.0_dp
-        sigma(id_s) = 1
+        sigma(id_s) = 1_I8B
         phas(id_s) = pqueue%insert(transfer(id_s,INTEGER_MOLD), dist(id_s))
 
         ! STEP 1 - Modified Dijkstra loop
@@ -1397,7 +1424,7 @@ if (mod(id_s,500)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nverti
             iterator = iterator_t()
             NGB_LOOP: do while(this%vertices(id_u)%ngbs%has_next(iterator))
               call this%vertices(id_u)%ngbs%next(iterator, edge_uv)
-              if (.not. open_e(edge_uv)) cycle
+              if (.not. emask0(edge_uv)) cycle
               id_v = other_vertex_id(this, edge_uv, id_u)
               if (visited(id_v)) cycle
 
@@ -1452,14 +1479,14 @@ if (mod(id_s,500)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nverti
       ! Divide by two for undirected graphs (all paths were counted twice)
       if (.not. this%is_directed_graph) then
         associate(eb=>this%edges(1:this%nedges)%rpar(position_eb))
-          eb = 0.5_dp * eb
+          where (emask0) eb = 0.5_dp * eb
         end associate
         associate(vb=>this%vertices(1:this%nvertices)%rpar(position_vb))
-          vb = 0.5_dp * vb
+          where (vmask0) vb = 0.5_dp * vb
         end associate
       end if
 
-      ! Normalize the scores (optional)
+      ! Normalize the scores (if asked for by an user)
       block
         logical :: is_normalized0
         real(dp) :: v_denominator, e_denominator
@@ -1467,41 +1494,44 @@ if (mod(id_s,500)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nverti
         is_normalized0 = .false. ! default behaviour
         if (present(is_normalized)) is_normalized0 = is_normalized
         if (is_normalized0) then
-          n = count(open_v)
-          ! Vertices
-          ! directed graphs: total ordered pairs of nodes (paths s-->t  and
-          !                  t-->s are counted as separate pairs).
-          ! undirected graphs: total unordered pairs of nodes in the graph,
-          !                    excluding the target node itself.
-          v_denominator = real((n-1)*(n-2),dp)
-          ! Edges
-          ! directed graphs: total possible unique ordered pairs of nodes in
-          !                  the entire graph.
-          ! undirected graphs: total possible unique unordered pairs of nodes
-          !                    in the entire graph.
-          e_denominator = real(n*(n-1),dp)
-          if (.not. this%is_directed_graph) then
-            v_denominator = v_denominator * 0.5_dp
-            e_denominator = e_denominator * 0.5_dp
+          n = count(vmask0)
+          if (n>=3) then
+            ! Vertices
+            ! directed graphs: total ordered pairs of nodes (paths s-->t  and
+            !                  t-->s are counted as separate pairs).
+            ! undirected graphs: total unordered pairs of nodes in the graph,
+            !                    excluding the target node itself.
+            v_denominator = real((n-1)*(n-2),dp)
+            if (.not. this%is_directed_graph) v_denominator = v_denominator * 0.5_dp
+            associate(vb=>this%vertices(1:this%nvertices)%rpar(position_vb))
+              where (vmask0) vb = vb / v_denominator
+            end associate
           end if
-
-          associate(eb=>this%edges(1:this%nedges)%rpar(position_eb))
-            eb = eb / e_denominator
-          end associate
-          associate(vb=>this%vertices(1:this%nvertices)%rpar(position_vb))
-            vb = vb / v_denominator
-          end associate
+          if (n>=2) then
+            ! Edges
+            ! directed graphs: total possible unique ordered pairs of nodes in
+            !                  the entire graph.
+            ! undirected graphs: total possible unique unordered pairs of nodes
+            !                    in the entire graph.
+            e_denominator = real(n*(n-1),dp)
+            if (.not. this%is_directed_graph) e_denominator = e_denominator * 0.5_dp
+            associate(eb=>this%edges(1:this%nedges)%rpar(position_eb))
+              where(emask0) eb = eb / e_denominator
+            end associate
+          end if
         end if
       end block
 
       ! Clean-up
-      deallocate(phas) ! got run time error
+      deallocate(phas) ! got run time error (compiler bug?), explicit deallocation solved this
 
     contains
       integer function compare_dist(new, old)
         real(dp), intent(in) :: old, new
-        real(dp), parameter :: EPS = 1.0e5 * epsilon(1.0_dp)
-        if (abs(old-new) < EPS) then
+        real(dp), parameter :: REL_TOL = 1.0e5 * epsilon(1.0_dp)
+        real(dp) :: tol
+        tol = REL_TOL * max(1.0_dp, abs(new), abs(old))
+        if (abs(old-new) < tol) then
           compare_dist = DIST_SAME
         else if (new < old) then
           compare_dist = DIST_SHORTER
