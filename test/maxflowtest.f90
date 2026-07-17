@@ -24,10 +24,10 @@
     a=2
     select case(a)
     case(1)
-      atom_handles(1)=g%add_vertex([1], real([0.75, 1.0,1.0,0.0, 0.0,0.0,0.0],DP))
-      atom_handles(2)=g%add_vertex([2], real([0.50, 2.0,2.0,0.0, 0.0,0.0,0.0],DP))
-      atom_handles(3)=g%add_vertex([3], real([0.40, 2.0,0.0,0.0, 0.0,0.0,0.0],DP))
-      atom_handles(4)=g%add_vertex([4], real([0.90, 3.0,1.0,0.0, 0.0,0.0,0.0],DP))
+      atom_handles(1)=g%add_vertex([1, 0, 0], real([0.75, 1.0,1.0,0.0, 0.0,0.0,0.0],DP))
+      atom_handles(2)=g%add_vertex([2, 0, 0], real([0.50, 2.0,2.0,0.0, 0.0,0.0,0.0],DP))
+      atom_handles(3)=g%add_vertex([3, 0, 0], real([0.40, 2.0,0.0,0.0, 0.0,0.0,0.0],DP))
+      atom_handles(4)=g%add_vertex([4, 0, 0], real([0.90, 3.0,1.0,0.0, 0.0,0.0,0.0],DP))
 
       cone_handles(1) = g%add_edge(atom_handles(1), atom_handles(2), [10], real([10.0, 0.0],DP))
       cone_handles(2) = g%add_edge(atom_handles(2), atom_handles(3), [20], real([ 5.0, 0.0],DP))
@@ -36,12 +36,12 @@
 
       call g%maxflow(atom_handles(1),atom_handles(4),1,maxflow,position_mincutlabel=1)
     case(2)
-      atom_handles(1)=g%add_vertex([1], real([0.50, 0.0,1.0,0.0, 0.0,0.0,0.0],DP))
-      atom_handles(2)=g%add_vertex([1], real([0.75, 1.0,2.0,0.0, 0.0,0.0,0.0],DP))
-      atom_handles(3)=g%add_vertex([1], real([0.75, 1.0,0.0,0.0, 0.0,0.0,0.0],DP))
-      atom_handles(4)=g%add_vertex([1], real([0.75, 2.0,2.0,0.0, 0.0,0.0,0.0],DP))
-      atom_handles(5)=g%add_vertex([1], real([0.75, 2.0,0.0,0.0, 0.0,0.0,0.0],DP))
-      atom_handles(6)=g%add_vertex([1], real([0.25, 3.0,1.0,0.0, 0.0,0.0,0.0],DP))
+      atom_handles(1)=g%add_vertex([1, 0, 0], real([0.50, 0.0,1.0,0.0, 0.0,0.0,0.0],DP))
+      atom_handles(2)=g%add_vertex([1, 0, 0], real([0.75, 1.0,2.0,0.0, 0.0,0.0,0.0],DP))
+      atom_handles(3)=g%add_vertex([1, 0, 0], real([0.75, 1.0,0.0,0.0, 0.0,0.0,0.0],DP))
+      atom_handles(4)=g%add_vertex([1, 0, 0], real([0.75, 2.0,2.0,0.0, 0.0,0.0,0.0],DP))
+      atom_handles(5)=g%add_vertex([1, 0, 0], real([0.75, 2.0,0.0,0.0, 0.0,0.0,0.0],DP))
+      atom_handles(6)=g%add_vertex([1, 0, 0], real([0.25, 3.0,1.0,0.0, 0.0,0.0,0.0],DP))
 
       cone_handles(1) = g%add_edge(atom_handles(1), atom_handles(2), [10], real([10.0, 0.0],DP))
       cone_handles(2) = g%add_edge(atom_handles(1), atom_handles(3), [10], real([10.0, 0.0],DP))

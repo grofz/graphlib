@@ -2,7 +2,7 @@
     use iso_fortran_env, only : DP=>real64, output_unit, I1=>int8
     use vtuio_mod, only : vtuio_write, vtuio_read, vtuio_data_t
 !   use import_dem2011_mod, only : import_dem2011
-    use graph_mod, only : graph_t, handle_t
+    use graph_mod, only : graph_t, handle_t, edge_t
     implicit none (type, external)
 
     real(DP) :: velo(3), time
@@ -14,6 +14,8 @@
     type(vtuio_data_t) :: vtudata
 
     integer, parameter :: mask_for_vtuio(*) = [1, 2, 1, 1]
+    type(edge_t) :: edummy
+    real(dp) :: e_rpar(size(edummy%rpar))
 
     interface
       subroutine graph_export(graph)
@@ -43,28 +45,28 @@
     allocate(atom_handles(5), x(3,5))
     velo = [1.0, 1.0, 0.0]
     x(:,1) = real([0.0,0.0,0.0],DP)
-    atom_handles(1) = g%add_vertex([1], [0.75_DP, x(:,1), velo])
+    atom_handles(1) = g%add_vertex([1,0,0], [0.75_DP, x(:,1), velo])
 
     velo = [1.0, 2.0, 0.0]
     x(:,2) = real([1.0,0.0,0.0],DP)
-    atom_handles(2) = g%add_vertex([1], [0.25_DP, x(:,2), velo])
+    atom_handles(2) = g%add_vertex([1,0,0], [0.25_DP, x(:,2), velo])
 
     velo = [2.0, 1.0, 0.0]
     x(:,3) = real([0.5707,0.6297,0.0],DP)
-    atom_handles(3) = g%add_vertex([1], [0.10_DP, x(:,3), velo])
+    atom_handles(3) = g%add_vertex([1,0,0], [0.10_DP, x(:,3), velo])
 
     velo = [0.0, 0.0, 0.1]
     x(:,4) = real([0.0,0.0,1.0],DP)
-    atom_handles(4) = g%add_vertex([2], [0.05_DP, x(:,4), velo])
+    atom_handles(4) = g%add_vertex([2,0,0], [0.05_DP, x(:,4), velo])
 
     x(:,5) = real([0.0,0.0,2.0],DP)
-    atom_handles(5) = g%add_vertex([2], [0.05_DP, x(:,5), velo])
+    atom_handles(5) = g%add_vertex([2,0,0], [0.05_DP, x(:,5), velo])
 
     allocate(cone_handles(4))
-    cone_handles(1) = g%add_edge(atom_handles(1), atom_handles(2), [10], [real(dp)::])
-    cone_handles(2) = g%add_edge(atom_handles(1), atom_handles(3), [10], [real(dp)::])
-    cone_handles(3) = g%add_edge(atom_handles(1), atom_handles(4), [20], [real(dp)::])
-    cone_handles(4) = g%add_edge(atom_handles(4), atom_handles(5), [20], [real(dp)::])
+    cone_handles(1) = g%add_edge(atom_handles(1), atom_handles(2), [10], e_rpar)
+    cone_handles(2) = g%add_edge(atom_handles(1), atom_handles(3), [10], e_rpar)
+    cone_handles(3) = g%add_edge(atom_handles(1), atom_handles(4), [20], e_rpar)
+    cone_handles(4) = g%add_edge(atom_handles(4), atom_handles(5), [20], e_rpar)
 
     call vtudata%add_item('velocity',start=5,iclass=2,ncomp=3,nbytes=4)
     call vtuio_write('test', g, mask_for_vtuio, time=123.0_DP, vtudata=vtudata)

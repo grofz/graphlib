@@ -1,21 +1,18 @@
   module graph_mod
     use iso_fortran_env, only : dp => real64, i1b => int8, i8b => int64
+    use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR
     use conts_mod, only : queue_t, stack_t, pqueue_t, pqueue_handle_t=>handle_t, &
       PQUEUE_MIN
     use graph_adjlist_mod, only : adjlist_t, iterator_t
     implicit none (type, external)
     private
 
-    ! Sadly, parametrized derived type (PDT) not working reliably with compilers.
-    ! To avoid PDT, lets hard-code the array sizes required for the actual implementation
-    integer, parameter, public :: NIV_PARS = 1, NRV_PARS = 7, NIE_PARS = 1, NRE_PARS = 2
-    ! Legend
-    ! V/IPAR = [type]
-    ! V/RPAR = [radius, x, y, z, ?, ?, ?]
-    ! E/IPAR = [type]
-    ! E/RPAR = [cost, ?]
+    ! Parametrized derived type (PDT) not working reliably with compilers.
+    ! To avoid PDT, array sizes required for the actual implementation
+    ! are hardcoded in "graph_user.f90" and imported as ?SIZE_?PAR named
+    ! constants
 
-    ! Other constants
+    ! Named constants
     integer, parameter :: DEFAULT_ECAPACITY = 10, DEFAULT_VCAPACITY = 5
     integer, parameter :: MAP_NULL = -1, NOT_INITIALIZED = -1
     integer, parameter :: INTEGER_MOLD(0) = [integer ::]
@@ -34,16 +31,16 @@
     end type handle_t
 
     type, public :: vertex_t
-      integer  :: ipar(NIV_PARS)
-      real(dp) :: rpar(NRV_PARS)
+      integer  :: ipar(VSIZE_IPAR)
+      real(dp) :: rpar(VSIZE_RPAR)
       type(adjlist_t) :: ngbs ! list of outgoing edge ids
       type(handle_t) :: handle
     end type vertex_t
 
     type, public :: edge_t
       type(handle_t) :: src_handle, dst_handle
-      integer  :: ipar(NIE_PARS)
-      real(dp) :: rpar(NRE_PARS)
+      integer  :: ipar(ESIZE_IPAR)
+      real(dp) :: rpar(ESIZE_RPAR)
       type(handle_t) :: handle
     contains
       procedure :: vertex_indices => edge_vertex_indices
@@ -59,8 +56,6 @@
         ! .true. = edges are "one-way"
         ! .false. = edges are bi-directional
       type(queue_t) :: free_vhandles, free_ehandles
-      integer :: niv, nrv, nie, nre
-        ! store size of "ipar" and "rpar" arrays in vertices and edges
     contains
       procedure :: initialize => graph_initialize
       procedure :: add_vertex => graph_add_vertex
@@ -218,11 +213,6 @@
         if (present(ecapacity)) new_capacity = ecapacity
         call increase_edges_capacity(this, new_capacity)
       end block
-
-      this%niv = NIV_PARS
-      this%nrv = NRV_PARS
-      this%nie = NIE_PARS
-      this%nre = NRE_PARS
     end subroutine graph_initialize
 
 
@@ -312,7 +302,7 @@
 
       if (.not. graph_is_initialized(this)) then
         error stop 'graph_add_vertex - graph not initialized'
-      else if (size(ipar) /= NIV_PARS .or. size(rpar) /= NRV_PARS) then
+      else if (size(ipar) /= VSIZE_IPAR .or. size(rpar) /= VSIZE_RPAR) then
         error stop 'graph_add_vertex - invalid argument arrays size'
       end if
 
@@ -400,7 +390,7 @@
 
       if (.not. graph_is_initialized(this)) then
         error stop 'graph_add_edge - graph not initialized'
-      else if (size(ipar) /= NIE_PARS .or. size(rpar) /= NRE_PARS) then
+      else if (size(ipar) /= ESIZE_IPAR .or. size(rpar) /= ESIZE_RPAR) then
         error stop 'graph_add_edge - invalid argument arrays size'
       else if (src%handle_type /= VERTEX_HANDLE_TYPE .or. dst%handle_type /= VERTEX_HANDLE_TYPE) then
         error stop 'graph_add_edge - invalid src or dst handles type'
@@ -556,8 +546,8 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
         else
           write(fid,'(":")')
         end if
-        if (this%niv>0) write(fid,*) this%vertices(i)%ipar
-        if (this%nrv>0) write(fid,*) this%vertices(i)%rpar
+        if (VSIZE_IPAR>0) write(fid,*) this%vertices(i)%ipar
+        if (VSIZE_RPAR>0) write(fid,*) this%vertices(i)%rpar
       end do
 
       ! information about edges
@@ -576,8 +566,8 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
         end if
         write(fid, '("E-",i0," connecting V-",i0," and V-",i0,":")') &
           this%edges(i)%handle%index_to_map, v1, v2
-        if (this%nie>0) write(fid,*) this%edges(i)%ipar
-        if (this%nre>0) write(fid,*) this%edges(i)%rpar
+        if (ESIZE_IPAR>0) write(fid,*) this%edges(i)%ipar
+        if (VSIZE_RPAR>0) write(fid,*) this%edges(i)%rpar
       end do
 
       write(fid,'("--- end of graph dump ---",/)')

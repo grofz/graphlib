@@ -2,7 +2,10 @@
 ! A unit test for grpah_betweenness calculation
 ! ----------------------------------------------
 program betweeness
-  use graph_mod, only : graph_t, handle_t, NIE_PARS, NRE_PARS, NIV_PARS, NRV_PARS
+  use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR, &
+      MASK_FOR_VTUIO=>VTUIO_MASK, &
+      POS_COST=>EPOS_WEIGHT, POS_EB=>EPOS_RWORK, POS_VB=>VPOS_RWORK
+  use graph_mod, only : graph_t, handle_t
   use iso_fortran_env, only : dp=>real64, output_unit
   use vtuio_mod, only : vtuio_read, vtuio_write, vtuio_data_t
   implicit none (type, external)
@@ -13,7 +16,7 @@ program betweeness
 
   abstract interface
     subroutine test_graph_ai(g, is_directed, evb, eeb)
-      use graph_mod, only : graph_t, handle_t, NIE_PARS, NRE_PARS, NIV_PARS, NRV_PARS
+      use graph_mod, only : graph_t, handle_t
       use iso_fortran_env, only : dp=>real64, output_unit
       implicit none (type, external)
       type(graph_t), intent(inout) :: g
@@ -32,8 +35,6 @@ program betweeness
   procedure(test_graph_ai) :: test_graph1, test_graph2, test_graph3, test_graph4
   type(vtuio_data_t) :: vtudata
 
-  integer, parameter :: pos_cost=1, pos_eb=2, pos_vb=5
-  integer, parameter :: mask_for_vtuio(*) = [1, 2, 1, 1]
 
   call vtudata%add_item('edge_betweenness', pos_eb, 3, 1, 4)
   call vtudata%add_item('vertex_betweenness', pos_vb, 2, 1, 4)
@@ -92,7 +93,8 @@ end program
 
 
 subroutine test_graph1(g, is_directed, expected_vb, expected_eb)
-  use graph_mod, only : graph_t, handle_t, NIE_PARS, NRE_PARS, NIV_PARS, NRV_PARS
+  use graph_mod, only : graph_t, handle_t
+  use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR
   use iso_fortran_env, only : dp=>real64, output_unit
   implicit none (type, external)
   type(graph_t), intent(inout) :: g
@@ -100,8 +102,8 @@ subroutine test_graph1(g, is_directed, expected_vb, expected_eb)
   logical, intent(in) :: is_directed
 
   type(handle_t), allocatable :: edges(:), vertices(:)
-  real(dp) :: v_rpar(NRV_PARS), e_rpar(NRE_PARS)
-  integer :: v_ipar(NIV_PARS), e_ipar(NIE_PARS)
+  real(dp) :: v_rpar(VSIZE_RPAR), e_rpar(ESIZE_RPAR)
+  integer :: v_ipar(VSIZE_IPAR), e_ipar(ESIZE_IPAR)
   integer, parameter :: pos_cost=1, pos_eb=2, pos_vb=5
 
   print '("Graph 1  directed =",l1)', is_directed
@@ -149,7 +151,8 @@ end subroutine test_graph1
 
 
 subroutine test_graph2(g, is_directed, expected_vb, expected_eb)
-  use graph_mod, only : graph_t, handle_t, NIE_PARS, NRE_PARS, NIV_PARS, NRV_PARS
+  use graph_mod, only : graph_t, handle_t
+  use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR
   use iso_fortran_env, only : dp=>real64, output_unit
   implicit none (type, external)
   type(graph_t), intent(inout) :: g
@@ -158,8 +161,8 @@ subroutine test_graph2(g, is_directed, expected_vb, expected_eb)
 
 
   type(handle_t), allocatable :: edges(:), vertices(:)
-  real(dp) :: v_rpar(NRV_PARS), e_rpar(NRE_PARS)
-  integer :: v_ipar(NIV_PARS), e_ipar(NIE_PARS)
+  real(dp) :: v_rpar(VSIZE_RPAR), e_rpar(ESIZE_RPAR)
+  integer :: v_ipar(VSIZE_IPAR), e_ipar(ESIZE_IPAR)
 
   print '("Graph 2  directed =",l1)', is_directed
   call g%initialize(is_directed_graph=is_directed)
@@ -201,7 +204,8 @@ end subroutine test_graph2
 
 
 subroutine test_graph3(g, is_directed, expected_vb, expected_eb)
-  use graph_mod, only : graph_t, handle_t, NIE_PARS, NRE_PARS, NIV_PARS, NRV_PARS
+  use graph_mod, only : graph_t, handle_t
+  use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR
   use iso_fortran_env, only : dp=>real64, output_unit
   implicit none (type, external)
   type(graph_t), intent(inout) :: g
@@ -210,8 +214,8 @@ subroutine test_graph3(g, is_directed, expected_vb, expected_eb)
 
 
   type(handle_t), allocatable :: edges(:), vertices(:)
-  real(dp) :: v_rpar(NRV_PARS), e_rpar(NRE_PARS)
-  integer :: v_ipar(NIV_PARS), e_ipar(NIE_PARS)
+  real(dp) :: v_rpar(VSIZE_RPAR), e_rpar(ESIZE_RPAR)
+  integer :: v_ipar(VSIZE_IPAR), e_ipar(ESIZE_IPAR)
 
   print '("Graph 3  directed =",l1)', is_directed
   call g%initialize(is_directed_graph=is_directed)
@@ -249,7 +253,8 @@ end subroutine test_graph3
 
 
 subroutine test_graph4(g, is_directed, expected_vb, expected_eb)
-  use graph_mod, only : graph_t, handle_t, NIE_PARS, NRE_PARS, NIV_PARS, NRV_PARS
+  use graph_mod, only : graph_t, handle_t
+  use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR
   use iso_fortran_env, only : dp=>real64, output_unit
   implicit none (type, external)
   type(graph_t), intent(inout) :: g
@@ -258,8 +263,8 @@ subroutine test_graph4(g, is_directed, expected_vb, expected_eb)
 
 
   type(handle_t), allocatable :: edges(:), vertices(:)
-  real(dp) :: v_rpar(NRV_PARS), e_rpar(NRE_PARS)
-  integer :: v_ipar(NIV_PARS), e_ipar(NIE_PARS)
+  real(dp) :: v_rpar(VSIZE_RPAR), e_rpar(ESIZE_RPAR)
+  integer :: v_ipar(VSIZE_IPAR), e_ipar(ESIZE_IPAR)
 
   print '("Graph 4  directed =",l1)', is_directed
   call g%initialize(is_directed_graph=is_directed)

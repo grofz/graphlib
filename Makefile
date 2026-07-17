@@ -33,6 +33,7 @@ AR = ar -rcv
 MODOBJECTS = \
 						 $(DIR)/conts.o \
 						 $(DIR)/graph_adjlist.o \
+						 $(DIR)/graph_user.o \
 						 $(DIR)/graph.o \
 						 $(DIR)/vtuio_tree.o \
 						 $(DIR)/vtuio26.o
@@ -75,7 +76,7 @@ $(OUTLIB) : $(MODOBJECTS)
 $(ALLOBJECTS) : Makefile
 
 # module dependencies
-$(DIR)/graph.o : graph_adjlist.o conts.o
+$(DIR)/graph.o : graph_user.o graph_adjlist.o conts.o
 
 $(DIR)/vtuio26.o : graph.o vtuio_tree.o
 

@@ -6,7 +6,7 @@
 ! THIS IS A MODIFIED VERSION (July 2026)
 
   module vtuio_mod
-    use graph_mod, only : graph_t, handle_t
+    use graph_mod, only : graph_t, handle_t, edge_t, vertex_t
     use vtuio_tree_mod, only : object_t, vtuio_tree_read
     use iso_fortran_env, only : &
     &   SP=>real32, DP=>real64, I4B=>int32, I8B=>int64, I1B=>int8, &
@@ -671,10 +671,11 @@
       allocate(points(npoints))
       read(fid, pos=data_pos(1)+1+offset_points) nblock ! skip header
       block
-        integer, allocatable :: ipar(:)
-        real(DP), allocatable :: rpar(:)
-        allocate(ipar(graph%niv), source=-77)         ! arbitrary values
-        allocate(rpar(graph%nrv), source=0.11e-20_dp) ! arbitrary values
+        type(vertex_t) :: vdummy
+        integer :: ipar(size(vdummy%ipar))
+        real(DP) :: rpar(size(vdummy%rpar))
+        ipar = -77 ! arbitrary values (for debugging)
+        rpar = 0.11e-20_dp ! arbitrary values
         do i=1, npoints
           read(fid) xloc
           rpar(mask(MASK_POSITION):mask(MASK_POSITION)+2) = real(xloc, kind=DP)
@@ -701,10 +702,11 @@
       ! Read connections from the file
       read(fid, pos=data_pos(1)+1+offset_cones) nblock ! skip header
       block
-        integer, allocatable :: ipar(:)
-        real(DP), allocatable :: rpar(:)
-        allocate(ipar(graph%nie), source=-42)         ! arbitrary values
-        allocate(rpar(graph%nre), source=0.11e-20_dp) ! arbitrary values
+        type(edge_t) :: edummy
+        integer :: ipar(size(edummy%ipar))
+        real(DP) :: rpar(size(edummy%rpar))
+        ipar = -42         ! arbitrary values
+        rpar = 0.11e-20_dp ! arbitrary values
         do i=1, ncells
           read(fid) vids
           vids = vids + 1 ! our indices start at 1 (not 0)
