@@ -17,7 +17,7 @@
     integer, parameter :: VPOS_X      = 2 ! position vector (3)
     integer, parameter :: VPOS_RWORK  = 5 ! temporary working space
     integer, parameter :: VPOS_RWORK2 = 6 ! temporary working space
-    integer, parameter :: VPOS_RWORK3 = 7 ! temporary working space
+    integer, parameter :: VPOS_C      = 7 ! concentration
 
     ! Edge properties
     ! - integers
