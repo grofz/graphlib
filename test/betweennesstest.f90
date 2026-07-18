@@ -12,14 +12,15 @@ program betweeness
 
   type(graph_t) :: g
   real(dp), allocatable :: expected_vb(:), expected_eb(:)
+  real(dp) :: time_start, time_end, time(2)
   integer :: i
 
   abstract interface
-    subroutine test_graph_ai(g, is_directed, evb, eeb)
+    subroutine test_graph_ai(graph, is_directed, evb, eeb)
       use graph_mod, only : graph_t, handle_t
       use iso_fortran_env, only : dp=>real64, output_unit
       implicit none (type, external)
-      type(graph_t), intent(inout) :: g
+      type(graph_t), intent(inout) :: graph
       logical, intent(in) :: is_directed
       real(dp), allocatable, intent(out) :: evb(:), eeb(:)
     end subroutine
@@ -53,13 +54,16 @@ program betweeness
     end select
 
     if (i==4) then
-      call g%betweenness(pos_cost, position_eb=pos_eb, position_vb=pos_vb, is_normalized=.false.)
+      !call g%betweenness(position_cost=pos_cost, position_eb=pos_eb, position_vb=pos_vb, is_normalized=.false.)
+      call g%betweenness(position_eb=pos_eb, position_vb=pos_vb, is_normalized=.false.)
     else if (i==1) then
       block
         logical, allocatable :: vmask(:)
         allocate (vmask(g%nvertices),source=.true.)
         where (g%vertices(1:g%nvertices)%ipar(1)==2) vmask = .false.
-        call g%betweenness(pos_cost, position_eb=pos_eb, position_vb=pos_vb, &
+       !call g%betweenness(position_cost=pos_cost, position_eb=pos_eb, position_vb=pos_vb, &
+       !    is_normalized=.true.,vmask=vmask)
+        call g%betweenness(position_eb=pos_eb, position_vb=pos_vb, &
             is_normalized=.true.,vmask=vmask)
       end block
     else
@@ -78,13 +82,29 @@ program betweeness
     if (i==4) call vtuio_write('cc', g, mask_for_vtuio, vtudata=vtudata)
   end do
 
+! stop 11
   block
     call g%initialize()
-    call vtuio_read('LM60', g, mask_for_vtuio)
+    call vtuio_read('LM50V04', g, mask_for_vtuio)
+   !call vtuio_read('LM60', g, mask_for_vtuio)
     g%edges(1:g%nedges)%rpar(pos_cost) = 1.0_dp
-    print *, 'Calculating betweenness....'
-    call g%betweenness(pos_cost, position_eb=pos_eb, position_vb=pos_vb, is_normalized=.true.)
+
+    call cpu_time(time_start)
+    print *, 'Calculating betweenness weighted....'
+    call g%betweenness(position_cost=pos_cost, position_eb=pos_eb, position_vb=pos_vb, is_normalized=.true.)
+    call cpu_time(time_end)
+    time(1) = time_end-time_start
     print *, '...ok'
+
+    call cpu_time(time_start)
+    print *, 'Calculating betweenness unweighted....'
+    call g%betweenness(position_eb=pos_eb, position_vb=pos_vb, is_normalized=.true.)
+    call cpu_time(time_end)
+    time(2) = time_end-time_start
+    print *, '...ok'
+
+    print '("Time elapsed: ",2(g0,1x))', time
+
     call vtuio_write('LM60_b', g, mask_for_vtuio, vtudata=vtudata)
   end block
 
