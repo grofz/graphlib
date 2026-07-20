@@ -46,6 +46,10 @@
       procedure :: free => meta_free
     end type vtuio_data_t
 
+    interface reallocate
+      module procedure reallocate_real, reallocate_int
+    end interface
+
 ! -----------------------------------------------------------------------------
 ! TUNING THE BINARY FORMAT FOR vtuio_write
 !
@@ -152,12 +156,14 @@
           do i=1,size(vtudata%meta)
             associate(m=>vtudata%meta(i))
               if (m%iclass==VTUIO_META_POINT+VTUIO_META_R) then
-                if (allocated(rdata)) deallocate(rdata)
-                allocate(rdata(m%ncomp,npoints))
+               !if (allocated(rdata)) deallocate(rdata)
+               !allocate(rdata(m%ncomp,npoints))
+                call reallocate(rdata, [m%ncomp, npoints])
                 call write_data(fid, m%nbytes, trim(m%label), rdata=rdata, offset=offset)
               else if (m%iclass==VTUIO_META_POINT+VTUIO_META_I) then
-                if (allocated(idata)) deallocate(idata)
-                allocate(idata(m%ncomp,npoints))
+               !if (allocated(idata)) deallocate(idata)
+               !allocate(idata(m%ncomp,npoints))
+                call reallocate(idata, [m%ncomp, npoints])
                 call write_data(fid, m%nbytes, trim(m%label), idata=idata, offset=offset)
               end if
             end associate
@@ -169,8 +175,9 @@
 
       write(fid) '  <CellData>', LF
 
-      if (allocated(idata)) deallocate(idata)
-      allocate(idata(1,ncells))
+     !if (allocated(idata)) deallocate(idata)
+     !allocate(idata(1,ncells))
+      call reallocate(idata, [1, ncells])
 
       call write_data(fid, 1, 'con t', idata=idata, offset=offset)
 
@@ -179,12 +186,14 @@
           do i=1,size(vtudata%meta)
             associate(m=>vtudata%meta(i))
               if (m%iclass==VTUIO_META_CELL+VTUIO_META_R) then
-                if (allocated(rdata)) deallocate(rdata)
-                allocate(rdata(m%ncomp,ncells))
+               !if (allocated(rdata)) deallocate(rdata)
+               !allocate(rdata(m%ncomp,ncells))
+                call reallocate(rdata, [m%ncomp, ncells])
                 call write_data(fid, m%nbytes, trim(m%label), rdata=rdata, offset=offset)
               else if (m%iclass==VTUIO_META_CELL+VTUIO_META_I) then
-                if (allocated(idata)) deallocate(idata)
-                allocate(idata(m%ncomp,ncells))
+               !if (allocated(idata)) deallocate(idata)
+               !allocate(idata(m%ncomp,ncells))
+                call reallocate(idata, [m%ncomp, ncells])
                 call write_data(fid, m%nbytes, trim(m%label), idata=idata, offset=offset)
               end if
             end associate
@@ -227,13 +236,15 @@
       write(fid) '_' ! data block starts with underscore
 
       ! Binary data
-      if (allocated(rdata)) deallocate(rdata)
-      allocate(rdata(1,npoints))
+     !if (allocated(rdata)) deallocate(rdata)
+     !allocate(rdata(1,npoints))
+      call reallocate(rdata, [1, npoints])
       rdata(1,:) = graph%vertices(1:npoints)%rpar(mask(MASK_RADIUS))
       call write_data(fid, RADIUS_DATA_SIZE, 'r', rdata=rdata)
 
-      if (allocated(idata)) deallocate(idata)
-      allocate(idata(1,npoints))
+     !if (allocated(idata)) deallocate(idata)
+     !allocate(idata(1,npoints))
+      call reallocate(idata, [1, npoints])
       idata(1,:) = graph%vertices(1:npoints)%ipar(mask(MASK_POINT_TYPE))
       call write_data(fid, 1, 'tp', idata=idata)
 
@@ -242,15 +253,17 @@
           do i=1,size(vtudata%meta)
             associate(m=>vtudata%meta(i))
               if (m%iclass==VTUIO_META_POINT+VTUIO_META_R) then
-                if (allocated(rdata)) deallocate(rdata)
-                allocate(rdata(m%ncomp,npoints))
+               !if (allocated(rdata)) deallocate(rdata)
+               !allocate(rdata(m%ncomp,npoints))
+                call reallocate(rdata, [m%ncomp, npoints])
                 do j=1,npoints
                   rdata(:,j) = graph%vertices(j)%rpar(m%start:m%start+m%ncomp-1)
                 end do
                 call write_data(fid, m%nbytes, trim(m%label), rdata=rdata)
               else if (m%iclass==VTUIO_META_POINT+VTUIO_META_I) then
-                if (allocated(idata)) deallocate(idata)
-                allocate(idata(m%ncomp,npoints))
+               !if (allocated(idata)) deallocate(idata)
+               !allocate(idata(m%ncomp,npoints))
+                call reallocate(idata, [m%ncomp, npoints])
                 do j=1,npoints
                   idata(:,j) = graph%vertices(j)%ipar(m%start:m%start+m%ncomp-1)
                 end do
@@ -265,8 +278,9 @@
 !     call write_data(fid, 4, 'v', &
 !         rdata=transpose(reshape([atoms(:)%v(1),atoms(:)%v(2),atoms(:)%v(3)],[npoints,3])))
 
-      if (allocated(idata)) deallocate(idata)
-      allocate(idata(1,ncells))
+     !if (allocated(idata)) deallocate(idata)
+     !allocate(idata(1,ncells))
+      call reallocate(idata, [1, ncells])
       idata(1,:) = graph%edges(1:ncells)%ipar(mask(MASK_CELL_TYPE))
       call write_data(fid, 1, 'con t', idata=idata)
 
@@ -275,15 +289,17 @@
           do i=1,size(vtudata%meta)
             associate(m=>vtudata%meta(i))
               if (m%iclass==VTUIO_META_CELL+VTUIO_META_R) then
-                if (allocated(rdata)) deallocate(rdata)
-                allocate(rdata(m%ncomp,ncells))
+               !if (allocated(rdata)) deallocate(rdata)
+               !allocate(rdata(m%ncomp,ncells))
+                call reallocate(rdata, [m%ncomp, ncells])
                 do j=1,ncells
                   rdata(:,j) = graph%edges(j)%rpar(m%start:m%start+m%ncomp-1)
                 end do
                 call write_data(fid, m%nbytes, trim(m%label), rdata=rdata)
               else if (m%iclass==VTUIO_META_CELL+VTUIO_META_I) then
-                if (allocated(idata)) deallocate(idata)
-                allocate(idata(m%ncomp,ncells))
+               !if (allocated(idata)) deallocate(idata)
+               !allocate(idata(m%ncomp,ncells))
+                call reallocate(idata, [m%ncomp, ncells])
                 do j=1,ncells
                   idata(:,j) = graph%edges(j)%ipar(m%start:m%start+m%ncomp-1)
                 end do
@@ -798,6 +814,29 @@
       end select
     end subroutine read_data
 
+
+    subroutine reallocate_real(arr, required_shape)
+      real(DP), intent(inout), allocatable :: arr(:,:)
+      integer, intent(in) :: required_shape(2)
+
+      if (allocated(arr)) then
+        if (any(shape(arr) /= required_shape)) deallocate(arr)
+      end if
+      if (.not. allocated(arr)) &
+          allocate(arr(required_shape(1), required_shape(2)))
+    end subroutine reallocate_real
+
+
+    subroutine reallocate_int(arr, required_shape)
+      integer, intent(inout), allocatable :: arr(:,:)
+      integer, intent(in) :: required_shape(2)
+
+      if (allocated(arr)) then
+        if (any(shape(arr) /= required_shape)) deallocate(arr)
+      end if
+      if (.not. allocated(arr)) &
+          allocate(arr(required_shape(1), required_shape(2)))
+    end subroutine reallocate_int
 
 
     ! ==============================
