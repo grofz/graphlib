@@ -1,5 +1,5 @@
   module graph_mod
-    use iso_fortran_env, only : dp => real64, i1b => int8, i8b => int64
+    use iso_fortran_env, only : DP => real64, I1B => int8, I8B => int64
     use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR
     use conts_mod, only : queue_t, stack_t, pqueue_t, pqueue_handle_t=>handle_t, &
       PQUEUE_MIN
@@ -11,20 +11,23 @@
     ! To avoid PDT, array sizes required for the actual implementation
     ! are hardcoded in "graph_user.f90" and imported as ?SIZE_?PAR named
     ! constants
+    !
+    ! Alternativelly, array sizes can be hardcoded here
+    ! integer, parameter :: VSIZE_IPAR=?, VSIZE_RPAR=?, ESIZE_IPAR=?, ESIZE_RPAR=?
 
-    ! Named constants
+    ! Named local constants
     integer, parameter :: DEFAULT_ECAPACITY = 10, DEFAULT_VCAPACITY = 5
     integer, parameter :: MAP_NULL = -1, NOT_INITIALIZED = -1
     integer, parameter :: INTEGER_MOLD(0) = [integer ::]
 
-    integer(i1b), parameter :: &
-      VERTEX_HANDLE_TYPE = 1_i1b, EDGE_HANDLE_TYPE = 2_i1b, GENERAL_HANDLE_TYPE= 0_i1b
+    integer(I1B), parameter :: VERTEX_HANDLE_TYPE = 1_I1B, &
+        EDGE_HANDLE_TYPE = 2_I1B, INVALID_HANDLE_TYPE= 0_I1B
 
     type, public :: handle_t
       private
       integer :: index_to_map = MAP_NULL
       integer :: version = 1
-      integer(i1b) :: handle_type = GENERAL_HANDLE_TYPE
+      integer(i1b) :: handle_type = INVALID_HANDLE_TYPE
     contains
       procedure, private :: handle_eq
       generic :: operator(==) => handle_eq
@@ -49,28 +52,30 @@
     type, public :: graph_t
       type(vertex_t), allocatable :: vertices(:)
       type(edge_t), allocatable :: edges(:)
-      integer, allocatable :: vmap(:), emap(:)
+      integer, allocatable, private :: vmap(:), emap(:)
           ! storing position of vertices/edges in "vertices"/"edges" arrays
       integer :: nvertices=NOT_INITIALIZED, nedges
-      logical :: is_directed_graph=.false.
-        ! .true. = edges are "one-way"
-        ! .false. = edges are bi-directional
-      type(queue_t) :: free_vhandles, free_ehandles
+      logical, private :: is_directed_graph=.false.
+        ! .true. = directed graph (one-way edges)
+        ! .false. = undirected graph (edge direction does not matter)
+      type(queue_t), private :: free_vhandles, free_ehandles
     contains
       procedure :: initialize => graph_initialize
       procedure :: add_vertex => graph_add_vertex
       procedure :: add_edge   => graph_add_edge
       procedure :: remove_vertex => graph_remove_vertex
       procedure :: remove_edge => graph_remove_edge
+      procedure :: remove_orphaned_edges => graph_remove_orphaned_edges
+      procedure :: find_edge_id => graph_find_edge_id
       procedure :: print => graph_print
       procedure :: connected_components => graph_connected_components
       procedure :: shortest_path => graph_shortest_path
       procedure :: maxflow => graph_maxflow
       procedure :: betweenness => graph_betweenness
-      procedure :: find_edge_id
     end type graph_t
 
 
+    ! vertex and edge selector functions interface
     abstract interface
       pure function is_edge_selected(this, edge) result(is)
         import graph_t, edge_t
@@ -98,8 +103,8 @@
       class(handle_t), intent(in) :: a, b
       logical :: eq
       eq = a%version==b%version .and. &
-            a%index_to_map==b%index_to_map .and. &
-            a%handle_type==b%handle_type
+          a%index_to_map==b%index_to_map .and. &
+          a%handle_type==b%handle_type
     end function handle_eq
 
 
@@ -118,7 +123,7 @@
         if (this%free_ehandles%size()==0) error stop 'borrow_handle - no more E-handles available'
         handle = transfer(this%free_ehandles%dequeue(), handle)
       case default
-        error stop 'borrow_handle: unknown handle_type'
+        error stop 'borrow_handle: invalid handle_type'
       end select
     end subroutine borrow_handle
 
@@ -137,7 +142,7 @@
       case(EDGE_HANDLE_TYPE)
         call this%free_ehandles%enqueue(transfer(reused_handle,INTEGER_MOLD))
       case default
-        error stop 'return_handle: unknown handle_type'
+        error stop 'return_handle: handle provided has invalid handle_type'
       end select
     end subroutine return_handle
 
@@ -322,17 +327,22 @@
     subroutine graph_remove_vertex(this, handle)
       class(graph_t), intent(inout) :: this
       type(handle_t), intent(in) :: handle
-
+!
+! Remove vertex. Edges associated with the vertex will be also removed.
+! In directed graphs, only outgoing edges will be removed and the incomming
+! edges become orphaned and must be removed by a separate operation.
+!
       integer :: ivertex
 
       if (handle%handle_type /= VERTEX_HANDLE_TYPE) &
           error stop 'graph_remove_vertex - invalid handle type'
       ivertex = get_index_from_handle(this, handle)
       if (ivertex == MAP_NULL) &
-          error stop 'graph_remove_vertex - vertex no longer exists'
+          error stop 'graph_remove_vertex - vertex no longer present in graph'
 
-      ! All outgoing edges will be also automatically removed
-!goto 111
+      ! Automatically remove all outgoing edges.
+      ! For directed graphs, the incomming edges will become orphaned and must
+      ! be removed manually.
       block
         type(iterator_t) :: iterator
         integer :: iedge
@@ -347,7 +357,6 @@
       ! Defensive - could be removed later
       if (this%vertices(ivertex)%ngbs%size()>0) &
           error stop 'graph_remove_vertex - could not remove outgoing edges'
-!111 continue
 
       ! Nullify vmap and return handle
       this%vmap(handle%index_to_map) = MAP_NULL
@@ -403,13 +412,14 @@
         isrc = get_index_from_handle(this, src)
         idst = get_index_from_handle(this, dst)
         if (isrc==MAP_NULL .or. idst==MAP_NULL) then
-          error stop 'graph_add_edge - vertex not exists (invalid handle)'
+          error stop 'graph_add_edge - vertex not present (invalid handle)'
         end if
         ! check if connection already exists
-        if (find_edge_id(this, isrc, idst) /= MAP_NULL) then
-          error stop 'graph_add_edge - connection already exists'
+        if (this%find_edge_id(isrc, idst) /= MAP_NULL) then
+          error stop 'graph_add_edge - src-dst connection already exists'
         else if (.not. this%is_directed_graph) then
-          if (find_edge_id(this, idst, isrc) /= MAP_NULL) then
+          ! undirected graph: look also in destination's vertex ngb-list
+          if (this%find_edge_id(idst, isrc) /= MAP_NULL) then
             error stop 'graph_add_edge - opposite connection already exists'
           end if
         end if
@@ -426,9 +436,11 @@
         end associate
         this%emap(handle%index_to_map) = this%nedges
 
-        ! add the new edge to the outgoing edges list
+        ! add the new edge to the source vertex's outgoing edges list...
         call this%vertices(isrc)%ngbs%add(this%nedges)
         if (.not. this%is_directed_graph) then
+          ! ...and also to the destination vertex's outgoing edges list
+          ! for an undirected graph
           call this%vertices(idst)%ngbs%add(this%nedges)
         end if
       end block
@@ -514,10 +526,40 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
     end subroutine relocate_edge
 
 
+    subroutine graph_remove_orphaned_edges(this, nedges_removed)
+      class(graph_t), intent(inout) :: this
+      integer, intent(out), optional :: nedges_removed
+!
+! This subroutine must be called after removing vertices in a directed graph
+! to remove edges whose destination vertex is no longer present.
+! Orphaned edges should not be present in undireceted graph.
+!
+      integer :: iedge, isrc, idst, nedges_removed0
+
+      nedges_removed0 = 0
+      do iedge=1, this%nedges
+        isrc = get_index_from_handle(this, this%edges(iedge)%src_handle)
+        idst = get_index_from_handle(this, this%edges(iedge)%dst_handle)
+        if (isrc==MAP_NULL) error stop &
+          'remove_orphaned_edges - non-existing source vertex is unexpected'
+        if (idst==MAP_NULL) then
+          if (.not. this%is_directed_graph) error stop &
+            'remove_orphaned_edges - non-existing destination vertex is unexpected in undirected graphs'
+          call this%remove_edge(this%edges(iedge)%handle)
+          nedges_removed0 = nedges_removed0 + 1
+        end if
+      end do
+      if (present(nedges_removed)) nedges_removed = nedges_removed0
+print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
+    end subroutine graph_remove_orphaned_edges
+
+
     subroutine graph_print(this, fid)
       class(graph_t), intent(in) :: this
       integer, intent(in) :: fid
-
+!
+! Print all graph data for debugging
+!
       integer :: i, j, v1, v2
       integer, allocatable :: ngbsid(:)
       character(len=:), allocatable :: str_graph_type
@@ -675,7 +717,7 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
     end function other_vertex_id
 
 
-    pure function find_edge_id(this, ia, ib) result(id)
+    pure function graph_find_edge_id(this, ia, ib) result(id)
       class(graph_t), intent(in) :: this
       integer, intent(in) :: ia, ib
       integer :: id
@@ -704,7 +746,7 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
         id = iedge
         exit
       end do
-    end function find_edge_id
+    end function graph_find_edge_id
 
 
     ! -------------------

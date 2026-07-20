@@ -7,7 +7,6 @@ module conts_mod
   integer, parameter :: DEFAULT_CAPACITY = 10
   integer, parameter, public :: &
     ERR_OK = 0, ERR_EMPTY = 1, ERR_INVALID_HANDLE = 2, ERR_INVALID_ARG_SIZE = 3
-  integer :: efid = error_unit
   integer, parameter :: INTEGER_MOLD(0) = [integer ::]
 
   type, abstract :: container_t
@@ -886,7 +885,7 @@ contains
     integer, intent(inout), optional :: ierr
 
     !TODO we must review the error handling concept here
-   !write(efid,'("ERROR ",a)') msg
+   !write(error_unit,'("ERROR ",a)') msg
     if (present(ierr)) then
       ierr = error_code
     else
@@ -902,6 +901,14 @@ contains
     integer, intent(in) :: v_list(:)
     integer, intent(out) :: iostat
     character(len=*), intent(inout) :: iomsg
+
+
+    ! just to avoig "unused dummy variables warning'
+    block
+      logical :: dummy
+      dummy = iotype==''
+      if (size(v_list)>0) dummy=v_list(1)==1
+    end block
 
     iostat = 0
     iomsg = ''

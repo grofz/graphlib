@@ -155,14 +155,10 @@
                 if (allocated(rdata)) deallocate(rdata)
                 allocate(rdata(m%ncomp,npoints))
                 call write_data(fid, m%nbytes, trim(m%label), rdata=rdata, offset=offset)
-               !call write_data(fid, m%nbytes, trim(m%label), rdata=&
-               !    vtudata%prdat(m%start:m%start+m%ncomp-1,:), offset=offset)
               else if (m%iclass==VTUIO_META_POINT+VTUIO_META_I) then
                 if (allocated(idata)) deallocate(idata)
                 allocate(idata(m%ncomp,npoints))
                 call write_data(fid, m%nbytes, trim(m%label), idata=idata, offset=offset)
-               !call write_data(fid, m%nbytes, trim(m%label), idata=&
-               !    vtudata%pidat(m%start:m%start+m%ncomp-1,:), offset=offset)
               end if
             end associate
           end do
@@ -186,14 +182,10 @@
                 if (allocated(rdata)) deallocate(rdata)
                 allocate(rdata(m%ncomp,ncells))
                 call write_data(fid, m%nbytes, trim(m%label), rdata=rdata, offset=offset)
-               !call write_data(fid, m%nbytes, trim(m%label), rdata=&
-               !    vtudata%crdat(m%start:m%start+m%ncomp-1,:), offset=offset)
               else if (m%iclass==VTUIO_META_CELL+VTUIO_META_I) then
                 if (allocated(idata)) deallocate(idata)
                 allocate(idata(m%ncomp,ncells))
                 call write_data(fid, m%nbytes, trim(m%label), idata=idata, offset=offset)
-               !call write_data(fid, m%nbytes, trim(m%label), idata=&
-               !    vtudata%cidat(m%start:m%start+m%ncomp-1,:), offset=offset)
               end if
             end associate
           end do
@@ -256,8 +248,6 @@
                   rdata(:,j) = graph%vertices(j)%rpar(m%start:m%start+m%ncomp-1)
                 end do
                 call write_data(fid, m%nbytes, trim(m%label), rdata=rdata)
-               !call write_data(fid, m%nbytes, trim(m%label), rdata=&
-               !    vtudata%prdat(m%start:m%start+m%ncomp-1,:))
               else if (m%iclass==VTUIO_META_POINT+VTUIO_META_I) then
                 if (allocated(idata)) deallocate(idata)
                 allocate(idata(m%ncomp,npoints))
@@ -265,8 +255,6 @@
                   idata(:,j) = graph%vertices(j)%ipar(m%start:m%start+m%ncomp-1)
                 end do
                 call write_data(fid, m%nbytes, trim(m%label), idata=idata)
-               !call write_data(fid, m%nbytes, trim(m%label), idata=&
-               !    vtudata%pidat(m%start:m%start+m%ncomp-1,:))
               end if
             end associate
           end do
@@ -293,8 +281,6 @@
                   rdata(:,j) = graph%edges(j)%rpar(m%start:m%start+m%ncomp-1)
                 end do
                 call write_data(fid, m%nbytes, trim(m%label), rdata=rdata)
-               !call write_data(fid, m%nbytes, trim(m%label), rdata=&
-               !    vtudata%crdat(m%start:m%start+m%ncomp-1,:))
               else if (m%iclass==VTUIO_META_CELL+VTUIO_META_I) then
                 if (allocated(idata)) deallocate(idata)
                 allocate(idata(m%ncomp,ncells))
@@ -302,8 +288,6 @@
                   idata(:,j) = graph%edges(j)%ipar(m%start:m%start+m%ncomp-1)
                 end do
                 call write_data(fid, m%nbytes, trim(m%label), idata=idata)
-               !call write_data(fid, m%nbytes, trim(m%label), idata=&
-               !    vtudata%cidat(m%start:m%start+m%ncomp-1,:))
               end if
             end associate
           end do
@@ -641,7 +625,7 @@
       ! imported data will be shifted by 1 byte (!!!)
       ! TODO better validation???
       read(fid, pos=data_pos(1)+1+offset_points) nblock
-      associate(item=>nblock/(3*npoints), check=>mod(nblock,3*npoints))
+      associate(item=>int(nblock)/(3*npoints), check=>mod(int(nblock),3*npoints))
         if (DEBUG>0) print '("-points = ",i0,1x,i0,1x,i0)', nblock, item, check
         if (check/=0) error stop &
         & 'vtuio_read - validation fails, header size 32/64 mismatch?'
@@ -650,7 +634,7 @@
       end associate
 
       read(fid, pos=data_pos(1)+1+offset_cones) nblock
-      associate(item=>nblock/(2*ncells), check=>mod(nblock,2*ncells))
+      associate(item=>int(nblock)/(2*ncells), check=>mod(int(nblock),2*ncells))
         if (DEBUG>0) print '("-cones = ",i0,1x,i0,1x,i0)', nblock, item, check
         if (check/=0) error stop &
         & 'vtuio_read - validation fails, header size 32/64 mismatch?'
@@ -659,10 +643,10 @@
       end associate
 
       read(fid, pos=data_pos(1)+1+offset_offsets) nblock
-      if (DEBUG>0) print '("-offsets = ",i0,1x,i0,1x,i0)', nblock, nblock/(ncells), mod(nblock,ncells)
+      if (DEBUG>0) print '("-offsets = ",i0,1x,i0,1x,i0)', nblock, int(nblock)/(ncells), mod(int(nblock),ncells)
 
       read(fid, pos=data_pos(1)+1+offset_types) nblock
-      if (DEBUG>0) print '("-types = ",i0,1x,i0,1x,i0)', nblock, nblock/(ncells), mod(nblock,ncells)
+      if (DEBUG>0) print '("-types = ",i0,1x,i0,1x,i0)', nblock, int(nblock)/(ncells), mod(int(nblock),ncells)
 
 
       ! PART THREE
@@ -774,10 +758,10 @@
       end if
 
       read(fid, pos=pos_start) nblock
-      nbytes = nblock/nvals
+      nbytes = int(nblock)/nvals
       if (DEBUG>0) print '("read_data - ",i0," blocks, ",i0," bytes")', &
-          nblock, nbytes, mod(nblock,nvals)
-      if (mod(nblock,nvals)/=0) error stop &
+          nblock, nbytes, mod(int(nblock),nvals)
+      if (mod(int(nblock),nvals)/=0) error stop &
       & 'read_data - validation fails (input data incosistent)'
 
       select case(ritype)
@@ -790,7 +774,7 @@
         case(8)
           allocate(rdata64(nvals))
           read(fid) rdata64
-          rdata = rdata64
+          rdata = real(rdata64)
         case default
           error stop 'read_data - unsupported real data kind'
         end select
@@ -799,7 +783,7 @@
         case(1)
           allocate(idata8(nvals))
           read(fid) idata8
-          idata = idata8
+          idata = int(idata8)
         case(4)
           allocate(idata32(nvals))
           read(fid) idata32
@@ -807,7 +791,7 @@
         case(8)
           allocate(idata64(nvals))
           read(fid) idata64
-          idata = idata64
+          idata = int(idata64)
         case default
           error stop 'read_data - unsupported integer data kind'
         end select

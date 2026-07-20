@@ -4,7 +4,7 @@
 program betweeness
   use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR, &
       MASK_FOR_VTUIO=>VTUIO_MASK, &
-      POS_COST=>EPOS_WEIGHT, POS_EB=>EPOS_RWORK, POS_VB=>VPOS_RWORK
+      POS_COST=>EPOS_WEIGHT, POS_EB=>EPOS_EB, POS_VB=>VPOS_VB
   use graph_mod, only : graph_t, handle_t
   use iso_fortran_env, only : dp=>real64, output_unit
   use vtuio_mod, only : vtuio_read, vtuio_write, vtuio_data_t
