@@ -72,6 +72,7 @@
       procedure :: shortest_path => graph_shortest_path
       procedure :: maxflow => graph_maxflow
       procedure :: betweenness => graph_betweenness
+      procedure :: build_selection_masks => graph_build_selection_masks
     end type graph_t
 
 

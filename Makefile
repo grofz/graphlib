@@ -20,7 +20,7 @@ JDIR = include
 #   $ make DEBUG=yes
 #
 ifdef DEBUG
-  FFLAGS =-Og -g -Wall -Wextra -pedantic -std=gnu -fimplicit-none -fcheck=all -fbacktrace -fPIC -fmax-errors=5
+  FFLAGS =-Og -g -Wall -Wextra -pedantic -std=gnu -fimplicit-none -fcheck=all -fbacktrace -fPIC -fmax-errors=5 -Wtrampoline
 else
   FFLAGS =-Ofast -march=native -Wall -Wextra -pedantic -std=gnu -fimplicit-none -fbacktrace -fPIC -fmax-errors=5
 endif

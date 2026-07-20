@@ -4,7 +4,7 @@
 program betweeness
   use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR, &
       MASK_FOR_VTUIO=>VTUIO_MASK, &
-      POS_COST=>EPOS_WEIGHT, POS_EB=>EPOS_EB, POS_VB=>VPOS_VB
+      POS_COST=>EPOS_WEIGHT, POS_EB=>EPOS_EB, POS_VB=>VPOS_VB, VPOS_TYPE
   use graph_mod, only : graph_t, handle_t
   use iso_fortran_env, only : dp=>real64, output_unit
   use vtuio_mod, only : vtuio_read, vtuio_write, vtuio_data_t
@@ -12,8 +12,9 @@ program betweeness
 
   type(graph_t) :: g
   real(dp), allocatable :: expected_vb(:), expected_eb(:)
-  real(dp) :: time_start, time_end, time(2)
+  real(dp) :: time_start, time_end, time(2), mu, var
   integer :: i
+  logical, allocatable :: vmask(:), emask(:)
 
   abstract interface
     subroutine test_graph_ai(graph, is_directed, evb, eeb)
@@ -32,6 +33,13 @@ program betweeness
       real(dp), intent(in) :: a, b
       logical :: res
     end function
+    subroutine statistic(x, mask, mu, var)
+      import DP
+      implicit none
+      real(dp), intent(in) :: x(:)
+      logical, intent(in) :: mask(:)
+      real(dp), intent(out) :: mu, var
+    end subroutine
   end interface
   procedure(test_graph_ai) :: test_graph1, test_graph2, test_graph3, test_graph4
   type(vtuio_data_t) :: vtudata
@@ -68,6 +76,14 @@ program betweeness
       end block
     else
       call g%betweenness(pos_cost, position_eb=pos_eb, position_vb=pos_vb, is_normalized=.true.)
+      if (allocated(vmask)) deallocate(vmask)
+      if (allocated(emask)) deallocate(emask)
+      allocate(vmask(g%nvertices),source=.true.)
+      allocate(emask(g%nedges),source=.true.)
+      call statistic(g%vertices(1:g%nvertices)%rpar(pos_vb), vmask, mu, var)
+      print '("Vertex betweenness mean is ",g0," and variance ",g0)', mu, var
+      call statistic(g%edges(1:g%nedges)%rpar(pos_eb), emask, mu, var)
+      print '("Edge betweenness mean is ",g0," and variance ",g0)', mu, var
     end if
     print '("Vertex central betweenness: expected/got")'
     print '(*(g0,1x))', expected_vb
@@ -84,24 +100,46 @@ program betweeness
 
 ! stop 11
   block
+    logical, allocatable :: vmask(:), emask(:), vmaskin(:)
     call g%initialize()
-    call vtuio_read('LM50V04', g, mask_for_vtuio)
+   !call vtuio_read('LM50V04', g, mask_for_vtuio)
+    call vtuio_read('smallsample', g, mask_for_vtuio)
    !call vtuio_read('LM60', g, mask_for_vtuio)
     g%edges(1:g%nedges)%rpar(pos_cost) = 1.0_dp
+    allocate(vmaskin(g%nvertices))
+    where (g%vertices(1:g%nvertices)%ipar(VPOS_TYPE)==1)
+      vmaskin = .true.
+    else where
+     !vmaskin = .false.
+      vmaskin = .true.
+    end where
+    call g%build_selection_masks(vmask, emask, vmask_provided=vmaskin)
 
     call cpu_time(time_start)
     print *, 'Calculating betweenness weighted....'
-    call g%betweenness(position_cost=pos_cost, position_eb=pos_eb, position_vb=pos_vb, is_normalized=.true.)
+    call g%betweenness(position_cost=pos_cost, &
+        position_eb=pos_eb, position_vb=pos_vb, is_normalized=.true., &
+        vmask=vmask, emask=emask)
     call cpu_time(time_end)
     time(1) = time_end-time_start
     print *, '...ok'
+    call statistic(g%vertices(1:g%nvertices)%rpar(pos_vb), vmask, mu, var)
+    print '("Vertex betweenness mean is ",g0," and variance ",g0)', mu, var
+    call statistic(g%edges(1:g%nedges)%rpar(pos_eb), emask, mu, var)
+    print '("Edge betweenness mean is ",g0," and variance ",g0)', mu, var
 
     call cpu_time(time_start)
     print *, 'Calculating betweenness unweighted....'
-    call g%betweenness(position_eb=pos_eb, position_vb=pos_vb, is_normalized=.true.)
+    call g%betweenness( &
+        position_eb=pos_eb, position_vb=pos_vb, is_normalized=.true., &
+        vmask=vmask, emask=emask)
     call cpu_time(time_end)
     time(2) = time_end-time_start
     print *, '...ok'
+    call statistic(g%vertices(1:g%nvertices)%rpar(pos_vb), vmask, mu, var)
+    print '("Vertex betweenness mean is ",g0," and variance ",g0)', mu, var
+    call statistic(g%edges(1:g%nedges)%rpar(pos_eb), emask, mu, var)
+    print '("Edge betweenness mean is ",g0," and variance ",g0)', mu, var
 
     print '("Time elapsed: ",2(g0,1x))', time
 
@@ -109,7 +147,30 @@ program betweeness
   end block
 
  !call g%print(output_unit)
+
 end program
+
+
+subroutine statistic(x, mask, mu, var)
+  use iso_fortran_env, only : dp=>real64
+  real(dp), intent(in) :: x(:)
+  logical, intent(in) :: mask(:)
+  real(dp), intent(out) :: mu, var
+
+  real(dp) :: m1, m2, n
+
+  m1 = sum(x, mask=mask)
+  m2 = sum(x*x, mask=mask)
+  n = real(count(mask), kind=DP)
+
+  if (n>00) then
+    mu = m1/n
+    var = m2/n - mu**2
+  else
+    mu = -1.0_dp
+    var = -1.0_dp
+  end if
+end subroutine
 
 
 subroutine test_graph1(g, is_directed, expected_vb, expected_eb)
