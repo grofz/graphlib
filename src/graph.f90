@@ -1024,6 +1024,10 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
 !
 ! Maximum flow from the source to sink.
 !
+! For directed graphs, temporary reverse edges are added internally to
+! represent the residual network. These edges are removed before the
+! routine returns.
+!
 ! INPUT
 !   this              - the graph (vertex/edge data updated)
 !   source            - handle to the source vertex
@@ -1044,7 +1048,8 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
 !   position_flow        - (OPTIONAL)"edges/rpar" array item to save flow along
 !                          the edge
 !
-      integer, parameter :: SOURCE_REACHABLE=1, SINK_REACHABLE=2, CLOSED=0
+      integer, parameter :: &
+        CLOSED=0, SOURCE_REACHABLE=1, SINK_REACHABLE=2, DISCONNECTED=3
       real(dp), allocatable :: forward_capacity(:), backward_capacity(:)
       integer, allocatable :: prev_edge(:), pair_edge(:)
       integer :: source_id, sink_id
@@ -1058,7 +1063,7 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
         ! is used for undirected graphs only. For directed graphs reverse
         ! edges are temporarily added to the graph.
       allocate(prev_edge(this%nvertices))
-        ! Keep track to the incoming edge is.
+        ! Keep track to the incoming edge id.
 
       ! Select open edges and vertices
       call graph_build_selection_masks(this, vmask, emask, vselector=vselector, eselector=eselector)
@@ -1078,11 +1083,11 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
             ib = get_index_from_handle(this, this%edges(i)%dst_handle)
             ! orphaned edges will be silently ignored
             if (ia==MAP_NULL .or. ib==MAP_NULL) then
-              error stop 'graph_maxflow - selection mask builder not working ok1'
+              error stop 'graph_maxflow - selected edge has missing end-point'
               cycle
             end if
             if (.not. (vmask(ia) .and. vmask(ib))) then
-              error stop 'graph_maxflow - selection mask builder not working ok2'
+              error stop 'graph_maxflow - selected edge has closed end-points'
               cycle
             end if
 
@@ -1125,12 +1130,20 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
           integer :: nreverse_edges, i, ireverse
           real(dp), allocatable :: tmp_forward_capacity(:)
 
-          ! count edges with non-zero capacity
+          ! Count edges with non-zero capacity
           nreverse_edges = count(forward_capacity > 0.0_dp)
 
-          ! for each non-zero capacity edge, a reverse edge is added
+          ! For each non-zero capacity edge, a reverse edge is added
           allocate(tmp_forward_capacity(this%nedges+nreverse_edges), source=0.0_dp)
           allocate(pair_edge(this%nedges+nreverse_edges))
+
+          ! Initialise pair_edge with self-pairs. Edges without an explicitly
+          ! added residual reverse edge keep this mapping.
+          do i=1,this%nedges
+            pair_edge(i) = i
+          end do
+
+          ! Add temporary reverse edges for edges with non-zero capacity.
           do i=1,this%nedges
             if (.not. (forward_capacity(i)>0.0_dp)) cycle
             associate(e=>this%edges(i))
@@ -1153,12 +1166,31 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
         allocate(pair_edge(0)) ! array not needed for undirected graphs
       end if
 
+      ! Make a complete BFD traversal to identify disocnnected vertices
+      if (present(position_mincutlabel)) then
+        block
+          integer :: i
+          call bfs_residual_search(this, forward_capacity, backward_capacity, &
+              source_id, 0, prev_edge)
+          do i=1,this%nvertices
+            associate(label=>this%vertices(i)%ipar(position_mincutlabel))
+              ! the labels are just temporary, will be relabeled later
+              if (prev_edge(i)==MAP_NULL .and. i/=source_id) then
+                label = DISCONNECTED
+              else
+                label = CLOSED
+              end if
+            end associate
+          end do
+        end block
+      end if
+
       ! The main loop of Edmonds-Karp
       ! Augment flow as long as path with non-zero capacity exists
       flow = 0.0_dp
       do
         ! Find shortest path using edges with non-zero remaining capacity
-        call bfs_shortest_path(this, forward_capacity, backward_capacity, &
+        call bfs_residual_search(this, forward_capacity, backward_capacity, &
             source_id, sink_id, prev_edge)
         if (prev_edge(sink_id)==MAP_NULL) exit
         ! The flow can be augmented. How much flow can we send?
@@ -1176,8 +1208,11 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       if (present(position_mincutlabel)) then
         block
           integer :: i
-          call bfs_shortest_path(this, forward_capacity, backward_capacity, &
-              source_id, sink_id, prev_edge)
+
+          ! unlimited traversal from the source
+          call bfs_residual_search(this, forward_capacity, backward_capacity, &
+              source_id, 0, prev_edge)
+
           do i=1,this%nvertices
             associate(label=>this%vertices(i)%ipar(position_mincutlabel))
               if (.not. vmask(i)) then
@@ -1186,11 +1221,12 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
                 label = SOURCE_REACHABLE
               else if (prev_edge(i)/=MAP_NULL) then
                 label = SOURCE_REACHABLE
+              else if (LABEL==DISCONNECTED) then
+                ! could not be reached from source initially
+                ! keep its label
+                continue
               else
                 label = SINK_REACHABLE
-                ! NOTE - actually we do not know if this vertex had any connection
-                !        with sink. Additional check for isolated vertices may be
-                !        added later (TODO)
               end if
             end associate
           end do
@@ -1209,18 +1245,43 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
     end subroutine graph_maxflow
 
 
-    subroutine bfs_shortest_path(this, forward_capacity, backward_capacity, &
-        source_id, sink_id, prev_edge)
+    subroutine bfs_residual_search(this, forward_capacity, backward_capacity, &
+        source_id, target_id, prev_edge)
       class(graph_t), intent(in) :: this
       real(dp), intent(in) :: forward_capacity(:), backward_capacity(:)
-      integer, intent(in) :: source_id, sink_id
+      integer, intent(in) :: source_id, target_id
       integer, intent(out) :: prev_edge(:)
 !
-! BFS from source to sink using only edges with non-zero capacity.
-! The path (if exists) can be tracked using "prev_edge" array.
-! Undirected graphs: traversing edge as SRC-<DST uses forward_capacity,
-! traversing edge as DST->SRC uses backward_capacity.
-! Directed graphs: backward_capacity is not used.
+! Breadth-first search of a residual network.
+!
+! Starting from "source_id", traverse edges with positive residual capacity
+! and store the predecessor edge of each visited vertex in "prev_edge".
+! If "target_id" is a valid vertex index, traversal stops after the target is
+! reached. If "target_id" is non-positive, the complete reachable component
+! is explored.
+!
+! The routine is used both for Edmonds-Karp augmenting path search and
+! residual graph reachability analysis.
+!
+! Residual edge traversal:
+!
+!   Undirected graphs:
+!     Traversing SRC -> DST uses forward_capacity.
+!     Traversing DST -> SRC uses backward_capacity.
+!
+!   Directed graphs:
+!     backward_capacity is not used.
+!
+! INPUT
+!   this             - graph structure
+!   forward_capacity - residual capacity in the forward direction
+!   backward_capacity- residual capacity in the backward direction
+!   source_id        - index of the starting vertex
+!   target_id        - optional stopping vertex; non-positive value means
+!                      unrestricted traversal
+! OUTPUT
+!   prev_edge        - predecessor edge used to reach each visited vertex;
+!                      MAP_NULL for unvisited vertices and the source vertex
 !
       type(queue_t) :: q
       integer :: current_id, iedge, ngb_id
@@ -1230,7 +1291,10 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       call q%enqueue(transfer(source_id,INTEGER_MOLD))
       prev_edge = MAP_NULL
 
-      do while(.not. q%empty() .and. prev_edge(sink_id)==MAP_NULL)
+      do while(.not. q%empty())
+        if (target_id > 0) then
+          if (prev_edge(target_id)/=MAP_NULL) exit
+        end if
         current_id = transfer(q%dequeue(), current_id)
         iterator = iterator_t()
         NGBS_LOOP: do while (this%vertices(current_id)%ngbs%has_next(iterator))
@@ -1261,7 +1325,8 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       end do
       ! Now it is possible use "prev_edge(sink_id)" to see if path from
       ! source to sink was found and back-track the path back to source.
-    end subroutine bfs_shortest_path
+      ! The source vertex remains MAP_NULL as it has no predecessor.
+    end subroutine bfs_residual_search
 
 
     subroutine process_path(this, forward_capacity, backward_capacity, &
