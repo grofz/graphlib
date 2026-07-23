@@ -70,6 +70,7 @@ module conts_mod
     procedure :: initialize => pqueue_initialize
     procedure :: insert => pqueue_insert, pop => pqueue_pop
     procedure :: remove => pqueue_remove
+    procedure :: priority => pqueue_priority
     procedure :: update_priority => pqueue_update_priority
     procedure :: contains => pqueue_contains
     procedure :: peek => pqueue_peek
@@ -767,6 +768,24 @@ contains
     if (present(top_priority)) top_priority = this%priorities(1)
     if (present(top_handle)) top_handle = this%handles(1)
   end function pqueue_peek
+
+
+  pure function pqueue_priority(this, handle) result(priority)
+    class(pqueue_t), intent(in) :: this
+    type(handle_t), intent(in) :: handle
+    real(dp) :: priority
+!
+! Return priority of the item
+!
+    integer :: id
+
+    if (this%n == NOT_INITIALIZED) &
+      & error stop 'pqueue_priority - pqueue is not itialized'
+    id = get_idheap(this, handle)
+    if (id == HMAP_NULL) error stop  'pqueue_priority - invalid handle'
+    priority = this%priorities(id)
+
+  end function pqueue_priority
 
 
   subroutine pqueue_update_priority(this, handle, new_priority, ierr)

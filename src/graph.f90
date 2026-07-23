@@ -1,8 +1,8 @@
   module graph_mod
-    use iso_fortran_env, only : DP => real64, I1B => int8, I8B => int64
+    use iso_fortran_env, only : DP => real64, I1B => int8, I8B => int64, output_unit
     use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR
     use conts_mod, only : queue_t, stack_t, pqueue_t, pqueue_handle_t=>handle_t, &
-      PQUEUE_MIN
+      PQUEUE_MIN, PQUEUE_MAX
     use graph_adjlist_mod, only : adjlist_t, iterator_t
     implicit none (type, external)
     private
@@ -66,12 +66,14 @@
       procedure :: remove_vertex => graph_remove_vertex
       procedure :: remove_edge => graph_remove_edge
       procedure :: remove_orphaned_edges => graph_remove_orphaned_edges
+      procedure :: copy => graph_copy
       procedure :: find_edge_id => graph_find_edge_id
       procedure :: print => graph_print
       procedure :: connected_components => graph_connected_components
       procedure :: shortest_path => graph_shortest_path
       procedure :: maxflow => graph_maxflow
       procedure :: betweenness => graph_betweenness
+      procedure :: mincut => graph_mincut
       procedure :: build_selection_masks => graph_build_selection_masks
       procedure :: select_vertices => graph_select_vertices
       procedure :: select_edges => graph_select_edges
@@ -555,6 +557,65 @@ print '("Edge ",i0,"--",i0," removed")', isrc, idst
       if (present(nedges_removed)) nedges_removed = nedges_removed0
 print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
     end subroutine graph_remove_orphaned_edges
+
+
+    subroutine graph_copy(this, gnew, vselector, eselector, vmask, emask, &
+        new_vertices, new_edges)
+      class(graph_t), intent(in) :: this
+      type(graph_t), intent(inout) :: gnew
+      procedure(is_vertex_selected), optional :: vselector
+      procedure(is_edge_selected), optional :: eselector
+      logical, intent(in), optional :: vmask(:), emask(:)
+      type(handle_t), intent(inout), allocatable, optional :: &
+          new_vertices(:), new_edges(:)
+!
+! Copy selected vertices and edges to a new graph
+!
+      logical, allocatable :: vmask0(:), emask0(:)
+      type(handle_t), allocatable :: new_vertices0(:), new_edges0(:)
+
+      ! Select copied vertices and edges
+      call this%build_selection_masks(vmask0, emask0, &
+          vmask_provided=vmask, emask_provided=emask, &
+          vselector=vselector, eselector=eselector)
+
+      ! Initialize an empty graph and arrays maping vertices/edges in the 
+      ! new graph to their counterparts in the old graph.
+      call gnew%initialize(is_directed_graph=this%is_directed_graph, &
+          vcapacity=count(vmask0), ecapacity=count(emask0))
+      allocate(new_vertices0(this%nvertices), source=handle_t(MAP_NULL,0,VERTEX_HANDLE_TYPE))
+      allocate(new_edges0(this%nedges), source=handle_t(MAP_NULL,0,EDGE_HANDLE_TYPE))
+
+      ! Copy selected vertices
+      block
+        integer :: v
+        do v=1, this%nvertices
+          if (.not. vmask0(v)) cycle
+          associate(vertex=>this%vertices(v))
+            new_vertices0(v)=gnew%add_vertex(vertex%ipar, vertex%rpar)
+          end associate
+        end do
+      end block
+
+      ! Copy selected edges
+      block
+        integer :: e, ia, ib
+        do e=1, this%nedges
+          if (.not. emask0(e)) cycle
+          associate(edge=>this%edges(e))
+            ia = get_index_from_handle(this, edge%src_handle)
+            ib = get_index_From_handle(this, edge%dst_handle)
+            new_edges0(e) = gnew%add_edge( &
+                new_vertices0(ia), new_vertices0(ib), edge%ipar, edge%rpar)
+          end associate
+        end do
+      end block
+
+      ! Return handles to vertices/edges in new graph
+      if (present(new_vertices)) call move_alloc(new_vertices0, new_vertices)
+      if (present(new_edges)) call move_alloc(new_edges0, new_edges)
+
+    end subroutine graph_copy
 
 
     subroutine graph_print(this, fid)
@@ -1896,6 +1957,202 @@ if (mod(id_s,5000)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvert
     end subroutine betweenness_bfs
 
 
+    ! --------------------------------------------
+    ! Stoer-Wagner algorithm for min-cut partition
+    ! --------------------------------------------
+    subroutine graph_mincut(this, position_weight, mincut, s_list, t_list, &
+        vmask, emask, vselector, eselector)
+      class(graph_t), intent(in) :: this
+      integer, intent(in) :: position_weight
+      real(dp), intent(out) :: mincut
+      type(handle_t), intent(out), allocatable :: s_list(:), t_list(:)
+      logical, intent(in), optional :: vmask(:), emask(:)
+      procedure(is_vertex_selected), optional :: vselector
+      procedure(is_edge_selected), optional :: eselector
+!
+! Find min-cut
+!
+      type(graph_t) :: g
+      type(handle_t) :: handle
+      type(stack_t), allocatable :: original_vertices(:)
+      type(stack_t) :: mincut_vertices
+      type(pqueue_handle_t), allocatable :: pqueue_handles(:)
+      type(pqueue_t) :: scoreboard
+
+      ! Prepare the working graph and the array of stacks with handles to the
+      ! vertices in the original graph.
+      block
+        integer :: i, k
+        type(handle_t), allocatable :: vertices0(:)
+        call this%copy(g, vselector=vselector, eselector=eselector, &
+            vmask=vmask, emask=emask, new_vertices=vertices0)
+        allocate(original_vertices(g%nvertices))
+        do i=1, g%nvertices
+          if (g%vertices(i)%handle%index_to_map /= i) error stop &
+            'graph_mincut - internal assertion fails (1)'
+          call original_vertices(i)%initialize( &
+              chunksize=size(transfer(handle,INTEGER_MOLD)))
+        end do
+        i = 1
+        do k=1, size(vertices0)
+          if (get_index_from_handle(this, vertices0(k))==MAP_NULL) cycle
+          ! The k-th vertex in the original graph is now i-th vertex in the
+          ! working graph. Push the handle the vertex is known by in the
+          ! original graph to the stack maped with the working graph.
+          call original_vertices(i)%push(transfer(vertices0(k),INTEGER_MOLD))
+          i = i+1
+        end do
+        if (i-1/=g%nvertices) error stop &
+            'graph_mincut - internal assertion fails (2)'
+      end block
+
+      ! The priority queue stores the handles of vertices not yet moved
+      ! to the set A, the vertex connectivity with vertices already present
+      ! in the set A is stored as the priority in the queue.
+      call scoreboard%initialize( &
+          chunksize=size(transfer(handle,INTEGER_MOLD)), ordering=PQUEUE_MAX)
+      allocate(pqueue_handles(g%nvertices))
+
+      ! Initialize global mincut value and corresponding vertices
+      call mincut_vertices%initialize(chunksize=size(transfer(handle,INTEGER_MOLD)))
+      mincut = huge(mincut)
+
+      block
+        type(handle_t) :: s_handle, t_handle
+        real(dp) :: mincut_now
+        do
+          call identify_st_vertices(g, scoreboard, position_weight, s_handle, &
+              pqueue_handles)
+          t_handle = transfer(scoreboard%pop(top_priority=mincut_now), t_handle)
+          if (.not. scoreboard%empty()) error stop &
+              'graph_mincut - internal assertion fails (3)'
+
+          ! update min-cut value and vertices list if a lower value found
+          if (mincut_now < mincut) then
+            mincut = mincut_now
+            mincut_vertices = original_vertices(t_handle%index_to_map)
+          end if
+
+          if (g%nvertices <= 2) exit
+          call join_st(g, position_weight, s_handle, t_handle, original_vertices)
+
+        end do
+      end block
+
+    end subroutine graph_mincut
+
+
+    subroutine identify_st_vertices(g, scoreboard, position_weight, s_handle, &
+          phandles)
+      type(graph_t), intent(in) :: g
+      type(pqueue_t), intent(inout) :: scoreboard
+      integer, intent(in) :: position_weight
+      type(handle_t), intent(out) :: s_handle
+      type(pqueue_handle_t), intent(inout) :: phandles(:)
+!
+!
+!
+      integer :: s_imap, s_id, w_imap, w_id, ie
+      type(iterator_t) :: iterator
+
+      ! Store all vertices to the priority queue...
+      do s_id=1, g%nvertices
+        s_imap = g%vertices(s_id)%handle%index_to_map
+        phandles(s_imap)=scoreboard%insert( &
+            transfer(g%vertices(s_id)%handle,INTEGER_MOLD), priority=0.0_dp)
+      end do
+
+      ! ...and remove the vertex S with the highest connectivity
+      do while(scoreboard%size()>1)
+        s_handle = transfer(scoreboard%pop(), s_handle)
+        s_imap = s_handle%index_to_map
+        s_id = get_index_from_handle(g, s_handle)
+
+        ! as S now becomes part of set A, increase connectivity
+        ! of all vertices W that are neighbors of S and are outside set A 
+        iterator = iterator_t()
+        do while (g%vertices(s_id)%ngbs%has_next(iterator))
+          call g%vertices(s_id)%ngbs%next(iterator, ie)
+          w_id = other_vertex_id(g, ie, s_id)
+          w_imap = g%vertices(w_id)%handle%index_to_map
+          associate (handle=>phandles(w_imap))
+            if (scoreboard%contains(handle)) &
+                call scoreboard%update_priority(handle, &
+                    new_priority = scoreboard%priority(handle) + &
+                    g%edges(ie)%rpar(position_weight))
+          end associate
+        end do
+
+        ! on return, the queue contains the last vertex T
+        if (scoreboard%size()==1) exit
+      end do
+
+    end subroutine identify_st_vertices
+
+
+    subroutine join_st(g, position_weight, s_handle, t_handle, original_vertices)
+      class(graph_t), intent(inout) :: g
+      integer, intent(in) :: position_weight
+      type(handle_t), intent(in) :: s_handle, t_handle
+      type(stack_t), intent(inout) :: original_vertices(:)
+!
+!
+!
+      type(iterator_t) :: iterator
+      type(handle_t) :: handle
+      integer :: s_id, t_id, ie, w_id, e_ipar(ESIZE_IPAR), sw_edge
+      real(dp) :: removed_weight, e_rpar(ESIZE_RPAR)
+
+      ! TODO works for undirected graphs at the moment only
+      if (g%is_directed_graph) error stop &
+          'graph_mincut - directed graphs support not implemented'
+
+      e_ipar = 0 ! arbitrary values
+      e_rpar = 0.0_dp
+
+      ! As T will be removed, transfer its original vertices list to S
+      associate(T=>original_vertices(t_handle%index_to_map), &
+          S=>original_vertices(s_handle%index_to_map))
+        do while (.not. T%empty())
+          call S%push(T%pop())
+        end do
+      end associate
+
+      ! Re-connect all T's connections to S
+      t_id = get_index_from_handle(g, t_handle)
+      s_id = get_index_from_handle(g, s_handle)
+      iterator = iterator_t()
+      do while (g%vertices(t_id)%ngbs%has_next(iterator))
+        ! remove edge T-W
+        call g%vertices(t_id)%ngbs%next(iterator, ie)
+        removed_weight = g%edges(ie)%rpar(position_weight)
+        w_id = other_vertex_id(g, ie, t_id)
+        call g%remove_edge(g%edges(ie)%handle)
+        iterator = iterator_t()
+
+        if (w_id /= s_id) then
+          sw_edge=g%find_edge_id(s_id, w_id)
+            if (sw_edge/=MAP_NULL) then
+              ! increase capacity of existing S-W edge
+              associate(weight=>g%edges(sw_edge)%rpar(position_weight))
+                weight = weight + removed_weight
+              end associate
+            else
+              ! add new edge to replace removed T-W edge
+              e_rpar(position_weight) = removed_weight
+              handle = g%add_edge(s_handle, g%vertices(w_id)%handle, e_ipar, e_rpar)
+            end if
+         !end associate
+        end if
+      end do
+
+      if (g%vertices(t_id)%ngbs%size()/=0) error stop &
+          'join_st - t still has some connections'
+      call g%remove_vertex(t_handle)
+
+    end subroutine join_st
+
+
     ! ----------------------
     ! Edge / Vertex selector
     ! ----------------------
@@ -1998,31 +2255,39 @@ if (mod(id_s,5000)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvert
     end subroutine graph_build_selection_masks
 
 
-    function graph_select_vertices(this, vselector) result(handles)
+    function graph_select_vertices(this, vselector, vmask) result(handles)
       class(graph_t), intent(in) :: this
       procedure(is_vertex_selected), optional :: vselector
+      logical, intent(in), optional :: vmask(:)
       type(handle_t), allocatable :: handles(:)
 !
 ! Return handles to all vertices selected by vselector.
 ! If vselector is absent, handles to all vertices are returned.
 ! The order of handles follows the current internal vertex ordering.
 !
-      logical, allocatable :: mask(:)
+      logical, allocatable :: vmask0(:)
       integer :: i, k
 
-      allocate(mask(this%nvertices))
+      if (present(vselector) .and. present(vmask)) error stop &
+          'graph_select_vertices - both mask and selector function provided'
+
+      allocate(vmask0(this%nvertices))
       if (present(vselector)) then
         do i=1, this%nvertices
-          mask(i) = vselector(this, this%vertices(i))
+          vmask0(i) = vselector(this, this%vertices(i))
         end do
+      else if (present(vmask)) then
+        if (size(vmask)/=this%nvertices) error stop &
+            'graph_select_vertices - vmask has wrong size'
+        vmask0 = vmask
       else
-        mask = .true.
+        vmask0 = .true.
       end if
 
-      allocate(handles(count(mask)))
+      allocate(handles(count(vmask0)))
       k = 1
       do i=1, this%nvertices
-        if (.not. mask(i)) cycle
+        if (.not. vmask0(i)) cycle
         handles(k) = this%vertices(i)%handle
         k = k+1
       end do
@@ -2033,31 +2298,39 @@ if (mod(id_s,5000)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvert
     end function graph_select_vertices
 
 
-    function graph_select_edges(this, eselector) result(handles)
+    function graph_select_edges(this, eselector, emask) result(handles)
       class(graph_t), intent(in) :: this
       procedure(is_edge_selected), optional :: eselector
+      logical, intent(in), optional :: emask(:)
       type(handle_t), allocatable :: handles(:)
 !
-! Return handles to all edges selected by eselector.
-! If eselector is absent, handles to all edges are returned.
+! Return handles to all edges selected by eselector or emask.
+! If both eselector and emask are absent, handles to all edges are returned.
 ! The order of handles follows the current internal edge ordering.
 !
-      logical, allocatable :: mask(:)
+      logical, allocatable :: emask0(:)
       integer :: i, k
 
-      allocate(mask(this%nedges))
+      if (present(eselector) .and. present(emask)) error stop &
+          'graph_select_edges - both mask and selector function provided'
+
+      allocate(emask0(this%nedges))
       if (present(eselector)) then
         do i=1, this%nedges
-          mask(i) = eselector(this, this%edges(i))
+          emask0(i) = eselector(this, this%edges(i))
         end do
+      else if (present(emask)) then
+        if (size(emask)/=this%nedges) error stop &
+            'graph_select_edges - emask has wrong size'
+        emask0 = emask
       else
-        mask = .true.
+        emask0 = .true.
       end if
 
-      allocate(handles(count(mask)))
+      allocate(handles(count(emask0)))
       k = 1
       do i=1, this%nedges
-        if (.not. mask(i)) cycle
+        if (.not. emask0(i)) cycle
         handles(k) = this%edges(i)%handle
         k = k+1
       end do

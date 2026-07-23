@@ -8,11 +8,11 @@
     integer :: i, lab_count, a
 
     type(graph_t) :: g
-    type(handle_t), allocatable :: atom_handles(:), cone_handles(:)
+    type(handle_t), allocatable :: atom_handles(:), cone_handles(:), s_list(:), t_list(:)
     type(vtuio_data_t) :: vtudata
 
     integer, parameter :: mask_for_vtuio(*) = [1, 2, 1, 1]
-    real(dp) :: maxflow
+    real(dp) :: maxflow, mincut
 
 
     ! Initialize graph
@@ -54,14 +54,15 @@
       cone_handles(9) = g%add_edge(atom_handles(5), atom_handles(6), [10], real([10.0, 0.0],DP))
 
       call g%maxflow(atom_handles(1),atom_handles(6),1,maxflow,position_mincutlabel=1,position_flow=2)
-      print *, 'AFTER FIRST CALL'
       call g%print(output_unit)
-      call g%maxflow(atom_handles(1),atom_handles(6),1,maxflow,position_mincutlabel=1,position_flow=2)
-      print *, 'AFTER SECOND CALL'
     end select
-
-
     print *, 'max flow is ',maxflow
+
+    print *, 'STOER-WAGNER'
+    call g%mincut(1, mincut, s_list, t_list)
+    print *, 'min cut is ', mincut
+
+
 
     call vtudata%add_item('capacity',start=1,iclass=3,ncomp=1,nbytes=8)
     call vtudata%add_item('flow',    start=2,iclass=3,ncomp=1,nbytes=8)
