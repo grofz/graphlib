@@ -73,6 +73,8 @@
       procedure :: maxflow => graph_maxflow
       procedure :: betweenness => graph_betweenness
       procedure :: build_selection_masks => graph_build_selection_masks
+      procedure :: select_vertices => graph_select_vertices
+      procedure :: select_edges => graph_select_edges
     end type graph_t
 
 
@@ -1012,7 +1014,7 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
     ! Edmonds-Karp algorithm for maximum flow
     ! ---------------------------------------
     subroutine graph_maxflow(this, source, sink, position_capacity, flow, &
-        position_mincutlabel, position_flow, vselector, eselector)
+        position_mincutlabel, position_flow, vselector, eselector, vmask, emask)
       class(graph_t), intent(inout) :: this
       type(handle_t), intent(in) :: source, sink
       integer, intent(in) :: position_capacity
@@ -1021,6 +1023,7 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
       integer, intent(in), optional :: position_flow
       procedure(is_vertex_selected), optional :: vselector
       procedure(is_edge_selected), optional :: eselector
+      logical, intent(in), optional :: vmask(:), emask(:)
 !
 ! Maximum flow from the source to sink.
 !
@@ -1034,7 +1037,7 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
 !   sink              - handle to the sink vertex
 !   position_capacity - "edges/rpar" array item giving the edge capacity
 !   vselector         - user function to select open verices (OPTIONAL)
-!   eselector         - user functoin to select open edges (OPTIONAL)
+!   eselector         - user function to select open edges (OPTIONAL)
 !
 ! OUTPUT
 !   flow                 - the maximum flow from source to sink
@@ -1045,17 +1048,22 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
 !                            0 - no flow through vertex (closed vertex)
 !                            1 - source connected subset
 !                            2 - sink connected subset
+!                            3 - disconnected (open, but not accessible from
+!                                the source vertex
 !   position_flow        - (OPTIONAL)"edges/rpar" array item to save flow along
 !                          the edge
 !
+! Output array items are updated for all graph objects.
+!
       integer, parameter :: &
         CLOSED=0, SOURCE_REACHABLE=1, SINK_REACHABLE=2, DISCONNECTED=3
+      integer, parameter :: NOT_DISCONNECTED=-1
       real(dp), allocatable :: forward_capacity(:), backward_capacity(:)
       integer, allocatable :: prev_edge(:), pair_edge(:)
       integer :: source_id, sink_id
       real(dp) :: additional_flow
       type(stack_t) :: added_edges
-      logical, allocatable :: vmask(:), emask(:)
+      logical, allocatable :: vmask0(:), emask0(:)
 
       ! Set up working arrays
       allocate(forward_capacity(this%nedges), backward_capacity(this%nedges))
@@ -1066,7 +1074,9 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
         ! Keep track to the incoming edge id.
 
       ! Select open edges and vertices
-      call graph_build_selection_masks(this, vmask, emask, vselector=vselector, eselector=eselector)
+      call graph_build_selection_masks(this, vmask0, emask0, &
+        vselector=vselector, eselector=eselector, vmask_provided=vmask, &
+        emask_provided=emask)
 
       block
         ! Capacity of all open edges (and edges connecting open vertices) is set
@@ -1076,17 +1086,18 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
         do i=1, this%nedges
           forward_capacity(i) = 0.0_dp
           backward_capacity(i) = 0.0_dp
-          if (emask(i)) then
-            ! these checks are being done in "build_selection_masks" and can be removed
-            ! after testing TODO
+          if (emask0(i)) then
+            ! these checks are being done in "build_selection_masks" and can be
+            ! removed after testing TODO
             ia = get_index_from_handle(this, this%edges(i)%src_handle)
             ib = get_index_from_handle(this, this%edges(i)%dst_handle)
-            ! orphaned edges will be silently ignored
+            ! orphaned edge
             if (ia==MAP_NULL .or. ib==MAP_NULL) then
               error stop 'graph_maxflow - selected edge has missing end-point'
               cycle
             end if
-            if (.not. (vmask(ia) .and. vmask(ib))) then
+            ! edge with closed end-points
+            if (.not. (vmask0(ia) .and. vmask0(ib))) then
               error stop 'graph_maxflow - selected edge has closed end-points'
               cycle
             end if
@@ -1104,9 +1115,9 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
           error stop 'graph_max_flow - source/sink not found in graph'
         else if (source%handle_type/=VERTEX_HANDLE_TYPE .or. sink%handle_type/=VERTEX_HANDLE_TYPE) then
           error stop 'graph_max_flow - source/sink handles of unexpected type'
-        else if (.not. vmask(source_id)) then
+        else if (.not. vmask0(source_id)) then
           error stop 'graph_max_flow - source is not open'
-        else if (.not. vmask(sink_id)) then
+        else if (.not. vmask0(sink_id)) then
           error stop 'graph_max_flow - sink is not open'
         else
           ! all assertions are ok
@@ -1121,7 +1132,7 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
         call added_edges%initialize(chunksize=size(transfer(edge,INTEGER_MOLD)))
       end block
 
-      ! For directed graphs, reverse edges must be added to the graph. This means
+      ! For directed graphs, reverse edges are added to the graph. This means
       ! that "forward_capacity" will be reallocated, "backward_capacity" will no
       ! longer be needed. Reference "pair_edge" will be used instead.
       if (this%is_directed_graph) then
@@ -1153,7 +1164,7 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
             call added_edges%push(transfer(edge,INTEGER_MOLD))
             pair_edge(i) = ireverse
             pair_edge(ireverse) = i
-            ! The capacity of reverse edges is initially stored to zero as
+            ! The capacity of reverse edges is initially set to zero as
             ! required by the algorithm.
             tmp_forward_capacity(i) = forward_capacity(i)
             tmp_forward_capacity(ireverse) = 0.0_dp
@@ -1166,7 +1177,7 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
         allocate(pair_edge(0)) ! array not needed for undirected graphs
       end if
 
-      ! Make a complete BFD traversal to identify disocnnected vertices
+      ! Make a complete BFS traversal to identify disocnnected vertices
       if (present(position_mincutlabel)) then
         block
           integer :: i
@@ -1176,13 +1187,19 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
             associate(label=>this%vertices(i)%ipar(position_mincutlabel))
               ! the labels are just temporary, will be relabeled later
               if (prev_edge(i)==MAP_NULL .and. i/=source_id) then
+                ! this vertex could not be reached from source
                 label = DISCONNECTED
               else
-                label = CLOSED
+                label = NOT_DISCONNECTED
               end if
             end associate
           end do
         end block
+      end if
+
+      ! Initialize flow along edges (if required by user)
+      if (present(position_flow)) then
+        this%edges(1:this%nedges)%rpar(position_flow) = 0.0_dp
       end if
 
       ! The main loop of Edmonds-Karp
@@ -1204,7 +1221,7 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
         flow = flow + additional_flow
       end do
 
-      ! Make minimum cut partition (optional)
+      ! Make minimum cut partition (if required by user)
       if (present(position_mincutlabel)) then
         block
           integer :: i
@@ -1215,17 +1232,19 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
 
           do i=1,this%nvertices
             associate(label=>this%vertices(i)%ipar(position_mincutlabel))
-              if (.not. vmask(i)) then
+              if (.not. vmask0(i)) then
                 label = CLOSED
               else if (i==source_id) then
                 label = SOURCE_REACHABLE
               else if (prev_edge(i)/=MAP_NULL) then
                 label = SOURCE_REACHABLE
               else if (LABEL==DISCONNECTED) then
-                ! could not be reached from source initially
-                ! keep its label
+                ! open, could not be reached from source initially
+                ! keep this label
                 continue
               else
+                ! open, reachable from the source initially, but unreachable
+                ! in the residual network
                 label = SINK_REACHABLE
               end if
             end associate
@@ -1323,8 +1342,8 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
           call q%enqueue(transfer(ngb_id,INTEGER_MOLD))
         end do NGBS_LOOP
       end do
-      ! Now it is possible use "prev_edge(sink_id)" to see if path from
-      ! source to sink was found and back-track the path back to source.
+      ! Now it is possible use "prev_edge(target_id)" to see if path from
+      ! source to target exists and back-track the path back to source.
       ! The source vertex remains MAP_NULL as it has no predecessor.
     end subroutine bfs_residual_search
 
@@ -1339,9 +1358,10 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       logical, intent(in) :: updating_flow
       integer, intent(in), optional :: position_flow
 !
-! Back-track the path and
-!  (i) find the bottleneck remaining capacity, or
-!  (ii) update remaining capacity along the path.
+! Back-track the path from sink to source and:
+!  - find the bottleneck remaining capacity if "updating_flow==.false.",
+!    or
+!  - update remaining capacity along the path if "updating_flow==.true.".
 !
       real(dp) :: capacity
       integer :: current_id, next_id
@@ -1416,15 +1436,146 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       end do
 
       ! verify source reached
-      if (current_id /= source_id) error stop 'process_path - could not reach source'
+      if (current_id /= source_id) error stop &
+          'process_path - could not reach source'
     end subroutine process_path
 
 
-! TODO make a version for unweighted graps
-! - position_cost to be optional
-! - using "dist_dijkstra" real array, and "dist_bfs" integer arrray
-! - factor out the djiksta code to special procudeure
-! - write out special procedure for BFS search
+    subroutine graph_maxflow_multiple(this, sources, sinks, &
+        position_capacity, flow, position_mincutlabel, position_flow, &
+        vmask, emask, vselector, eselector)
+      class(graph_t), intent(inout) :: this
+      type(handle_t), intent(in) :: sources(:), sinks(:)
+      integer, intent(in) :: position_capacity
+      real(dp), intent(out) :: flow
+      integer, intent(in), optional :: position_mincutlabel
+      integer, intent(in), optional :: position_flow
+      logical, intent(in), optional :: vmask(:), emask(:)
+      procedure(is_vertex_selected), optional :: vselector
+      procedure(is_edge_selected), optional :: eselector
+!
+! Maximum flow using multiple sources and sinks
+!
+      type(handle_t) :: super_source, super_sink, edge
+      type(stack_t) :: added_edges
+      integer :: nvertices0, nedges0
+      real(dp) :: total_capacity
+      logical, allocatable :: vmask0(:), emask0(:)
+
+      ! Verify the source and sink lists:
+      ! - at least one source and one sink are present
+      ! - all handles are of VERTEX_HANDLE_TYPE
+      ! - all handles are valid and unique
+      block
+        integer, allocatable :: listed_count(:)
+        integer :: i, iv
+
+        if (size(sources)<1 .or. size(sinks)<1) error stop &
+            'graph_maxflow_multiple - zero source/sink vertices'
+
+        if (any(sources%handle_type /= VERTEX_HANDLE_TYPE) .or. &
+            any(sinks%handle_type /= VERTEX_HANDLE_TYPE)) error stop &
+            'graph_maxflow_multiple - all source and sink handles must be vertices'
+
+        allocate(listed_count(this%nvertices), source=0)
+        do i=1, size(sources)
+          iv = get_index_from_handle(this, sources(i))
+          if (iv==MAP_NULL) error stop &
+              'graph_maxflow_multiple - a source handle not found in graph'
+          listed_count(iv) = listed_count(iv)+1
+        end do
+        do i=1, size(sinks)
+          iv = get_index_from_handle(this, sinks(i))
+          if (iv==MAP_NULL) error stop &
+              'graph_maxflow_multiple - a sink handle not found in graph'
+          listed_count(iv) = listed_count(iv)+1
+        end do
+        if (any(listed_count>1)) error stop &
+          'graph_maxflow_multiple - source/sink verticies must be unique'
+      end block
+
+      ! Save number of objects for assertion at the end
+      nvertices0 = this%nvertices
+      nedges0 = this%nedges
+
+      ! Select open edges and vertices
+      call graph_build_selection_masks(this, vmask0, emask0, &
+          vselector=vselector, eselector=eselector, &
+          vmask_provided=vmask, emask_provided=emask)
+
+      ! Sum the capacity over all open edges to be used as the
+      ! capacity of added edges connecting super nodes.
+      total_capacity = &
+          sum(this%edges(1:this%nedges)%rpar(position_capacity),mask=emask0)
+
+      ! Add super-source and super-sink and connect them to sources and sinks.
+      block
+        integer :: v_ipar(VSIZE_IPAR), e_ipar(ESIZE_IPAR), i
+        integer :: nopen_sources, nopen_sinks
+        real(dp) :: v_rpar(VSIZE_RPAR), e_rpar(ESIZE_RPAR)
+
+        v_ipar = 0
+        v_rpar = 0.0_dp
+        e_ipar = 0
+        e_rpar = 0.0_dp
+        e_rpar(position_capacity) = total_capacity
+        super_source = this%add_vertex(v_ipar, v_rpar)
+        super_sink = this%add_vertex(v_ipar, v_rpar)
+        call added_edges%initialize(chunksize=size(transfer(edge,INTEGER_MOLD)))
+        nopen_sources = 0
+        do i=1, size(sources)
+          ! if source is closed, do not add the connection
+          if (.not. vmask0(get_index_from_handle(this, sources(i)))) cycle
+          edge = this%add_edge(super_source, sources(i), e_ipar, e_rpar)
+          call added_edges%push(transfer(edge,INTEGER_MOLD))
+          nopen_sources = nopen_sources+1
+        end do
+        nopen_sinks = 0
+        do i=1, size(sinks)
+          ! if sink is closed, do not add the connection
+          if (.not. vmask0(get_index_from_handle(this, sinks(i)))) cycle
+          edge = this%add_edge(sinks(i), super_sink, e_ipar, e_rpar)
+          call added_edges%push(transfer(edge,INTEGER_MOLD))
+          nopen_sinks = nopen_sinks+1
+        end do
+
+        if (nopen_sinks==0 .or. nopen_sources==0) &
+          print '("maxflow_multiple WARNING - zero flow as all sources or sinks closed")'
+      end block
+
+      ! Extend masks to include super-source, super-sink and
+      ! their connecting edges.
+      block
+        logical, allocatable :: vmask_tmp(:), emask_tmp(:)
+        allocate(vmask_tmp(size(vmask0)+2), source=.true.)
+        allocate(emask_tmp(size(emask0)+added_edges%size()), source=.true.)
+        vmask_tmp(1:size(vmask0)) = vmask0
+        emask_tmp(1:size(emask0)) = emask0
+        call move_alloc(vmask_tmp, vmask0)
+        call move_alloc(emask_tmp, emask0)
+      end block
+
+      ! Max-flow
+      call graph_maxflow( &
+          this, super_source, super_sink, position_capacity, flow, &
+          position_mincutlabel=position_mincutlabel, &
+          position_flow=position_flow, &
+          vmask=vmask0, emask=emask0)
+
+      ! Remove added edges/vertices and assert number of objects did not change
+      do while (.not. added_edges%empty())
+        call this%remove_edge(transfer(added_edges%pop(),edge))
+      end do
+      call this%remove_vertex(super_sink)
+      call this%remove_vertex(super_source)
+      if (this%nvertices/=nvertices0) error stop &
+          'graph_maxflow_multiple - number of vertices changed (internal error)'
+      if (this%nedges/=nedges0) error stop &
+          'graph_maxflow_multiple - number of edges changed (internal error)'
+
+    end subroutine graph_maxflow_multiple
+
+
     ! -------------------------------
     ! Betweenness (Brandes algorithm)
     ! -------------------------------
@@ -1845,5 +1996,75 @@ if (mod(id_s,5000)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvert
         end if
       end do
     end subroutine graph_build_selection_masks
+
+
+    function graph_select_vertices(this, vselector) result(handles)
+      class(graph_t), intent(in) :: this
+      procedure(is_vertex_selected), optional :: vselector
+      type(handle_t), allocatable :: handles(:)
+!
+! Return handles to all vertices selected by vselector.
+! If vselector is absent, handles to all vertices are returned.
+! The order of handles follows the current internal vertex ordering.
+!
+      logical, allocatable :: mask(:)
+      integer :: i, k
+
+      allocate(mask(this%nvertices))
+      if (present(vselector)) then
+        do i=1, this%nvertices
+          mask(i) = vselector(this, this%vertices(i))
+        end do
+      else
+        mask = .true.
+      end if
+
+      allocate(handles(count(mask)))
+      k = 1
+      do i=1, this%nvertices
+        if (.not. mask(i)) cycle
+        handles(k) = this%vertices(i)%handle
+        k = k+1
+      end do
+
+      ! Defensive assertion
+      if (k-1 /= size(handles)) error stop &
+        'graph_select_vertices - internal assertion failed'
+    end function graph_select_vertices
+
+
+    function graph_select_edges(this, eselector) result(handles)
+      class(graph_t), intent(in) :: this
+      procedure(is_edge_selected), optional :: eselector
+      type(handle_t), allocatable :: handles(:)
+!
+! Return handles to all edges selected by eselector.
+! If eselector is absent, handles to all edges are returned.
+! The order of handles follows the current internal edge ordering.
+!
+      logical, allocatable :: mask(:)
+      integer :: i, k
+
+      allocate(mask(this%nedges))
+      if (present(eselector)) then
+        do i=1, this%nedges
+          mask(i) = eselector(this, this%edges(i))
+        end do
+      else
+        mask = .true.
+      end if
+
+      allocate(handles(count(mask)))
+      k = 1
+      do i=1, this%nedges
+        if (.not. mask(i)) cycle
+        handles(k) = this%edges(i)%handle
+        k = k+1
+      end do
+
+      ! Defensive assertion
+      if (k-1 /= size(handles)) error stop &
+        'graph_select_edges - internal assertion failed'
+    end function graph_select_edges
 
   end module graph_mod

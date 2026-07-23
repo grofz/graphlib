@@ -54,6 +54,10 @@
       cone_handles(9) = g%add_edge(atom_handles(5), atom_handles(6), [10], real([10.0, 0.0],DP))
 
       call g%maxflow(atom_handles(1),atom_handles(6),1,maxflow,position_mincutlabel=1,position_flow=2)
+      print *, 'AFTER FIRST CALL'
+      call g%print(output_unit)
+      call g%maxflow(atom_handles(1),atom_handles(6),1,maxflow,position_mincutlabel=1,position_flow=2)
+      print *, 'AFTER SECOND CALL'
     end select
 
 
