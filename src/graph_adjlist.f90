@@ -28,9 +28,13 @@
       integer :: n = 0
     contains
       procedure :: initialize=>adjlist_initialize
-      procedure :: find=>adjlist_find, contains=>adjlist_contains
-      procedure :: next=>adjlist_next, has_next=>adjlist_has_next
-      procedure :: add=>adjlist_add, remove=>adjlist_remove
+      procedure :: find=>adjlist_find
+      procedure :: contains=>adjlist_contains
+      procedure :: next=>adjlist_next
+      procedure :: has_next=>adjlist_has_next
+      procedure :: back=>adjlist_back
+      procedure :: add=>adjlist_add
+      procedure :: remove=>adjlist_remove
       procedure :: size=>adjlist_size
     end type
 
@@ -99,7 +103,9 @@
       class(adjlist_t), intent(in) :: this
       type(iterator_t), intent(inout) :: iterator
       integer, intent(out) :: item
-
+!
+! Return current item and advance iterator.
+!
       if (allocated(this%arr)) then
         if (iterator%i <= this%n) then
           item = this%arr(iterator%i)
@@ -115,9 +121,30 @@
       class(adjlist_t), intent(in) :: this
       type(iterator_t), intent(in) :: iterator
       logical adjlist_has_next
-
+!
+! Return .true. if iterator points at the item and subroutine
+! adjlist_next can be called.
+!
       adjlist_has_next = iterator%i <= this%n
     end function adjlist_has_next
+
+
+    pure subroutine adjlist_back(this, iterator, item)
+      class(adjlist_t), intent(in) :: this
+      type(iterator_t), intent(inout) :: iterator
+      integer, intent(out), optional :: item
+!
+! Move iterator one item back and then return the item (if item provided)
+! Should be called if the current item was deleted
+!
+      if (iterator%i > 1 .and. iterator%i <= this%n+1) then
+        iterator%i = iterator%i - 1
+        if (present(item)) item = this%arr(iterator%i)
+        return
+      else
+        error stop 'adjlist_back - could not move one item back'
+      end if
+    end subroutine adjlist_back
 
 
     pure subroutine adjlist_add(this, item, skip_duplicity_check)

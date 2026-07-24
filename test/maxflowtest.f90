@@ -2,17 +2,39 @@
     use iso_fortran_env, only : DP=>real64, output_unit, I1=>int8
     use vtuio_mod, only : vtuio_write, vtuio_read, vtuio_data_t
     use graph_mod, only : graph_t, handle_t
+    use graph_user_mod, only : EPOS_WEIGHT
+    use graph_testutils_mod, only : testsample_t, parse_lines
+    use parse_mod, only : string_t, read_strings
     implicit none (type, external)
 
     real(DP) :: time
     integer :: i, lab_count, a
 
     type(graph_t) :: g
-    type(handle_t), allocatable :: atom_handles(:), cone_handles(:), s_list(:), t_list(:)
+    type(handle_t), allocatable :: atom_handles(:), cone_handles(:)
     type(vtuio_data_t) :: vtudata
 
     integer, parameter :: mask_for_vtuio(*) = [1, 2, 1, 1]
     real(dp) :: maxflow, mincut
+
+    type(testsample_t) :: ts
+    type(string_t), allocatable :: lines(:)
+    type(handle_t), allocatable :: s_list(:), t_list(:)
+
+    ! Read-file
+    lines = read_strings('assets/mincut_sample_graphs.txt')
+    i = 1
+    do while (i <= size(lines))
+      call parse_lines(lines, i, ts)
+      call ts%g%mincut(EPOS_WEIGHT, mincut, s_list, t_list)
+      print '("MINCUT RESULT: ",g0," (expected ",g0,")")', mincut, ts%expected_mincut
+      print '("S-LIST ",*(i0,1x))', s_list(:)%get_index_to_map()
+      print '("S-LIST EXPECTED ",*(i0,1x))', ts%expected_s
+      print '("T-LIST ",*(i0,1x))', t_list(:)%get_index_to_map()
+      print '("T-LIST EXPECTED ",*(i0,1x))', ts%expected_t
+      print *
+    end do
+    stop 1
 
 
     ! Initialize graph
@@ -21,7 +43,8 @@
 !   allocate(atom_handles(4), cone_handles(4))
     allocate(atom_handles(6), cone_handles(9))
 
-    a=2
+    a=1
+   !a=2
     select case(a)
     case(1)
       atom_handles(1)=g%add_vertex([1, 0, 0], real([0.75, 1.0,1.0,0.0, 0.0,0.0,0.0],DP))

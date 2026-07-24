@@ -31,6 +31,7 @@
     contains
       procedure, private :: handle_eq
       generic :: operator(==) => handle_eq
+      procedure :: get_index_to_map => handle_get_index_to_map
     end type handle_t
 
     type, public :: vertex_t
@@ -77,6 +78,7 @@
       procedure :: build_selection_masks => graph_build_selection_masks
       procedure :: select_vertices => graph_select_vertices
       procedure :: select_edges => graph_select_edges
+      procedure :: is_directed => graph_is_directed
     end type graph_t
 
 
@@ -184,6 +186,12 @@
     end function get_index_from_handle
 
 
+    elemental integer function handle_get_index_to_map(this) result(id)
+      class(handle_t), intent(in) :: this
+      id = this%index_to_map
+    end function
+
+
     ! ----------------------
     ! Graph basic operations
     ! ----------------------
@@ -231,6 +239,20 @@
       class(graph_t), intent(in) :: this
       graph_is_initialized = this%nvertices /= NOT_INITIALIZED
     end function graph_is_initialized
+
+
+    pure logical function graph_is_directed(this) result(is)
+      class(graph_t), intent(in) :: this
+!
+! Return TRUE if directerd graph, return FALSE if undirected graph.
+! This is a getter function - to be used outside module
+!
+      if (graph_is_initialized(this)) then
+        is = this%is_directed_graph
+      else
+        error stop 'graph_is_directed - graph not initialized'
+      end if
+    end function graph_is_directed
 
 
     subroutine increase_vertices_capacity(this, new_capacity)
@@ -483,7 +505,6 @@
         call relocate_edge(this, this%edges(this%nedges)%handle, iedge)
       end if
       this%nedges = this%nedges - 1
-print '("Edge ",i0,"--",i0," removed")', isrc, idst
     end subroutine graph_remove_edge
 
 
@@ -1976,16 +1997,26 @@ if (mod(id_s,5000)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvert
       type(handle_t) :: handle
       type(stack_t), allocatable :: original_vertices(:)
       type(stack_t) :: mincut_vertices
+      integer, allocatable :: original_labels(:)
       type(pqueue_handle_t), allocatable :: pqueue_handles(:)
       type(pqueue_t) :: scoreboard
+      integer, parameter :: LAB_NOT_SELECTED=0, LAB_SET_S=1, LAB_SET_T=2
+
+      ! Stoer-Wagner algorithm works for undirected graphs only
+      if (this%is_directed_graph) error stop &
+          'graph_mincut - algorithm requires an undirected graph only'
 
       ! Prepare the working graph and the array of stacks with handles to the
       ! vertices in the original graph.
       block
         integer :: i, k
         type(handle_t), allocatable :: vertices0(:)
+
+        allocate(original_labels(this%nvertices), source=LAB_NOT_SELECTED)
         call this%copy(g, vselector=vselector, eselector=eselector, &
             vmask=vmask, emask=emask, new_vertices=vertices0)
+        if (g%nvertices < 2) error stop &
+            'graph_mincut - at least two vertices are required'
         allocate(original_vertices(g%nvertices))
         do i=1, g%nvertices
           if (g%vertices(i)%handle%index_to_map /= i) error stop &
@@ -2000,6 +2031,7 @@ if (mod(id_s,5000)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvert
           ! working graph. Push the handle the vertex is known by in the
           ! original graph to the stack maped with the working graph.
           call original_vertices(i)%push(transfer(vertices0(k),INTEGER_MOLD))
+          original_labels(k) = LAB_SET_S
           i = i+1
         end do
         if (i-1/=g%nvertices) error stop &
@@ -2020,9 +2052,9 @@ if (mod(id_s,5000)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvert
       block
         type(handle_t) :: s_handle, t_handle
         real(dp) :: mincut_now
-        do
-          call identify_st_vertices(g, scoreboard, position_weight, s_handle, &
-              pqueue_handles)
+        MAIN_LOOP: do
+          ! phase 1
+          call find_st(g, scoreboard, position_weight, s_handle, pqueue_handles)
           t_handle = transfer(scoreboard%pop(top_priority=mincut_now), t_handle)
           if (.not. scoreboard%empty()) error stop &
               'graph_mincut - internal assertion fails (3)'
@@ -2033,27 +2065,70 @@ if (mod(id_s,5000)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvert
             mincut_vertices = original_vertices(t_handle%index_to_map)
           end if
 
-          if (g%nvertices <= 2) exit
-          call join_st(g, position_weight, s_handle, t_handle, original_vertices)
-
-        end do
+          ! phase 2 - contract vertices S and T
+          if (g%nvertices <= 2) exit MAIN_LOOP
+          call contract_st(g, position_weight, s_handle, t_handle, original_vertices)
+        end do MAIN_LOOP
       end block
+
+      ! Consume mincut_vertices to label vertices from the winning mincut
+      do while (.not. mincut_vertices%empty())
+        handle = transfer(mincut_vertices%pop(), handle)
+        associate(lab=>original_labels(get_index_from_handle(this, handle)))
+          if (lab /= LAB_SET_S) error stop &
+              'graph_mincut - internal assertion fails (4)'
+          lab = LAB_SET_T
+        end associate
+      end do
+
+      ! Make s_list and t_list
+      block
+        integer :: is, it, k
+        allocate(s_list(count(original_labels==LAB_SET_S)))
+        allocate(t_list(count(original_labels==LAB_SET_T)))
+        is = 1
+        it = 1
+        do k=1, size(original_labels)
+          if (original_labels(k)==LAB_SET_S) then
+            s_list(is) = this%vertices(k)%handle
+            is = is+1
+          else if (original_labels(k)==LAB_SET_T) then
+            t_list(it) = this%vertices(k)%handle
+            it = it+1
+          end if
+        end do
+        if (is-1/=size(s_list) .or. it-1/=size(t_list)) error stop &
+            'graph_mincut - internal assertion fails (5)'
+      end block
+
+      ! Clean-up (auto-deallocation did not work?)
+      deallocate(pqueue_handles)
+
+print '("graph_mincut: Min weight is ",g0,".",/,"&
+    &Set S contains ",i0," nodes, set T contains ",i0," nodes and ",i0," nodes were not selected")', &
+    mincut, size(t_list), size(s_list), count(original_labels==LAB_NOT_SELECTED) 
 
     end subroutine graph_mincut
 
 
-    subroutine identify_st_vertices(g, scoreboard, position_weight, s_handle, &
-          phandles)
+    subroutine find_st(g, scoreboard, position_weight, s_handle, phandles)
       type(graph_t), intent(in) :: g
       type(pqueue_t), intent(inout) :: scoreboard
       integer, intent(in) :: position_weight
       type(handle_t), intent(out) :: s_handle
       type(pqueue_handle_t), intent(inout) :: phandles(:)
 !
-!
+! Move vertices to set A as defined by Stoer-Wagner algorithm.
+! The working priority queue contains vertices outside of set A.
 !
       integer :: s_imap, s_id, w_imap, w_id, ie
       type(iterator_t) :: iterator
+
+      ! Defensive checks
+      if (.not. scoreboard%empty()) error stop &
+          'find_st - the queue is not empty (internal error)'
+      if (g%nvertices < 2) error stop &
+          'find_st - less than two vertices in graph (internal error)'
 
       ! Store all vertices to the priority queue...
       do s_id=1, g%nvertices
@@ -2062,14 +2137,14 @@ if (mod(id_s,5000)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvert
             transfer(g%vertices(s_id)%handle,INTEGER_MOLD), priority=0.0_dp)
       end do
 
-      ! ...and remove the vertex S with the highest connectivity
-      do while(scoreboard%size()>1)
+      ! ...and iteratively remove the vertex S with the highest connectivity
+      do while(scoreboard%size() > 1)
         s_handle = transfer(scoreboard%pop(), s_handle)
         s_imap = s_handle%index_to_map
         s_id = get_index_from_handle(g, s_handle)
 
         ! as S now becomes part of set A, increase connectivity
-        ! of all vertices W that are neighbors of S and are outside set A 
+        ! of all vertices W that are neighbors of S and are outside of set A 
         iterator = iterator_t()
         do while (g%vertices(s_id)%ngbs%has_next(iterator))
           call g%vertices(s_id)%ngbs%next(iterator, ie)
@@ -2087,70 +2162,77 @@ if (mod(id_s,5000)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvert
         if (scoreboard%size()==1) exit
       end do
 
-    end subroutine identify_st_vertices
+    end subroutine find_st
 
 
-    subroutine join_st(g, position_weight, s_handle, t_handle, original_vertices)
+    subroutine contract_st(g, position_weight, s_handle, t_handle, voriginal)
       class(graph_t), intent(inout) :: g
       integer, intent(in) :: position_weight
       type(handle_t), intent(in) :: s_handle, t_handle
-      type(stack_t), intent(inout) :: original_vertices(:)
+      type(stack_t), intent(inout) :: voriginal(:)
 !
-!
+! Contract the graph by joining S and T vertices. From the data storage point
+! of view, vertex S becomes the super-vertex ST, while vertex T is removed
+! after its assets are transferred to vertex S.
 !
       type(iterator_t) :: iterator
       type(handle_t) :: handle
-      integer :: s_id, t_id, ie, w_id, e_ipar(ESIZE_IPAR), sw_edge
-      real(dp) :: removed_weight, e_rpar(ESIZE_RPAR)
+      integer :: ie, isw, s_id, t_id, w_id, e_ipar(ESIZE_IPAR)
+      real(dp) :: e_rpar(ESIZE_RPAR)
 
-      ! TODO works for undirected graphs at the moment only
-      if (g%is_directed_graph) error stop &
-          'graph_mincut - directed graphs support not implemented'
+      ! The actual position of respective vertices in graph arrays
+      t_id = get_index_from_handle(g, t_handle)
+      s_id = get_index_from_handle(g, s_handle)
 
-      e_ipar = 0 ! arbitrary values
-      e_rpar = 0.0_dp
-
-      ! As T will be removed, transfer its original vertices list to S
-      associate(T=>original_vertices(t_handle%index_to_map), &
-          S=>original_vertices(s_handle%index_to_map))
+      ! Transfer all original vertices associated with vertex T to vertex S.
+      associate (T=>voriginal(t_handle%index_to_map), &
+                 S=>voriginal(s_handle%index_to_map) )
         do while (.not. T%empty())
           call S%push(T%pop())
         end do
       end associate
 
-      ! Re-connect all T's connections to S
-      t_id = get_index_from_handle(g, t_handle)
-      s_id = get_index_from_handle(g, s_handle)
+      ! Loop over all T's connections, remove them and transfer their weights
+      ! to vertex S.
       iterator = iterator_t()
       do while (g%vertices(t_id)%ngbs%has_next(iterator))
-        ! remove edge T-W
+        ! Obtain the index of the T--W edge. Because this edge will be removed,
+        ! move then the iterator one item back.
         call g%vertices(t_id)%ngbs%next(iterator, ie)
-        removed_weight = g%edges(ie)%rpar(position_weight)
+        call g%vertices(t_id)%ngbs%back(iterator)
+        ! Before edge is removed, get weight of removed edge and the index of
+        ! neighbour W. The replacement edge, that may be added, will inherit the
+        ! properties of the removed edge.
         w_id = other_vertex_id(g, ie, t_id)
+        e_ipar = g%edges(ie)%ipar
+        e_rpar = g%edges(ie)%rpar ! stores the removed edge's weight
         call g%remove_edge(g%edges(ie)%handle)
-        iterator = iterator_t()
 
-        if (w_id /= s_id) then
-          sw_edge=g%find_edge_id(s_id, w_id)
-            if (sw_edge/=MAP_NULL) then
-              ! increase capacity of existing S-W edge
-              associate(weight=>g%edges(sw_edge)%rpar(position_weight))
-                weight = weight + removed_weight
-              end associate
-            else
-              ! add new edge to replace removed T-W edge
-              e_rpar(position_weight) = removed_weight
-              handle = g%add_edge(s_handle, g%vertices(w_id)%handle, e_ipar, e_rpar)
-            end if
-         !end associate
+        ! If the edge is S--T, it is just removed. For other edges:
+        ! - edge S--W with the weight of the removed edge T--W is added, or,
+        ! - the weight of S--W edge is increased by the weight of the removed
+        !   edge T--W if edge S--W already exists.
+        if (w_id == s_id) then
+          continue
+        else
+          isw = g%find_edge_id(s_id, w_id)
+          if (isw == MAP_NULL) then
+            ! add S--W edge as the replacement of the removed T--W edge
+            handle = g%add_edge(s_handle, g%vertices(w_id)%handle, e_ipar, e_rpar)
+          else
+            ! increase capacity of the existing S--W edge
+            associate(weight=>g%edges(isw)%rpar(position_weight))
+              weight = weight + e_rpar(position_weight)
+            end associate
+          end if
         end if
       end do
 
+      ! Vertex T should be isolated and can be removed
       if (g%vertices(t_id)%ngbs%size()/=0) error stop &
-          'join_st - t still has some connections'
+          'join_st - t still has connections (internal error)'
       call g%remove_vertex(t_handle)
-
-    end subroutine join_st
+    end subroutine contract_st
 
 
     ! ----------------------

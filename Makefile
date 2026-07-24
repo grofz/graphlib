@@ -9,7 +9,7 @@
 DIR = build
 BINDIR = bin
 vpath %.f90 src:test
-vpath %.o $(DIR) build_test
+vpath %.o $(DIR):build_test
 
 # path to modules
 JDIR = include
@@ -32,8 +32,10 @@ AR = ar -rcv
 # object files
 MODOBJECTS = \
 						 $(DIR)/conts.o \
+						 $(DIR)/parse.o \
 						 $(DIR)/graph_adjlist.o \
 						 $(DIR)/graph_user.o \
+						 $(DIR)/graph_testutils.o \
 						 $(DIR)/graph.o \
 						 $(DIR)/vtuio_tree.o \
 						 $(DIR)/vtuio26.o
@@ -77,6 +79,8 @@ $(ALLOBJECTS) : Makefile
 
 # module dependencies
 $(DIR)/graph.o : graph_user.o graph_adjlist.o conts.o
+
+$(DIR)/graph_testutils.o : graph_user.o graph.o parse.o
 
 $(DIR)/vtuio26.o : graph.o vtuio_tree.o
 
