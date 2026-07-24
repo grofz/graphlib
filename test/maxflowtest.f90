@@ -26,7 +26,7 @@
     i = 1
     do while (i <= size(lines))
       call parse_lines(lines, i, ts)
-      call ts%g%mincut(EPOS_WEIGHT, mincut, s_list, t_list)
+      call ts%g%mincut(EPOS_WEIGHT, mincut, s_list=s_list, t_list=t_list)
       print '("MINCUT RESULT: ",g0," (expected ",g0,")")', mincut, ts%expected_mincut
       print '("S-LIST ",*(i0,1x))', s_list(:)%get_index_to_map()
       print '("S-LIST EXPECTED ",*(i0,1x))', ts%expected_s
@@ -82,7 +82,7 @@
     print *, 'max flow is ',maxflow
 
     print *, 'STOER-WAGNER'
-    call g%mincut(1, mincut, s_list, t_list)
+    call g%mincut(1, mincut, s_list=s_list, t_list=t_list)
     print *, 'min cut is ', mincut
 
 

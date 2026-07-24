@@ -1981,23 +1981,26 @@ if (mod(id_s,5000)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvert
     ! --------------------------------------------
     ! Stoer-Wagner algorithm for min-cut partition
     ! --------------------------------------------
-    subroutine graph_mincut(this, position_weight, mincut, s_list, t_list, &
+    subroutine graph_mincut(this, position_weight, mincut, labels, s_list, t_list, &
         vmask, emask, vselector, eselector)
       class(graph_t), intent(in) :: this
       integer, intent(in) :: position_weight
       real(dp), intent(out) :: mincut
-      type(handle_t), intent(out), allocatable :: s_list(:), t_list(:)
+      integer, intent(out), allocatable, optional :: labels(:)
+      type(handle_t), intent(out), allocatable, optional :: s_list(:), t_list(:)
       logical, intent(in), optional :: vmask(:), emask(:)
       procedure(is_vertex_selected), optional :: vselector
       procedure(is_edge_selected), optional :: eselector
 !
 ! Find min-cut
 !
+! TODO documentation
+!
       type(graph_t) :: g
       type(handle_t) :: handle
-      type(stack_t), allocatable :: original_vertices(:)
+      type(stack_t), allocatable :: contracted_vertices(:)
       type(stack_t) :: mincut_vertices
-      integer, allocatable :: original_labels(:)
+      integer, allocatable :: labels0(:)
       type(pqueue_handle_t), allocatable :: pqueue_handles(:)
       type(pqueue_t) :: scoreboard
       integer, parameter :: LAB_NOT_SELECTED=0, LAB_SET_S=1, LAB_SET_T=2
@@ -2006,32 +2009,40 @@ if (mod(id_s,5000)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvert
       if (this%is_directed_graph) error stop &
           'graph_mincut - algorithm requires an undirected graph only'
 
+      ! For s_list and t_list optional arguments, either both or none must
+      ! be provided
+      if (present(s_list) .neqv. present(t_list)) error stop &
+          'graph_mincut - s_list/t_list arguments: both or none must be provided'
+
       ! Prepare the working graph and the array of stacks with handles to the
       ! vertices in the original graph.
       block
         integer :: i, k
         type(handle_t), allocatable :: vertices0(:)
 
-        allocate(original_labels(this%nvertices), source=LAB_NOT_SELECTED)
         call this%copy(g, vselector=vselector, eselector=eselector, &
             vmask=vmask, emask=emask, new_vertices=vertices0)
         if (g%nvertices < 2) error stop &
             'graph_mincut - at least two vertices are required'
-        allocate(original_vertices(g%nvertices))
+        allocate(contracted_vertices(g%nvertices))
         do i=1, g%nvertices
           if (g%vertices(i)%handle%index_to_map /= i) error stop &
             'graph_mincut - internal assertion fails (1)'
-          call original_vertices(i)%initialize( &
+          call contracted_vertices(i)%initialize( &
               chunksize=size(transfer(handle,INTEGER_MOLD)))
         end do
+        allocate(labels0(this%nvertices), source=LAB_NOT_SELECTED)
         i = 1
         do k=1, size(vertices0)
           if (get_index_from_handle(this, vertices0(k))==MAP_NULL) cycle
           ! The k-th vertex in the original graph is now i-th vertex in the
           ! working graph. Push the handle the vertex is known by in the
           ! original graph to the stack maped with the working graph.
-          call original_vertices(i)%push(transfer(vertices0(k),INTEGER_MOLD))
-          original_labels(k) = LAB_SET_S
+          call contracted_vertices(i)%push(transfer(vertices0(k),INTEGER_MOLD))
+          ! Label vertices in original graph LAB_SET_S or LAB_NOT_SELECTED.
+          ! LAB_SET_S label is temporary, some vertices will be relabeled when
+          ! the min-cut is determined
+          labels0(k) = LAB_SET_S
           i = i+1
         end do
         if (i-1/=g%nvertices) error stop &
@@ -2045,81 +2056,88 @@ if (mod(id_s,5000)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvert
           chunksize=size(transfer(handle,INTEGER_MOLD)), ordering=PQUEUE_MAX)
       allocate(pqueue_handles(g%nvertices))
 
-      ! Initialize global mincut value and corresponding vertices
+      ! Initialize global mincut weight and corresponding vertices
       call mincut_vertices%initialize(chunksize=size(transfer(handle,INTEGER_MOLD)))
       mincut = huge(mincut)
 
       block
         type(handle_t) :: s_handle, t_handle
-        real(dp) :: mincut_now
+        real(dp) :: cut_weight
         MAIN_LOOP: do
           ! phase 1
-          call find_st(g, scoreboard, position_weight, s_handle, pqueue_handles)
-          t_handle = transfer(scoreboard%pop(top_priority=mincut_now), t_handle)
-          if (.not. scoreboard%empty()) error stop &
-              'graph_mincut - internal assertion fails (3)'
+          call find_st(g, position_weight, s_handle, t_handle, cut_weight, &
+              scoreboard, pqueue_handles)
 
-          ! update min-cut value and vertices list if a lower value found
-          if (mincut_now < mincut) then
-            mincut = mincut_now
-            mincut_vertices = original_vertices(t_handle%index_to_map)
+          ! update min-cut weight and vertices list if a lower weight found
+          if (cut_weight < mincut) then
+            mincut = cut_weight
+            mincut_vertices = contracted_vertices(t_handle%index_to_map)
           end if
 
           ! phase 2 - contract vertices S and T
           if (g%nvertices <= 2) exit MAIN_LOOP
-          call contract_st(g, position_weight, s_handle, t_handle, original_vertices)
+          call contract_st(g, position_weight, s_handle, t_handle, contracted_vertices)
         end do MAIN_LOOP
       end block
 
       ! Consume mincut_vertices to label vertices from the winning mincut
       do while (.not. mincut_vertices%empty())
         handle = transfer(mincut_vertices%pop(), handle)
-        associate(lab=>original_labels(get_index_from_handle(this, handle)))
+        associate(lab=>labels0(get_index_from_handle(this, handle)))
           if (lab /= LAB_SET_S) error stop &
               'graph_mincut - internal assertion fails (4)'
           lab = LAB_SET_T
         end associate
       end do
 
-      ! Make s_list and t_list
-      block
-        integer :: is, it, k
-        allocate(s_list(count(original_labels==LAB_SET_S)))
-        allocate(t_list(count(original_labels==LAB_SET_T)))
-        is = 1
-        it = 1
-        do k=1, size(original_labels)
-          if (original_labels(k)==LAB_SET_S) then
-            s_list(is) = this%vertices(k)%handle
-            is = is+1
-          else if (original_labels(k)==LAB_SET_T) then
-            t_list(it) = this%vertices(k)%handle
-            it = it+1
-          end if
-        end do
-        if (is-1/=size(s_list) .or. it-1/=size(t_list)) error stop &
-            'graph_mincut - internal assertion fails (5)'
-      end block
+      ! Make s_list and t_list (if required by user)
+      if (present(s_list) .and. present(t_list)) then
+        block
+          integer :: is, it, k
+          allocate(s_list(count(labels0==LAB_SET_S)))
+          allocate(t_list(count(labels0==LAB_SET_T)))
+          is = 1
+          it = 1
+          do k=1, size(labels0)
+            if (labels0(k)==LAB_SET_S) then
+              s_list(is) = this%vertices(k)%handle
+              is = is+1
+            else if (labels0(k)==LAB_SET_T) then
+              t_list(it) = this%vertices(k)%handle
+              it = it+1
+            end if
+          end do
+          if (is-1/=size(s_list) .or. it-1/=size(t_list)) error stop &
+              'graph_mincut - internal assertion fails (5)'
+        end block
+      end if
+
+      ! Return labels if required by user
+      if (present(labels)) call move_alloc(labels0, labels)
 
       ! Clean-up (auto-deallocation did not work?)
       deallocate(pqueue_handles)
 
-print '("graph_mincut: Min weight is ",g0,".",/,"&
-    &Set S contains ",i0," nodes, set T contains ",i0," nodes and ",i0," nodes were not selected")', &
-    mincut, size(t_list), size(s_list), count(original_labels==LAB_NOT_SELECTED) 
-
     end subroutine graph_mincut
 
 
-    subroutine find_st(g, scoreboard, position_weight, s_handle, phandles)
+    subroutine find_st(g, position_weight, s_handle, t_handle, cut_weight, &
+          scoreboard, phandles)
       type(graph_t), intent(in) :: g
-      type(pqueue_t), intent(inout) :: scoreboard
       integer, intent(in) :: position_weight
-      type(handle_t), intent(out) :: s_handle
+      type(handle_t), intent(out) :: s_handle, t_handle
+      real(dp), intent(out) :: cut_weight
+      type(pqueue_t), intent(inout) :: scoreboard
       type(pqueue_handle_t), intent(inout) :: phandles(:)
 !
-! Move vertices to set A as defined by Stoer-Wagner algorithm.
-! The working priority queue contains vertices outside of set A.
+! Perform one Stoer-Wagner minimum-cut phase.
+!
+! Vertices are iteratively added to the growing set A. On return,
+! s_handle and t_handle are the last two vertices added to A, and
+! cut_weight is the weight of the corresponding s-t cut.
+!
+! The working priority queue contains vertices assumed currently outside
+! of set A.
 !
       integer :: s_imap, s_id, w_imap, w_id, ie
       type(iterator_t) :: iterator
@@ -2157,10 +2175,11 @@ print '("graph_mincut: Min weight is ",g0,".",/,"&
                     g%edges(ie)%rpar(position_weight))
           end associate
         end do
-
-        ! on return, the queue contains the last vertex T
-        if (scoreboard%size()==1) exit
       end do
+
+      ! the queue contains the last vertex T and its connectivity with
+      ! all remaining vertices
+      t_handle = transfer(scoreboard%pop(top_priority=cut_weight), t_handle)
 
     end subroutine find_st
 
