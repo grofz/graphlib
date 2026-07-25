@@ -122,8 +122,8 @@ goto 100
     call vtuio_write('big_copy', gbig, vtuio_mask)
 
   contains
-    subroutine add_vertex(g, handle, r, x, vtype, vec3)
-      type(graph_t), intent(inout) :: g
+    subroutine add_vertex(gg, handle, r, x, vtype, vec3)
+      type(graph_t), intent(inout) :: gg
       type(handle_t), intent(out) :: handle
       real(dp), intent(in) :: r, x(3)
       integer, intent(in) :: vtype
@@ -138,7 +138,7 @@ goto 100
       v_rpar(VPOS_VB:VPOS_VB+2) = vec3
       v_ipar = 0
       v_ipar(VPOS_TYPE) = vtype
-      handle = g%add_vertex(v_ipar, v_rpar)
+      handle = gg%add_vertex(v_ipar, v_rpar)
     end subroutine add_vertex
 
   end program atom_test
@@ -149,6 +149,7 @@ goto 100
     implicit none (type, external)
     class(graph_t), intent(in) :: this
     type(edge_t), intent(in) :: e
+    if (this%is_directed()) continue ! just avoid "unused argument"
     select_edge = e%ipar(1)==1 ! just to avouid "unused argument warning"
     select_edge = .true.
    !select_edge = .false.
@@ -160,6 +161,7 @@ goto 100
     implicit none (type, external)
     class(graph_t), intent(in) :: this
     type(vertex_t), intent(in) :: v
+    if (this%is_directed()) continue ! just avoid "unused argument"
     select_vertex = v%ipar(1)==1 ! just to avouid "unused argument warning"
     select_vertex = .true.
   end function

@@ -30,23 +30,13 @@ FC = gfortran
 AR = ar -rcv
 
 # object files
+# all .f90 files from the src/ directory (automatic list)
 # 1. Find every .f90 file inside the src/ directory
 SRC_FILES = $(wildcard src/*.f90)
 # 2. Strip the 'src/' prefix and change the extension from '.f90' to '.o'
 OBJ_NAMES = $(patsubst src/%.f90, %.o, $(SRC_FILES))
 # 3. Add the 'build/' directory prefix to all of them
 MODOBJECTS = $(addprefix $(DIR)/, $(OBJ_NAMES))
-
-#MODOBJECTS = \
-#						 $(DIR)/conts.o \
-#						 $(DIR)/parse.o \
-#						 $(DIR)/graph_adjlist.o \
-#						 $(DIR)/graph_user.o \
-#						 $(DIR)/graph_testutils.o \
-#						 $(DIR)/graph.o \
-#						 $(DIR)/graph_smod_centrality.o \
-#						 $(DIR)/vtuio_tree.o \
-#						 $(DIR)/vtuio26.o
 
 MAIN1 = build_test/vtuiotest.o
 MAIN2 = build_test/maxflowtest.o
@@ -98,6 +88,7 @@ $(ALLOBJECTS) : Makefile
 $(DIR)/graph.o : $(DIR)/graph_user.o $(DIR)/graph_adjlist.o $(DIR)/conts.o
 
 #$(DIR)/graph_smod_centrality.o : $(DIR)/graph.o
+#$(DIR)/graph_smod_flow.o : $(DIR)/graph.o
 
 $(DIR)/graph_testutils.o : $(DIR)/graph_user.o $(DIR)/graph.o $(DIR)/parse.o
 
