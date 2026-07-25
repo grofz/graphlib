@@ -10,7 +10,11 @@ module graph_testutils_mod
   type testsample_t
     type(graph_t) :: g
     real(dp) :: expected_mincut = INVALID
+    real(dp) :: expected_maxflow(2) = INVALID
     integer, allocatable :: expected_s(:), expected_t(:)
+    real(dp), allocatable :: positions(:,:)
+    integer, allocatable :: sources(:), sinks(:)
+    logical :: is_directed_graph
   end type
 
 contains
@@ -18,19 +22,25 @@ contains
   subroutine parse_lines(lines, current_line, ts)
     type(string_t), intent(in) :: lines(:)
     integer, intent(inout) :: current_line
-    type(testsample_t), intent(out) :: ts
+    type(testsample_t), intent(inout) :: ts
 !
 ! TODO Unpolished, hasted implementation
 !
     type(string_t), allocatable :: words(:)
-    integer :: ios, i
+    integer :: ios, i, ios2
 
+    if (allocated(ts%positions)) deallocate(ts%positions)
+    call ts%g%initialize()
     do
       ! split current line into tokens
+!print '(i3,2x,a)', current_line, lines(current_line)%str
       call split_nonempty(lines(current_line)%str, ' ', words)
       current_line = current_line + 1
-      if (size(words)==0) exit ! current_line is empty line 
-      if (words(1)%str(1:1)=='#') then
+      if (size(words)==0 .and. ts%g%nvertices>0) then
+        exit ! current_line is empty line 
+      else if (size(words)==0) then
+        cycle
+      else if (words(1)%str(1:1)=='#') then
         print '(a)', '<'//lines(current_line-1)%str//'>'
         cycle ! current_line is a comment
       end if
@@ -41,30 +51,79 @@ contains
         read(words(2)%str,*,iostat=ios) ts%expected_mincut
         if (ios/=0) then
           print '(a)', lines(current_line-1)%str
-          error stop 'error reading number'
+          error stop 'error reading number (mincut)'
         end if
+      case ('EXPECTED_MAXFLOW')
+        if (size(words)<3) error stop 'two values expected for EXPECTED_MAXFLOW'
+        read(words(2)%str,*,iostat=ios ) ts%expected_maxflow(1)
+        read(words(3)%str,*,iostat=ios2) ts%expected_maxflow(2)
+        if (ios/=0 .or. ios2/=0) then
+          print '(a)', lines(current_line-1)%str
+          error stop 'error reading number (maxflow)'
+        end if
+
       case ('EXPECTED_SET_A')
-        if (allocated(ts%expected_s)) deallocate(ts%expected_s)
-        allocate(ts%expected_s(size(words)-1))
-        do i=2, size(words)
-          read(words(i)%str,*,iostat=ios) ts%expected_s(i-1)
-          if (ios/=0) then
-            print '(a)', lines(current_line-1)%str
-            print '(a)', '<'//words(i)%str//'>'
-            error stop 'error reading numbers'
-          end if
-        end do
+        call parse_list_of_ints(words, ts%expected_s, ios)
+        if (ios/=0) then
+          print '(a)', '<'//words(i)%str//'>'
+          error stop 'error reading numbers'
+        end if
+
       case ('EXPECTED_SET_B')
-        if (allocated(ts%expected_t)) deallocate(ts%expected_t)
-        allocate(ts%expected_t(size(words)-1))
-        do i=2, size(words)
-          read(words(i)%str,*,iostat=ios) ts%expected_t(i-1)
-          if (ios/=0) then
-            print '(a)', lines(current_line-1)%str
-            print '(a)', '<'//words(i)%str//'>'
-            error stop 'error reading numbers'
-          end if
-        end do
+        call parse_list_of_ints(words, ts%expected_t, ios)
+        if (ios/=0) then
+          print '(a)', '<'//words(i)%str//'>'
+          error stop 'error reading numbers'
+        end if
+
+      case('SOURCES')
+        call parse_list_of_ints(words, ts%sources, ios)
+        if (ios/=0) then
+          print '(a)', '<'//words(i)%str//'>'
+          error stop 'error reading numbers'
+        end if
+
+      case('SINKS')
+        call parse_list_of_ints(words, ts%sinks, ios)
+        if (ios/=0) then
+          print '(a)', '<'//words(i)%str//'>'
+          error stop 'error reading numbers'
+        end if
+
+      case('VERTICES')
+        ! must be before 'EDGES'
+        block
+          integer, allocatable :: v_ipars(:,:), e_ipars(:,:), cons(:,:)
+          real(dp), allocatable :: xyz(:), v_rpars(:,:), e_rpars(:,:)
+          integer :: k, ios1, ios2
+          real(dp) :: x, y, z
+          type(string_t), allocatable :: tokens(:)
+          allocate(xyz(0))
+          k = 0
+          do
+            call split_nonempty(lines(current_line+k)%str, ' ', tokens)
+            if (size(tokens)==0) then
+              exit
+            end if
+            read(tokens(1)%str,*,iostat=ios) x
+            if (ios /= 0) exit
+            read(tokens(2)%str,*,iostat=ios1) y
+            read(tokens(3)%str,*,iostat=ios2) z
+            if (ios1/=0 .or. ios2/=0) then
+              print '(a)', lines(current_line+k)%str
+              print '(a)', '<'//words(i)%str//'>'
+              error stop 'error reading numbers'
+            end if
+            xyz = [xyz, x, y, z]
+
+            k = k+1
+            if (current_line+k>size(lines)) exit
+          end do
+          current_line = current_line+k
+
+          ! save "position" component
+          ts%positions=reshape(xyz, shape=[3, size(xyz)/3])
+        end block
       case ('EDGES')
         block
           integer, allocatable :: ia(:), ib(:), v_ipars(:,:), e_ipars(:,:), cons(:,:)
@@ -96,17 +155,28 @@ contains
             if (current_line+k>size(lines)) exit
           end do
           current_line = current_line+k
+
           ! prepare graph arrays
-          nv = maxval(ia)
-          nv = max(nv, maxval(ib))
+          if (allocated(ts%positions)) then
+            nv = size(ts%positions,2)
+          else
+            nv = maxval(ia)
+            nv = max(nv, maxval(ib))
+          end if
           ne = size(ia)
           allocate(v_ipars(VSIZE_IPAR, nv), v_rpars(VSIZE_RPAR, nv))
           allocate(e_ipars(ESIZE_IPAR, ne), e_rpars(ESIZE_RPAR, ne))
           e_rpars(EPOS_WEIGHT,:) = weights(:)
+          if (allocated(ts%positions))then
+            v_rpars(VPOS_X+0,:) = ts%positions(1,:)
+            v_rpars(VPOS_X+1,:) = ts%positions(2,:)
+            v_rpars(VPOS_X+2,:) = ts%positions(3,:)
+          end if
           allocate(cons(2,ne))
           cons(1,:) = ia
           cons(2,:) = ib
-          call graph_from_arrays(ts%g, cons, erdata=e_rpars)
+          call graph_from_arrays(ts%g, cons, erdata=e_rpars, vrdata=v_rpars, &
+              is_directed_graph=ts%is_directed_graph)
         end block
 
       case default
@@ -120,6 +190,25 @@ contains
    !call ts%g%print(output_unit)
 
   end subroutine parse_lines
+
+
+  subroutine parse_list_of_ints(words, numbers, ierr)
+    type(string_t), intent(in) :: words(:)
+    integer, allocatable, intent(out) :: numbers(:)
+    integer, intent(out) :: ierr
+
+    integer :: i, ios
+
+    ierr = 0
+    if (allocated(numbers)) deallocate(numbers)
+    allocate(numbers(size(words)-1))
+    do i=2, size(words)
+      read(words(i)%str,*,iostat=ios) numbers(i-1)
+      if (ios==0) cycle
+      ierr = 1
+      exit
+    end do
+  end subroutine parse_list_of_ints
 
 
   subroutine graph_from_arrays(g, cons, vidata, vrdata, eidata, erdata, &
