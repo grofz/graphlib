@@ -3,26 +3,26 @@
 #
 .SUFFIXES:
 
-.PHONY: all clean
+.PHONY: all clean directories
 
 # path to sources and objects
 DIR = build
 BINDIR = bin
 vpath %.f90 src:test
-vpath %.o $(DIR):build_test
 
 # path to modules
 JDIR = include
 
 # compiler flags
+COMMON_FLAGS = -Wall -Wextra -pedantic -std=gnu -fimplicit-none -fbacktrace -fPIC -fmax-errors=5 -cpp -MMD
 # to provide debugging executable, run
 #   $ make clean
 #   $ make DEBUG=yes
 #
 ifdef DEBUG
-  FFLAGS =-Og -g -Wall -Wextra -pedantic -std=gnu -fimplicit-none -fcheck=all -fbacktrace -fPIC -fmax-errors=5 -Wtrampolines
+  FFLAGS =-Og -g -fcheck=all -Wtrampolines $(COMMON_FLAGS)
 else
-  FFLAGS =-Ofast -march=native -Wall -Wextra -pedantic -std=gnu -fimplicit-none -fbacktrace -fPIC -fmax-errors=5
+  FFLAGS =-Ofast -march=native $(COMMON_FLAGS)
 endif
 
 # compiler and linker
@@ -30,15 +30,23 @@ FC = gfortran
 AR = ar -rcv
 
 # object files
-MODOBJECTS = \
-						 $(DIR)/conts.o \
-						 $(DIR)/parse.o \
-						 $(DIR)/graph_adjlist.o \
-						 $(DIR)/graph_user.o \
-						 $(DIR)/graph_testutils.o \
-						 $(DIR)/graph.o \
-						 $(DIR)/vtuio_tree.o \
-						 $(DIR)/vtuio26.o
+# 1. Find every .f90 file inside the src/ directory
+SRC_FILES = $(wildcard src/*.f90)
+# 2. Strip the 'src/' prefix and change the extension from '.f90' to '.o'
+OBJ_NAMES = $(patsubst src/%.f90, %.o, $(SRC_FILES))
+# 3. Add the 'build/' directory prefix to all of them
+MODOBJECTS = $(addprefix $(DIR)/, $(OBJ_NAMES))
+
+#MODOBJECTS = \
+#						 $(DIR)/conts.o \
+#						 $(DIR)/parse.o \
+#						 $(DIR)/graph_adjlist.o \
+#						 $(DIR)/graph_user.o \
+#						 $(DIR)/graph_testutils.o \
+#						 $(DIR)/graph.o \
+#						 $(DIR)/graph_smod_centrality.o \
+#						 $(DIR)/vtuio_tree.o \
+#						 $(DIR)/vtuio26.o
 
 MAIN1 = build_test/vtuiotest.o
 MAIN2 = build_test/maxflowtest.o
@@ -66,7 +74,11 @@ else
 endif
 
 # default goal and dependencies
-all: $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(OUTLIB)
+all: directories $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(OUTLIB)
+
+# Ensure directories exist before compilation begins
+directories:
+	@mkdir -p $(DIR) build_test $(BINDIR) $(JDIR)
 
 $(EXE1) : $(MODOBJECTS) $(MAIN1)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
@@ -83,21 +95,23 @@ $(OUTLIB) : $(MODOBJECTS)
 $(ALLOBJECTS) : Makefile
 
 # module dependencies
-$(DIR)/graph.o : graph_user.o graph_adjlist.o conts.o
+$(DIR)/graph.o : $(DIR)/graph_user.o $(DIR)/graph_adjlist.o $(DIR)/conts.o
 
-$(DIR)/graph_testutils.o : graph_user.o graph.o parse.o
+#$(DIR)/graph_smod_centrality.o : $(DIR)/graph.o
 
-$(DIR)/vtuio26.o : graph.o vtuio_tree.o
+$(DIR)/graph_testutils.o : $(DIR)/graph_user.o $(DIR)/graph.o $(DIR)/parse.o
+
+$(DIR)/vtuio26.o : $(DIR)/graph.o $(DIR)/vtuio_tree.o
 
 # dependencies for unit test programs
 #
-build_test/vtuiotest.o : $(MODOBJECTS)
+#build_test/vtuiotest.o : $(MODOBJECTS)
 
-build_test/maxflowtest.o : $(MODOBJECTS)
+#build_test/maxflowtest.o : $(MODOBJECTS)
 
-build_test/betweenesstest.o : $(MODOBJECTS)
+#build_test/betweenesstest.o : $(MODOBJECTS)
 
-build_test/concomtest.o : $(MODOBJECTS)
+#build_test/concomtest.o : $(MODOBJECTS)
 
 #.f.o:
 build_test/%.o : test/%.f90
@@ -105,7 +119,10 @@ build_test/%.o : test/%.f90
 $(DIR)/%.o : src/%.f90
 	$(FC) $(FFLAGS) -J$(JDIR) -c $< -o $@
 
-# one phoney target
+# phony clean-up target
 clean :
-	-rm -f $(DIR)/*.o build_test/*.o $(JDIR)/*.mod $(EXE1) $(EXE2) $(EXE3) $(OUTLIB)
+	-rm -f $(DIR)/*.o build_test/*.o $(JDIR)/*.mod $(JDIR)/*.smod $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(OUTLIB)
+
+# Include the generated dependency files if they exist
+-include $(MODOBJECTS:.o=.d) $(ALLOBJECTS:.o=.d)
 # end of makefile
