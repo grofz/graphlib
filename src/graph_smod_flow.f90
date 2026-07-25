@@ -48,11 +48,12 @@
         allocate(labels0(this%nvertices), source=MINCUT_NOT_SELECTED)
         i = 1
         do k=1, size(vertices0)
-          if (get_index_from_handle(this, vertices0(k))==MAP_NULL) cycle
+          if (get_index_from_handle(g, vertices0(k))==MAP_NULL) cycle
           ! The k-th vertex in the original graph was selected and now is the
           ! i-th vertex in the working graph. Push the handle from the original
           ! graph as the first item to the stack in the working graph
-          call contracted_vertices(i)%push(transfer(vertices0(k),INTEGER_MOLD))
+          call contracted_vertices(i)%push( &
+              transfer(this%vertices(k)%handle,INTEGER_MOLD))
           ! Label vertices in original graph LAB_SET_S or LAB_NOT_SELECTED.
           ! LAB_SET_S label is temporary, some vertices will be relabeled when
           ! the min-cut is determined
