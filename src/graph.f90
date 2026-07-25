@@ -23,6 +23,9 @@
     integer(I1B), parameter :: VERTEX_HANDLE_TYPE = 1_I1B, &
         EDGE_HANDLE_TYPE = 2_I1B, INVALID_HANDLE_TYPE= 0_I1B
 
+    integer, parameter :: CONCOM_LABEL_INPROGRESS=-1, &
+        CONCOM_LABEL_NOTSELECTED=0
+
     type, public :: handle_t
       private
       integer :: index_to_map = MAP_NULL
@@ -850,28 +853,33 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
     ! --------------------------
     ! Label connected components
     ! --------------------------
-    subroutine graph_connected_components(this, position_label, &
-        vselector, eselector, vmask, emask, lab_count)
+    subroutine graph_connected_components(this, labels, lab_count, &
+        position_label, vselector, eselector, vmask, emask)
       class(graph_t), intent(inout) :: this
-      integer, intent(in) :: position_label
+      integer, intent(out), allocatable, optional :: labels(:)
+      integer, intent(out), optional :: lab_count
+      integer, intent(in), optional :: position_label
       procedure(is_vertex_selected), optional :: vselector
       procedure(is_edge_selected), optional :: eselector
       logical, intent(in), optional :: vmask(:), emask(:)
-      integer, intent(out), optional :: lab_count
 !
-! Identify connected components of an undirected graph.
-! (NOTE - directed graphs are left as the future work)
+! Identify connected components of an undirected graph or weakly connected
+! components of a directed graph.
 !
-! The routine assigns an integer component label to each selected vertex.
-! Vertices and edges can be restricted using optional selector functions.
-! If no selectors are provided, all vertices and edges are considered.
+! The routine assigns consecutive integer labels starting from 1 to each
+! connected component.
 !
-! Only selected vertices are modified. Vertices excluded by the selection
-! remain unchanged. An edge contributes to connectivity only if it is selected
-! and both of its endpoint vertices are selected.
+! Vertices and edges can be restricted using optional selector functions or
+! logical array masks. If no selectors are provided, all vertices and edges are
+! considered. An edge contributes to connectivity only if it is selected and
+! both of its endpoint vertices are also selected.
 !
-! Component labels are assigned consecutively starting from 1.
-! Labels of unselected vertices are not modified.
+! By providing or omitting optional arguments "labels" and "position_label",
+! user can:
+!   - obtain an array of labels (unselected vertices are marked by zero),
+! or/and
+!   - let the subroutine to store the labels "vertices/ipar" array. Labels of
+! unselected vertices in graph are left untouched.
 !
 ! INPUT
 !   this           - graph structure
@@ -885,25 +893,46 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
 !                    the component search
 !
 ! OUTPUT
+!   labels         - component label or zero for unselected vertices (optional)
 !   lab_count      - optional number of connected components identified
+!   this           - for selected vertices, component labels are stored to
+!                    "vertices/ipar(position_label)" array
 !
-      integer, parameter :: LAB_INPROGRESS=-1
-      integer :: i, j, k, iedge, lab_current
+      integer :: i, j, iedge, idst, lab_current
       type(iterator_t) :: iterator
       type(stack_t) :: stack
+      integer, allocatable :: labels0(:)
       logical, allocatable :: vmask0(:), emask0(:)
-
-      ! At the moment only for undirected graphs
-      if (this%is_directed_graph) &
-          error stop 'graph_connected_components - graph must be undirected'
+      type(adjlist_t), allocatable :: incomming_ngbs(:)
 
       call graph_build_selection_masks(this, vmask0, emask0, &
           vselector=vselector, eselector=eselector, vmask_provided=vmask, &
           emask_provided=emask)
 
+      ! To identify weakly connected components in directed graphs,
+      ! we need to traverse edges in the reverse direction as well.
+      ! Generate adjacency lists of incoming edges that are open.
+      if (this%is_directed_graph) then
+        allocate(incomming_ngbs(this%nvertices))
+        do i=1, this%nvertices
+          call incomming_ngbs(i)%initialize()
+        end do
+        do iedge=1, this%nedges
+          if (.not. emask0(iedge)) cycle
+          idst = get_index_from_handle(this, this%edges(iedge)%dst_handle)
+          if (idst==MAP_NULL) error stop 'graph_connected_component -&
+              & graph contains edge with invalid destination point'
+          call incomming_ngbs(idst)%add(iedge)
+        end do
+      end if
+
       ! Initialize "labels" for selected vertices
-      where (vmask0) &
-          this%vertices(1:this%nvertices)%ipar(position_label) = LAB_INPROGRESS
+      allocate(labels0(this%nvertices))
+      where (vmask0)
+        labels0 = CONCOM_LABEL_INPROGRESS
+      else where
+        labels0 = CONCOM_LABEL_NOTSELECTED
+      end where
 
       ! Identified components counter
       lab_current = 0
@@ -914,9 +943,9 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
       MAIN_LOOP: do i=1, this%nvertices
         ! Find the next unprocessed vertex and add it to the empty stack
         if (.not. vmask0(i)) cycle
-        if (this%vertices(i)%ipar(position_label) /= LAB_INPROGRESS) cycle
+        if (labels0(i) /= CONCOM_LABEL_INPROGRESS) cycle
         lab_current = lab_current + 1
-        this%vertices(i)%ipar(position_label) = lab_current
+        labels0(i) = lab_current
         call stack%push(transfer(i,INTEGER_MOLD))
 
         ! Process the stack and propagate "lab_current"
@@ -925,40 +954,71 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
 
           ! Label and add allowed neighbours to the stack
           iterator = iterator_t()
-          NGB_LOOP: do while (this%vertices(j)%ngbs%has_next(iterator))
+          do while (this%vertices(j)%ngbs%has_next(iterator))
             call this%vertices(j)%ngbs%next(iterator, iedge)
             if (.not. emask0(iedge)) cycle
-            k = other_vertex_id(this, iedge, j)
-            ! Assert "k" is selected as edges to unselected vertices should
-            ! have been unselected by "build_selection_masks"
-            if (.not. vmask0(k)) error stop &
-                'graph_connected_components - selected edge has an unselected endpoint'
-            ! According to its label, a neighbor "k" can be:
-            !   - unvisited selected vertex: assign current component
-            !     and push to stack
-            !   - already assigned to this component: ignore
-            ! Other labels indicate an inconsistent graph traversal.
-            associate (lab_dst=>this%vertices(k)%ipar(position_label))
-              if (lab_dst==LAB_INPROGRESS) then
-                lab_dst = lab_current
-                call stack%push(transfer(k,INTEGER_MOLD))
-              else if (lab_dst==lab_current) then
-                continue
-              else
-                ! assertion may fail in directed graphs, but should not happen
-                ! in undirected graphs
-                error stop 'graph_connected_components - neighbour is already labeled, traversal inconsistency'
-              end if
-            end associate
-          end do NGB_LOOP
+            call follow_edge(this, iedge, j, lab_current, vmask0, labels0, stack)
+          end do
+
+          ! Label and add inbound neighbours (directed graphs only)
+          if (this%is_directed_graph) then
+            iterator = iterator_t()
+            do while (incomming_ngbs(j)%has_next(iterator))
+              call incomming_ngbs(j)%next(iterator, iedge)
+              call follow_edge(this, iedge, j, lab_current, vmask0, labels0, stack)
+            end do
+          end if
 
         end do DFS_LOOP
 
       end do MAIN_LOOP
 
+      ! Write labels to vertex/ipar array
+      if (present(position_label)) then
+        where (vmask0) &
+            this%vertices(1:this%nvertices)%ipar(position_label) = labels0
+      end if
+
+      if (present(labels)) call move_alloc(labels0, labels)
+
       if (present(lab_count)) lab_count = lab_current
 
+      ! Clean-up (explicitly deallocating array of adjlist_t)
+      if (this%is_directed_graph) deallocate(incomming_ngbs)
+
     end subroutine graph_connected_components
+
+
+    subroutine follow_edge(this, iedge, from_vertex, lab_current, vmask, labels, stack)
+      class(graph_t), intent(in) :: this
+      integer, intent(in) :: iedge, from_vertex, lab_current
+      logical, intent(in) :: vmask(:)
+      integer, intent(inout) :: labels(:)
+      type(stack_t), intent(inout) :: stack
+!
+! Follow edge during labeling connected components traversal.
+!
+      integer :: next_vertex
+
+      next_vertex = other_vertex_id(this, iedge, from_vertex)
+      ! Assert "idst" is selected as edges to unselected vertices should
+      ! have been unselected by "build_selection_masks"
+      if (.not. vmask(next_vertex)) error stop &
+          'graph_connected_components - selected edge has an unselected endpoint'
+      ! According to its label, a neighbor "idst" can be:
+      !   - unvisited selected vertex: assign current component and push to stack
+      !   - already assigned to this component: ignore
+      ! Other labels indicate an inconsistent graph traversal.
+      if (labels(next_vertex) == CONCOM_LABEL_INPROGRESS) then
+        labels(next_vertex) = lab_current
+        call stack%push(transfer(next_vertex,INTEGER_MOLD))
+      else if (labels(next_vertex) == lab_current) then
+        continue
+      else
+        error stop 'graph_connected_components -&
+            & neighbour belongs to another component (internal error)'
+      end if
+    end subroutine follow_edge
 
 
     ! -----------------------------
@@ -2115,7 +2175,7 @@ if (mod(id_s,5000)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvert
       ! Return labels if required by user
       if (present(labels)) call move_alloc(labels0, labels)
 
-      ! Clean-up (auto-deallocation did not work?)
+      ! Clean-up (posible compiler bug, auto-deallocation did not work)
       deallocate(pqueue_handles)
 
     end subroutine graph_mincut

@@ -51,7 +51,9 @@ module conts_mod
   contains
     procedure, private :: handle_eq, handle_write_formatted
     generic :: operator(==) => handle_eq
-    generic :: write(formatted) => handle_write_formatted
+    ! There may be a compiler error: with this on, the allocatable array of handle_t
+    ! does not deallocate automatically and must be deallocated manually.
+    !generic :: write(formatted) => handle_write_formatted
   end type
   interface handle_t
     module procedure handle_initialize

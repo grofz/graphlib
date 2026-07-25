@@ -102,7 +102,8 @@ goto 100
     ! label connected components
     print *, 'label con com'
     call g%remove_edge(cone_handles(4))
-    call g%connected_components(1, lab_count=lab_count, eselector=select_edge)
+    call g%connected_components( &
+        position_label=1, lab_count=lab_count, eselector=select_edge)
     print *, 'Label connected components ', lab_count
     call g%print(output_unit)
 
