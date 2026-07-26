@@ -73,6 +73,7 @@
       type(queue_t), private :: free_vhandles, free_ehandles
     contains
       procedure :: initialize => graph_initialize
+      procedure :: is_initialized => graph_is_initialized
       procedure :: add_vertex => graph_add_vertex
       procedure :: add_edge   => graph_add_edge
       procedure :: remove_vertex => graph_remove_vertex
@@ -749,6 +750,11 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
       integer :: i, j, v1, v2
       integer, allocatable :: ngbsid(:)
       character(len=:), allocatable :: str_graph_type
+
+      if (.not. this%is_initialized()) then
+        write(fid,'("Graph not initialized (WARNING)")')
+        return
+      end if
 
       if (this%is_directed_graph) then
         str_graph_type = 'Directed graph'

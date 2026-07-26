@@ -4,7 +4,7 @@
 
     ! Size of vertex/edge storage space
     integer, parameter :: VSIZE_IPAR = 3, VSIZE_RPAR = 7
-    integer, parameter :: ESIZE_IPAR = 1, ESIZE_RPAR = 2
+    integer, parameter :: ESIZE_IPAR = 1, ESIZE_RPAR = 3
 
     ! Maping of properties to the storeage space
     ! Vertex properties

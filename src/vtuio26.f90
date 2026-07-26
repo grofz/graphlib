@@ -124,6 +124,9 @@
       real(DP), allocatable :: rdata(:,:)
       integer, allocatable :: idata(:,:)
 
+      if (.not. graph%is_initialized()) error stop &
+          'vtuio_write - graph is not initialized'
+
       npoints = graph%nvertices
       ncells = graph%nedges
 
