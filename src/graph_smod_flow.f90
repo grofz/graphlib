@@ -784,8 +784,7 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       call graph_maxflow( &
           this, super_source, super_sink, position_capacity, flow, &
           position_mincutlabel=position_mincutlabel, &
-          position_flow=position_flow, &
-          vmask=vmask0, emask=emask0, vselector=vselector, eselector=eselector, &
+          position_flow=position_flow, vmask=vmask0, emask=emask0, &
           algorithm_maxflow=algorithm_maxflow)
 
       ! Remove added edges/vertices and assert number of objects did not change
