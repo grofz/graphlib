@@ -295,7 +295,7 @@
       integer :: algorithm_maxflow0
 
       ! Select algorithm - Edmond-Karp or Dinic
-      algorithm_maxflow0 = MAXFLOW_EDMOND_KARP ! default value
+      algorithm_maxflow0 = MAXFLOW_DINIC ! default value
       if (present(algorithm_maxflow)) algorithm_maxflow0 = algorithm_maxflow
 
       ! Set up working arrays
@@ -554,7 +554,7 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
 
         ! No more path from source to sink with non-zero capacity exists
         if (levels(sink_id)==MAP_NULL) exit MAIN
- print *, 'Dinic: Sink distance is ', levels(sink_id)
+print '("Dinic: Sink distance is ",i0," levels")', levels(sink_id)
 
         ! Initialize iterators for DFS
         do i = 1, this%nvertices
@@ -572,7 +572,7 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
           ! The flow can be augmented. How much flow can we send?
           call process_path(this, forward_capacity, backward_capacity, &
               source_id, sink_id, prev_edge, pair_edge, additional_flow, .false.)
-  print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
+print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
           ! Update capacity of the network
           call process_path(this, forward_capacity, backward_capacity, &
               source_id, sink_id, prev_edge, pair_edge, additional_flow, .true., &
@@ -626,6 +626,10 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
 ! OUTPUT
 !   prev_edge        - predecessor edge used to reach each visited vertex;
 !                      MAP_NULL for unvisited vertices and the source vertex
+!   levels           - (optional) distance (number of edges) from source:
+!                              0 - source vertex
+!                            > 0 - all rachable vertices - positive integer
+!                       MAP_NULL - all not reachable vertices
 !
       type(queue_t) :: q
       integer :: current_id, iedge, ngb_id
@@ -679,10 +683,6 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       ! Now it is possible use "prev_edge(target_id)" to see if path from
       ! source to target exists and back-track the path back to source.
       ! The source vertex remains MAP_NULL as it has no predecessor.
-      ! The optional levels array is
-      !   source vertex - 0
-      !   all rachable vertices - positive integer
-      !   all not reachable vertices - MAP_NULL
     end subroutine bfs_residual_search
 
 
@@ -701,8 +701,9 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       real(dp) :: capacity
       integer :: i
 
-      call s%initialize(chunksize=size(transfer(current_id,INTEGER_MOLD)))
+      ! Initialize prev_edge and an empty stack. Push source vertex to stack
       prev_edge = MAP_NULL
+      call s%initialize(chunksize=size(transfer(current_id,INTEGER_MOLD)))
       call s%push(transfer(source_id,INTEGER_MOLD))
 
       STACK_LOOP: do while (.not. s%empty())
@@ -714,9 +715,15 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
               iterators(current_id), iedge)
           ngb_id = other_vertex_id(this, iedge, current_id)
 
-          ! consider to follow in the direction of increasing level only
-          if (levels(ngb_id)>levels(current_id)) then
-            ! determine available capacity
+          ! Ignore neighbours on the same or lower BFS level. Any traversable
+          ! residual edge must connect consecutive levels.
+          !
+          ! TODO
+          ! In production version, this condition may become
+          ! "if (levels(ngb_id) == levels(current_id)+1) then"
+          ! to make it a bit faster and avoid following assertion
+          if (levels(ngb_id) > levels(current_id)) then
+            ! Determine available capacity of the "current--neighbour" edge
             if (ngb_id == get_index_from_handle(this,this%edges(iedge)%dst_handle)) then
               ! forward edge
               capacity = forward_capacity(iedge)
@@ -730,40 +737,48 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
               error stop 'dfs_dinic - should not reach this branch'
             end if
 
-            ! if path to ngb vertex has available capacity, mark which edge was
-            ! used to come-in
             if (capacity > 0.0_dp) then
+              ! Internal check that levels do not differ by more than one
+              ! as this would imply invalid BFS level identification.
+              if (.not. levels(ngb_id)==levels(current_id)+1) &
+                error stop 'dinic_dfs - following edge increses lebele by more than one (internal error)'
+              ! If the edge to the neighbour has free capacity, mark which
+              ! edge was used to come-in to neighbour, and then...
               prev_edge(ngb_id) = iedge
               if (ngb_id==sink_id) then
-                ! target found, we can exit
+                ! ... exit if target was reached, or...
                 exit STACK_LOOP
               else
-                ! add ngb to stack, and follow this vertex
+                ! ... push neighbour on stack, to be explored next.
                 call s%push(transfer(ngb_id,INTEGER_MOLD))
                 cycle STACK_LOOP
               end if
             end if
           end if
 
-          ! Path to the ngb vertex is blocked, try next neighbour
+          ! It is not possible to follow path to neighbour, try the next one.
           call this%vertices(current_id)%ngbs%advance(iterators(current_id))
+
         end do NGBS_LOOP
 
-        ! there are no more neighbours to follow, back-track
-
+        ! All neighbours of the current vertex were explored without reaching
+        ! targer. Pop current vertex from the stack, and advance iterator
+        ! of the previous vertex (to not explore current vertex again)
         current_id = transfer(s%pop(), current_id)
-
         if (.not. s%empty()) then
-          current_id = transfer(s%peek(), current_id)
-          if (this%vertices(current_id)%ngbs%has_next(iterators(current_id))) &
-            call this%vertices(current_id)%ngbs%advance(iterators(current_id))
+          associate (p=> transfer(s%peek(), current_id))
+            associate (ngbs_of_p=>this%vertices(p)%ngbs)
+              if (ngbs_of_p%has_next(iterators(p))) &
+                  call ngbs_of_p%advance(iterators(p))
+            end associate
+          end associate
         end if
 
       end do STACK_LOOP
+
       ! Now it is possible use "prev_edge(target_id)" to see if path from
       ! source to target exists and back-track the path back to source.
       ! The source vertex remains MAP_NULL as it has no predecessor.
-
     end subroutine dfs_dinic
 
 
