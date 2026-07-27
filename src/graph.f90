@@ -20,7 +20,8 @@
 
     ! Exported constants used by module procedures (graph_mincut)
     integer, parameter, public :: &
-        MINCUT_NOT_SELECTED=0, MINCUT_SET_S=1, MINCUT_SET_T=2
+        MINCUT_NOT_SELECTED=0, MINCUT_SET_S=1, MINCUT_SET_T=2, &
+        MAXFLOW_EDMOND_KARP=10, MAXFLOW_DINIC=20
 
     ! Named local constants
     integer, parameter :: DEFAULT_ECAPACITY = 10, DEFAULT_VCAPACITY = 5
@@ -85,6 +86,7 @@
       procedure :: connected_components => graph_connected_components
       procedure :: shortest_path => graph_shortest_path
       procedure :: maxflow => graph_maxflow
+      procedure :: maxflow_multiple => graph_maxflow_multiple
       procedure :: betweenness => graph_betweenness
       procedure :: mincut => graph_mincut
       procedure :: build_selection_masks => graph_build_selection_masks
@@ -115,11 +117,11 @@
 
 
     interface ! submodules
- 
+
 ! -------------------------------
 ! graph_smod_centrality.f90
 ! -------------------------------
- 
+
       module subroutine graph_betweenness(this, position_cost, position_eb, &
           position_vb, is_normalized, vselector, eselector, vmask, emask)
         class(graph_t), intent(inout) :: this
@@ -144,11 +146,12 @@
 !  vertices.
 !
       end subroutine graph_betweenness
- 
-! -------------------      
+
+
+! -------------------
 ! graph_smod_flow.f90
-! -------------------      
- 
+! -------------------
+
       module subroutine graph_mincut(this, position_weight, mincut, labels, &
           s_list, t_list, vmask, emask, vselector, eselector)
         class(graph_t), intent(in) :: this
@@ -199,7 +202,79 @@
 !   s_list          - optional handles of vertices belonging to subset S
 !   t_list          - optional handles of vertices belonging to subset T
 !
-      end subroutine
+      end subroutine graph_mincut
+
+
+      module subroutine graph_maxflow(this, source, sink, position_capacity, &
+          flow, position_mincutlabel, position_flow, &
+          vmask, emask, vselector, eselector, algorithm_maxflow)
+        class(graph_t), intent(inout) :: this
+        type(handle_t), intent(in) :: source, sink
+        integer, intent(in) :: position_capacity
+        real(dp), intent(out) :: flow
+        integer, intent(in), optional :: position_mincutlabel
+        integer, intent(in), optional :: position_flow
+        logical, intent(in), optional :: vmask(:), emask(:)
+        procedure(is_vertex_selected), optional :: vselector
+        procedure(is_edge_selected), optional :: eselector
+        integer, intent(in), optional :: algorithm_maxflow
+!
+! Maximum flow from the source to sink.
+!
+! For directed graphs, temporary reverse edges are added internally to
+! represent the residual network. These edges are removed before the
+! routine returns.
+!
+! INPUT
+!   this              - the graph (vertex/edge data updated)
+!   source            - handle to the source vertex
+!   sink              - handle to the sink vertex
+!   position_capacity - "edges/rpar" array item giving the edge capacity
+!   vselector         - user function to select open verices (OPTIONAL)
+!   eselector         - user function to select open edges (OPTIONAL)
+!   algorithm_maxflow - which algorithm to use:
+!                         MAXFLOW_EDMOND_KARP, or
+!                         MAXFLOW_DINIC
+!
+! OUTPUT
+!   flow                 - the maximum flow from source to sink
+!   position_mincutlabel - (OPTIONAL) partition the graph's vertices into two
+!                          disjoint subsets that minimizes the total capacity
+!                          of edges connecting the two subsets.
+!                          "vertices/ipar" array item is labeled as
+!                            0 - no flow through vertex (closed vertex)
+!                            1 - source connected subset
+!                            2 - sink connected subset
+!                            3 - disconnected (open, but not accessible from
+!                                the source vertex
+!   position_flow        - (OPTIONAL)"edges/rpar" array item to save flow along
+!                          the edge
+!
+! Output array items are updated for all graph objects.
+!
+      end subroutine graph_maxflow
+
+
+      module subroutine graph_maxflow_multiple(this, sources, sinks, &
+          position_capacity, flow, position_mincutlabel, position_flow, &
+          vmask, emask, vselector, eselector, algorithm_maxflow)
+        class(graph_t), intent(inout) :: this
+        type(handle_t), intent(in) :: sources(:), sinks(:)
+        integer, intent(in) :: position_capacity
+        real(dp), intent(out) :: flow
+        integer, intent(in), optional :: position_mincutlabel
+        integer, intent(in), optional :: position_flow
+        logical, intent(in), optional :: vmask(:), emask(:)
+        procedure(is_vertex_selected), optional :: vselector
+        procedure(is_edge_selected), optional :: eselector
+        integer, intent(in), optional :: algorithm_maxflow
+!
+! Maximum flow using multiple sources and sinks
+!
+!   algorithm_maxflow - which algorithm to use:
+!                         MAXFLOW_EDMOND_KARP, or
+!                         MAXFLOW_DINIC
+      end subroutine graph_maxflow_multiple
 
     end interface ! submodules
 
@@ -1255,571 +1330,6 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
 
     end subroutine graph_shortest_path
 
-
-    ! ---------------------------------------
-    ! Edmonds-Karp algorithm for maximum flow
-    ! ---------------------------------------
-    subroutine graph_maxflow(this, source, sink, position_capacity, flow, &
-        position_mincutlabel, position_flow, vselector, eselector, vmask, emask)
-      class(graph_t), intent(inout) :: this
-      type(handle_t), intent(in) :: source, sink
-      integer, intent(in) :: position_capacity
-      real(dp), intent(out) :: flow
-      integer, intent(in), optional :: position_mincutlabel
-      integer, intent(in), optional :: position_flow
-      procedure(is_vertex_selected), optional :: vselector
-      procedure(is_edge_selected), optional :: eselector
-      logical, intent(in), optional :: vmask(:), emask(:)
-!
-! Maximum flow from the source to sink.
-!
-! For directed graphs, temporary reverse edges are added internally to
-! represent the residual network. These edges are removed before the
-! routine returns.
-!
-! INPUT
-!   this              - the graph (vertex/edge data updated)
-!   source            - handle to the source vertex
-!   sink              - handle to the sink vertex
-!   position_capacity - "edges/rpar" array item giving the edge capacity
-!   vselector         - user function to select open verices (OPTIONAL)
-!   eselector         - user function to select open edges (OPTIONAL)
-!
-! OUTPUT
-!   flow                 - the maximum flow from source to sink
-!   position_mincutlabel - (OPTIONAL) partition the graph's vertices into two
-!                          disjoint subsets that minimizes the total capacity
-!                          of edges connecting the two subsets.
-!                          "vertices/ipar" array item is labeled as
-!                            0 - no flow through vertex (closed vertex)
-!                            1 - source connected subset
-!                            2 - sink connected subset
-!                            3 - disconnected (open, but not accessible from
-!                                the source vertex
-!   position_flow        - (OPTIONAL)"edges/rpar" array item to save flow along
-!                          the edge
-!
-! Output array items are updated for all graph objects.
-!
-      integer, parameter :: &
-        CLOSED=0, SOURCE_REACHABLE=1, SINK_REACHABLE=2, DISCONNECTED=3
-      integer, parameter :: NOT_DISCONNECTED=-1
-      real(dp), allocatable :: forward_capacity(:), backward_capacity(:)
-      integer, allocatable :: prev_edge(:), pair_edge(:)
-      integer :: source_id, sink_id
-      real(dp) :: additional_flow
-      type(stack_t) :: added_edges
-      logical, allocatable :: vmask0(:), emask0(:)
-
-      ! Set up working arrays
-      allocate(forward_capacity(this%nedges), backward_capacity(this%nedges))
-        ! Remaining capacity for forward and backward flow, backward_capacity
-        ! is used for undirected graphs only. For directed graphs reverse
-        ! edges are temporarily added to the graph.
-      allocate(prev_edge(this%nvertices))
-        ! Keep track to the incoming edge id.
-
-      ! Select open edges and vertices
-      call graph_build_selection_masks(this, vmask0, emask0, &
-        vselector=vselector, eselector=eselector, vmask_provided=vmask, &
-        emask_provided=emask)
-
-      block
-        ! Capacity of all open edges (and edges connecting open vertices) is set
-        ! to their capacity given in "edges/rpar" array.
-        ! Capacity of closed edges set to zero (to disabling them)
-        integer :: i, ia, ib
-        do i=1, this%nedges
-          forward_capacity(i) = 0.0_dp
-          backward_capacity(i) = 0.0_dp
-          if (emask0(i)) then
-            ! these checks are being done in "build_selection_masks" and can be
-            ! removed after testing TODO
-            ia = get_index_from_handle(this, this%edges(i)%src_handle)
-            ib = get_index_from_handle(this, this%edges(i)%dst_handle)
-            ! orphaned edge
-            if (ia==MAP_NULL .or. ib==MAP_NULL) then
-              error stop 'graph_maxflow - selected edge has missing end-point'
-              cycle
-            end if
-            ! edge with closed end-points
-            if (.not. (vmask0(ia) .and. vmask0(ib))) then
-              error stop 'graph_maxflow - selected edge has closed end-points'
-              cycle
-            end if
-
-            ! edge is open and both end-points are also open
-            forward_capacity(i) = this%edges(i)%rpar(position_capacity)
-            backward_capacity(i) = forward_capacity(i)
-          end if
-        end do
-
-        ! Verify sink and source vertices exist and are open
-        source_id = get_index_from_handle(this, source)
-        sink_id = get_index_from_handle(this, sink)
-        if (source_id==MAP_NULL .or. sink_id==MAP_NULL) then
-          error stop 'graph_max_flow - source/sink not found in graph'
-        else if (source%handle_type/=VERTEX_HANDLE_TYPE .or. sink%handle_type/=VERTEX_HANDLE_TYPE) then
-          error stop 'graph_max_flow - source/sink handles of unexpected type'
-        else if (.not. vmask0(source_id)) then
-          error stop 'graph_max_flow - source is not open'
-        else if (.not. vmask0(sink_id)) then
-          error stop 'graph_max_flow - sink is not open'
-        else
-          ! all assertions are ok
-          continue
-        end if
-      end block
-
-      ! Stack to store handles to temporarily added reverse edges.
-      ! Used for directed graphs only.
-      block
-        type(handle_t) :: edge
-        call added_edges%initialize(chunksize=size(transfer(edge,INTEGER_MOLD)))
-      end block
-
-      ! For directed graphs, reverse edges are added to the graph. This means
-      ! that "forward_capacity" will be reallocated, "backward_capacity" will no
-      ! longer be needed. Reference "pair_edge" will be used instead.
-      if (this%is_directed_graph) then
-        block
-          type(handle_t) :: edge
-          integer :: nreverse_edges, i, ireverse
-          real(dp), allocatable :: tmp_forward_capacity(:)
-
-          ! Count edges with non-zero capacity
-          nreverse_edges = count(forward_capacity > 0.0_dp)
-
-          ! For each non-zero capacity edge, a reverse edge is added
-          allocate(tmp_forward_capacity(this%nedges+nreverse_edges), source=0.0_dp)
-          allocate(pair_edge(this%nedges+nreverse_edges))
-
-          ! Initialise pair_edge with self-pairs. Edges without an explicitly
-          ! added residual reverse edge keep this mapping.
-          do i=1,this%nedges
-            pair_edge(i) = i
-          end do
-
-          ! Add temporary reverse edges for edges with non-zero capacity.
-          do i=1,this%nedges
-            if (.not. (forward_capacity(i)>0.0_dp)) cycle
-            associate(e=>this%edges(i))
-              edge = this%add_edge(e%dst_handle, e%src_handle, e%ipar, e%rpar)
-            end associate
-            ireverse = get_index_from_handle(this, edge)
-            call added_edges%push(transfer(edge,INTEGER_MOLD))
-            pair_edge(i) = ireverse
-            pair_edge(ireverse) = i
-            ! The capacity of reverse edges is initially set to zero as
-            ! required by the algorithm.
-            tmp_forward_capacity(i) = forward_capacity(i)
-            tmp_forward_capacity(ireverse) = 0.0_dp
-          end do
-          call move_alloc(tmp_forward_capacity, forward_capacity)
-          deallocate(backward_capacity)
-          allocate(backward_capacity(0)) ! assert not be used later accidentaly
-        end block
-      else
-        allocate(pair_edge(0)) ! array not needed for undirected graphs
-      end if
-
-      ! Make a complete BFS traversal to identify disocnnected vertices
-      if (present(position_mincutlabel)) then
-        block
-          integer :: i
-          call bfs_residual_search(this, forward_capacity, backward_capacity, &
-              source_id, 0, prev_edge)
-          do i=1,this%nvertices
-            associate(label=>this%vertices(i)%ipar(position_mincutlabel))
-              ! the labels are just temporary, will be relabeled later
-              if (prev_edge(i)==MAP_NULL .and. i/=source_id) then
-                ! this vertex could not be reached from source
-                label = DISCONNECTED
-              else
-                label = NOT_DISCONNECTED
-              end if
-            end associate
-          end do
-        end block
-      end if
-
-      ! Initialize flow along edges (if required by user)
-      if (present(position_flow)) then
-        this%edges(1:this%nedges)%rpar(position_flow) = 0.0_dp
-      end if
-
-      ! The main loop of Edmonds-Karp
-      ! Augment flow as long as path with non-zero capacity exists
-      flow = 0.0_dp
-      do
-        ! Find shortest path using edges with non-zero remaining capacity
-        call bfs_residual_search(this, forward_capacity, backward_capacity, &
-            source_id, sink_id, prev_edge)
-        if (prev_edge(sink_id)==MAP_NULL) exit
-        ! The flow can be augmented. How much flow can we send?
-        call process_path(this, forward_capacity, backward_capacity, &
-            source_id, sink_id, prev_edge, pair_edge, additional_flow, .false.)
-print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
-        ! Update capacity of the network
-        call process_path(this, forward_capacity, backward_capacity, &
-            source_id, sink_id, prev_edge, pair_edge, additional_flow, .true., &
-            position_flow)
-        flow = flow + additional_flow
-      end do
-
-      ! Make minimum cut partition (if required by user)
-      if (present(position_mincutlabel)) then
-        block
-          integer :: i
-
-          ! unlimited traversal from the source
-          call bfs_residual_search(this, forward_capacity, backward_capacity, &
-              source_id, 0, prev_edge)
-
-          do i=1,this%nvertices
-            associate(label=>this%vertices(i)%ipar(position_mincutlabel))
-              if (.not. vmask0(i)) then
-                label = CLOSED
-              else if (i==source_id) then
-                label = SOURCE_REACHABLE
-              else if (prev_edge(i)/=MAP_NULL) then
-                label = SOURCE_REACHABLE
-              else if (LABEL==DISCONNECTED) then
-                ! open, could not be reached from source initially
-                ! keep this label
-                continue
-              else
-                ! open, reachable from the source initially, but unreachable
-                ! in the residual network
-                label = SINK_REACHABLE
-              end if
-            end associate
-          end do
-        end block
-      end if
-
-      ! Remove reverse edges added for directed graph
-      block
-        type(handle_t) :: edge
-        do while(.not. added_edges%empty())
-          edge = transfer(added_edges%pop(), edge)
-          call this%remove_edge(edge)
-        end do
-      end block
-
-    end subroutine graph_maxflow
-
-
-    subroutine bfs_residual_search(this, forward_capacity, backward_capacity, &
-        source_id, target_id, prev_edge)
-      class(graph_t), intent(in) :: this
-      real(dp), intent(in) :: forward_capacity(:), backward_capacity(:)
-      integer, intent(in) :: source_id, target_id
-      integer, intent(out) :: prev_edge(:)
-!
-! Breadth-first search of a residual network.
-!
-! Starting from "source_id", traverse edges with positive residual capacity
-! and store the predecessor edge of each visited vertex in "prev_edge".
-! If "target_id" is a valid vertex index, traversal stops after the target is
-! reached. If "target_id" is non-positive, the complete reachable component
-! is explored.
-!
-! The routine is used both for Edmonds-Karp augmenting path search and
-! residual graph reachability analysis.
-!
-! Residual edge traversal:
-!
-!   Undirected graphs:
-!     Traversing SRC -> DST uses forward_capacity.
-!     Traversing DST -> SRC uses backward_capacity.
-!
-!   Directed graphs:
-!     backward_capacity is not used.
-!
-! INPUT
-!   this             - graph structure
-!   forward_capacity - residual capacity in the forward direction
-!   backward_capacity- residual capacity in the backward direction
-!   source_id        - index of the starting vertex
-!   target_id        - optional stopping vertex; non-positive value means
-!                      unrestricted traversal
-! OUTPUT
-!   prev_edge        - predecessor edge used to reach each visited vertex;
-!                      MAP_NULL for unvisited vertices and the source vertex
-!
-      type(queue_t) :: q
-      integer :: current_id, iedge, ngb_id
-      type(iterator_t) :: iterator
-
-      call q%initialize(chunksize=size(transfer(current_id,INTEGER_MOLD)))
-      call q%enqueue(transfer(source_id,INTEGER_MOLD))
-      prev_edge = MAP_NULL
-
-      do while(.not. q%empty())
-        if (target_id > 0) then
-          if (prev_edge(target_id)/=MAP_NULL) exit
-        end if
-        current_id = transfer(q%dequeue(), current_id)
-        iterator = iterator_t()
-        NGBS_LOOP: do while (this%vertices(current_id)%ngbs%has_next(iterator))
-          call this%vertices(current_id)%ngbs%next(iterator, iedge)
-          ngb_id = other_vertex_id(this, iedge, current_id)
-
-          ! Skip edges with zero capacity
-          if (ngb_id == get_index_from_handle(this,this%edges(iedge)%dst_handle)) then
-            ! forward edge
-            if (forward_capacity(iedge)<=0.0_dp) cycle
-          else if (ngb_id == get_index_from_handle(this,this%edges(iedge)%src_handle)) then
-            ! backward edge
-            ! no backward edge can appear in directed graph
-            if (this%is_directed_graph) error stop &
-                'bfs_shortest_path - assertion for directed graph fails'
-            if (backward_capacity(iedge)<=0.0_dp) cycle
-          else
-            error stop 'bfs_shortest_path - should not reach this branch'
-          end if
-
-          ! Skip edges going back to already traversed vertices
-          if (ngb_id==source_id .or. prev_edge(ngb_id)/=MAP_NULL) cycle
-
-          ! Add next node to the queue, mark which edge was used to come-in
-          prev_edge(ngb_id) = iedge
-          call q%enqueue(transfer(ngb_id,INTEGER_MOLD))
-        end do NGBS_LOOP
-      end do
-      ! Now it is possible use "prev_edge(target_id)" to see if path from
-      ! source to target exists and back-track the path back to source.
-      ! The source vertex remains MAP_NULL as it has no predecessor.
-    end subroutine bfs_residual_search
-
-
-    subroutine process_path(this, forward_capacity, backward_capacity, &
-        source_id, sink_id, prev_edge, pair_edge, additional_flow, &
-        updating_flow, position_flow)
-      class(graph_t), intent(inout) :: this
-      real(dp), intent(inout) :: forward_capacity(:), backward_capacity(:)
-      integer, intent(in) :: source_id, sink_id, prev_edge(:), pair_edge(:)
-      real(dp), intent(inout) :: additional_flow
-      logical, intent(in) :: updating_flow
-      integer, intent(in), optional :: position_flow
-!
-! Back-track the path from sink to source and:
-!  - find the bottleneck remaining capacity if "updating_flow==.false.",
-!    or
-!  - update remaining capacity along the path if "updating_flow==.true.".
-!
-      real(dp) :: capacity
-      integer :: current_id, next_id
-      logical :: is_forward_edge
-
-      if (present(position_flow) .and. .not. updating_flow) &
-          error stop 'position_flow argument can be given in update mode only'
-
-      if (.not. updating_flow) additional_flow = huge(additional_flow)
-
-      current_id = sink_id
-      do while (prev_edge(current_id) /= MAP_NULL)
-        next_id = other_vertex_id(this, prev_edge(current_id), current_id)
-
-        if (next_id == get_index_from_handle(this,this%edges(prev_edge(current_id))%src_handle)) then
-          is_forward_edge = .true.
-          capacity = forward_capacity(prev_edge(current_id))
-        else if (next_id == get_index_from_handle(this,this%edges(prev_edge(current_id))%dst_handle)) then
-          ! backward edge
-          ! no backward edge can appear in directed graph
-          if (this%is_directed_graph) error stop &
-              'process_path - assertion for directed graph fails'
-          is_forward_edge = .false.
-          capacity = backward_capacity(prev_edge(current_id))
-        else
-          error stop 'process_path - should not reach this branch'
-        end if
-
-        if (updating_flow) then
-          ! Update capaciry mode
-          if (this%is_directed_graph) then
-            associate (fcap=>forward_capacity(prev_edge(current_id)), &
-                bcap=>forward_capacity( pair_edge(prev_edge(current_id)) ) )
-              fcap = fcap - additional_flow
-              bcap = bcap + additional_flow
-            end associate
-            if (present(position_flow)) then
-              associate (f=>this%edges(prev_edge(current_id))%rpar(position_flow), &
-                  b=>this%edges(pair_edge(prev_edge(current_id)))%rpar(position_flow))
-                f = f + additional_flow
-                b = b - additional_flow
-              end associate
-            end if
-          else
-            ! undirected graph
-            associate (fcap=>forward_capacity(prev_edge(current_id)), &
-                bcap=>backward_capacity(prev_edge(current_id)))
-              if (is_forward_edge) then
-                fcap = fcap - additional_flow
-                bcap = bcap + additional_flow
-              else
-                fcap = fcap + additional_flow
-                bcap = bcap - additional_flow
-              end if
-            end associate
-            if (present(position_flow)) then
-              associate (f=>this%edges(prev_edge(current_id))%rpar(position_flow))
-                if (is_forward_edge) then
-                  f = f + additional_flow
-                else
-                  f = f - additional_flow
-                end if
-              end associate
-            end if
-          end if
-        else
-          ! Looking for the bottleneck mode
-          if (capacity < additional_flow) additional_flow = capacity
-        end if
-
-        current_id = next_id
-      end do
-
-      ! verify source reached
-      if (current_id /= source_id) error stop &
-          'process_path - could not reach source'
-    end subroutine process_path
-
-
-    subroutine graph_maxflow_multiple(this, sources, sinks, &
-        position_capacity, flow, position_mincutlabel, position_flow, &
-        vmask, emask, vselector, eselector)
-      class(graph_t), intent(inout) :: this
-      type(handle_t), intent(in) :: sources(:), sinks(:)
-      integer, intent(in) :: position_capacity
-      real(dp), intent(out) :: flow
-      integer, intent(in), optional :: position_mincutlabel
-      integer, intent(in), optional :: position_flow
-      logical, intent(in), optional :: vmask(:), emask(:)
-      procedure(is_vertex_selected), optional :: vselector
-      procedure(is_edge_selected), optional :: eselector
-!
-! Maximum flow using multiple sources and sinks
-!
-      type(handle_t) :: super_source, super_sink, edge
-      type(stack_t) :: added_edges
-      integer :: nvertices0, nedges0
-      real(dp) :: total_capacity
-      logical, allocatable :: vmask0(:), emask0(:)
-
-      ! Verify the source and sink lists:
-      ! - at least one source and one sink are present
-      ! - all handles are of VERTEX_HANDLE_TYPE
-      ! - all handles are valid and unique
-      block
-        integer, allocatable :: listed_count(:)
-        integer :: i, iv
-
-        if (size(sources)<1 .or. size(sinks)<1) error stop &
-            'graph_maxflow_multiple - zero source/sink vertices'
-
-        if (any(sources%handle_type /= VERTEX_HANDLE_TYPE) .or. &
-            any(sinks%handle_type /= VERTEX_HANDLE_TYPE)) error stop &
-            'graph_maxflow_multiple - all source and sink handles must be vertices'
-
-        allocate(listed_count(this%nvertices), source=0)
-        do i=1, size(sources)
-          iv = get_index_from_handle(this, sources(i))
-          if (iv==MAP_NULL) error stop &
-              'graph_maxflow_multiple - a source handle not found in graph'
-          listed_count(iv) = listed_count(iv)+1
-        end do
-        do i=1, size(sinks)
-          iv = get_index_from_handle(this, sinks(i))
-          if (iv==MAP_NULL) error stop &
-              'graph_maxflow_multiple - a sink handle not found in graph'
-          listed_count(iv) = listed_count(iv)+1
-        end do
-        if (any(listed_count>1)) error stop &
-          'graph_maxflow_multiple - source/sink verticies must be unique'
-      end block
-
-      ! Save number of objects for assertion at the end
-      nvertices0 = this%nvertices
-      nedges0 = this%nedges
-
-      ! Select open edges and vertices
-      call graph_build_selection_masks(this, vmask0, emask0, &
-          vselector=vselector, eselector=eselector, &
-          vmask_provided=vmask, emask_provided=emask)
-
-      ! Sum the capacity over all open edges to be used as the
-      ! capacity of added edges connecting super nodes.
-      total_capacity = &
-          sum(this%edges(1:this%nedges)%rpar(position_capacity),mask=emask0)
-
-      ! Add super-source and super-sink and connect them to sources and sinks.
-      block
-        integer :: v_ipar(VSIZE_IPAR), e_ipar(ESIZE_IPAR), i
-        integer :: nopen_sources, nopen_sinks
-        real(dp) :: v_rpar(VSIZE_RPAR), e_rpar(ESIZE_RPAR)
-
-        v_ipar = 0
-        v_rpar = 0.0_dp
-        e_ipar = 0
-        e_rpar = 0.0_dp
-        e_rpar(position_capacity) = total_capacity
-        super_source = this%add_vertex(v_ipar, v_rpar)
-        super_sink = this%add_vertex(v_ipar, v_rpar)
-        call added_edges%initialize(chunksize=size(transfer(edge,INTEGER_MOLD)))
-        nopen_sources = 0
-        do i=1, size(sources)
-          ! if source is closed, do not add the connection
-          if (.not. vmask0(get_index_from_handle(this, sources(i)))) cycle
-          edge = this%add_edge(super_source, sources(i), e_ipar, e_rpar)
-          call added_edges%push(transfer(edge,INTEGER_MOLD))
-          nopen_sources = nopen_sources+1
-        end do
-        nopen_sinks = 0
-        do i=1, size(sinks)
-          ! if sink is closed, do not add the connection
-          if (.not. vmask0(get_index_from_handle(this, sinks(i)))) cycle
-          edge = this%add_edge(sinks(i), super_sink, e_ipar, e_rpar)
-          call added_edges%push(transfer(edge,INTEGER_MOLD))
-          nopen_sinks = nopen_sinks+1
-        end do
-
-        if (nopen_sinks==0 .or. nopen_sources==0) &
-          print '("maxflow_multiple WARNING - zero flow as all sources or sinks closed")'
-      end block
-
-      ! Extend masks to include super-source, super-sink and
-      ! their connecting edges.
-      block
-        logical, allocatable :: vmask_tmp(:), emask_tmp(:)
-        allocate(vmask_tmp(size(vmask0)+2), source=.true.)
-        allocate(emask_tmp(size(emask0)+added_edges%size()), source=.true.)
-        vmask_tmp(1:size(vmask0)) = vmask0
-        emask_tmp(1:size(emask0)) = emask0
-        call move_alloc(vmask_tmp, vmask0)
-        call move_alloc(emask_tmp, emask0)
-      end block
-
-      ! Max-flow
-      call graph_maxflow( &
-          this, super_source, super_sink, position_capacity, flow, &
-          position_mincutlabel=position_mincutlabel, &
-          position_flow=position_flow, &
-          vmask=vmask0, emask=emask0)
-
-      ! Remove added edges/vertices and assert number of objects did not change
-      do while (.not. added_edges%empty())
-        call this%remove_edge(transfer(added_edges%pop(),edge))
-      end do
-      call this%remove_vertex(super_sink)
-      call this%remove_vertex(super_source)
-      if (this%nvertices/=nvertices0) error stop &
-          'graph_maxflow_multiple - number of vertices changed (internal error)'
-      if (this%nedges/=nedges0) error stop &
-          'graph_maxflow_multiple - number of edges changed (internal error)'
-
-    end subroutine graph_maxflow_multiple
 
 
     ! ----------------------
