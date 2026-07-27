@@ -290,7 +290,6 @@
       real(dp), allocatable :: forward_capacity(:), backward_capacity(:)
       integer, allocatable :: prev_edge(:), pair_edge(:)
       integer :: source_id, sink_id
-      real(dp) :: additional_flow
       type(stack_t) :: added_edges
       logical, allocatable :: vmask0(:), emask0(:)
       integer :: algorithm_maxflow0
@@ -436,24 +435,17 @@
         this%edges(1:this%nedges)%rpar(position_flow) = 0.0_dp
       end if
 
-      ! The main loop of Edmonds-Karp
-      ! Augment flow as long as path with non-zero capacity exists
-      flow = 0.0_dp
-      do
-        ! Find shortest path using edges with non-zero remaining capacity
-        call bfs_residual_search(this, forward_capacity, backward_capacity, &
-            source_id, sink_id, prev_edge)
-        if (prev_edge(sink_id)==MAP_NULL) exit
-        ! The flow can be augmented. How much flow can we send?
-        call process_path(this, forward_capacity, backward_capacity, &
-            source_id, sink_id, prev_edge, pair_edge, additional_flow, .false.)
-print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
-        ! Update capacity of the network
-        call process_path(this, forward_capacity, backward_capacity, &
-            source_id, sink_id, prev_edge, pair_edge, additional_flow, .true., &
-            position_flow)
-        flow = flow + additional_flow
-      end do
+      ! The core of the algorithm
+      select case(algorithm_maxflow0)
+      case(MAXFLOW_EDMOND_KARP)
+        call edmond_karp_loop(this, forward_capacity, backward_capacity, &
+            source_id, sink_id, prev_edge, pair_edge, flow, position_flow)
+      case(MAXFLOW_DINIC)
+        call dinic_loop(this, forward_capacity, backward_capacity, &
+            source_id, sink_id, prev_edge, pair_edge, flow, position_flow)
+      case default
+        error stop 'graph_maxflow - invalid algorihm id'
+      end select
 
       ! Make minimum cut partition (if required by user)
       if (present(position_mincutlabel)) then
@@ -498,12 +490,111 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
     end procedure graph_maxflow
 
 
+    subroutine edmond_karp_loop(this, forward_capacity, backward_capacity, &
+        source_id, sink_id, prev_edge, pair_edge, flow, position_flow)
+      class(graph_t), intent(inout) :: this
+      real(dp), intent(inout) :: forward_capacity(:), backward_capacity(:)
+      integer, intent(in) :: source_id, sink_id, pair_edge(:)
+      integer, intent(inout) :: prev_edge(:)
+      real(dp), intent(out) :: flow
+      integer, intent(in), optional :: position_flow
+!
+! The main loop of Edmonds-Karp
+! Augment flow as long as path with non-zero capacity exists
+!
+      real(dp) :: additional_flow
+
+      flow = 0.0_dp
+      do
+        ! Find shortest path using edges with non-zero remaining capacity
+        call bfs_residual_search(this, forward_capacity, backward_capacity, &
+            source_id, sink_id, prev_edge)
+        if (prev_edge(sink_id)==MAP_NULL) exit
+        ! The flow can be augmented. How much flow can we send?
+        call process_path(this, forward_capacity, backward_capacity, &
+            source_id, sink_id, prev_edge, pair_edge, additional_flow, .false.)
+print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
+        ! Update capacity of the network
+        call process_path(this, forward_capacity, backward_capacity, &
+            source_id, sink_id, prev_edge, pair_edge, additional_flow, .true., &
+            position_flow)
+        flow = flow + additional_flow
+      end do
+    end subroutine edmond_karp_loop
+
+
+    subroutine dinic_loop(this, forward_capacity, backward_capacity, &
+        source_id, sink_id, prev_edge, pair_edge, flow, position_flow)
+      class(graph_t), intent(inout) :: this
+      real(dp), intent(inout) :: forward_capacity(:), backward_capacity(:)
+      integer, intent(in) :: source_id, sink_id, pair_edge(:)
+      integer, intent(inout) :: prev_edge(:)
+      real(dp), intent(out) :: flow
+      integer, intent(in), optional :: position_flow
+!
+! The main loop of Dinic's algorithm
+! Augment flow as long as path with non-zero capacity exists
+!
+      real(dp) :: additional_flow
+      integer, allocatable :: levels(:)
+      integer :: i
+      type(iterator_t), allocatable :: iterators(:)
+
+      ! How many edges from the source vertex in the residual graph
+      allocate(levels(this%nvertices))
+
+      ! To save what branches were already explored
+      allocate(iterators(this%nvertices))
+
+      flow = 0.0_dp
+      MAIN: do
+        ! Update level by a complete BFS traversal from the source
+        call bfs_residual_search(this, forward_capacity, backward_capacity, &
+            source_id, 0, prev_edge, levels)
+
+        ! No more path from source to sink with non-zero capacity exists
+        if (levels(sink_id)==MAP_NULL) exit MAIN
+ print *, 'Dinic: Sink distance is ', levels(sink_id)
+
+        ! Initialize iterators for DFS
+        do i = 1, this%nvertices
+          iterators(i) = iterator_t()
+        end do
+
+        DFSLOOP: do
+          ! Find shortest path using edges with non-zero remaining capacity
+          call dfs_dinic(this, levels, forward_capacity, backward_capacity, &
+              source_id, sink_id, prev_edge, iterators)
+
+          ! No more path exists with the current levels
+          if (prev_edge(sink_id)==MAP_NULL) exit DFSLOOP
+
+          ! The flow can be augmented. How much flow can we send?
+          call process_path(this, forward_capacity, backward_capacity, &
+              source_id, sink_id, prev_edge, pair_edge, additional_flow, .false.)
+  print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
+          ! Update capacity of the network
+          call process_path(this, forward_capacity, backward_capacity, &
+              source_id, sink_id, prev_edge, pair_edge, additional_flow, .true., &
+              position_flow)
+          flow = flow + additional_flow
+        end do DFSLOOP
+
+      end do MAIN
+
+      ! Explicitly deallocate array of iterator_t
+      deallocate(iterators)
+
+    end subroutine dinic_loop
+
+
     subroutine bfs_residual_search(this, forward_capacity, backward_capacity, &
-        source_id, target_id, prev_edge)
+        source_id, target_id, prev_edge, levels)
       class(graph_t), intent(in) :: this
       real(dp), intent(in) :: forward_capacity(:), backward_capacity(:)
       integer, intent(in) :: source_id, target_id
       integer, intent(out) :: prev_edge(:)
+      integer, intent(out), optional :: levels(:)
 !
 ! Breadth-first search of a residual network.
 !
@@ -543,6 +634,10 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       call q%initialize(chunksize=size(transfer(current_id,INTEGER_MOLD)))
       call q%enqueue(transfer(source_id,INTEGER_MOLD))
       prev_edge = MAP_NULL
+      if (present(levels)) then
+        levels = MAP_NULL
+        levels(source_id) = 0
+      end if
 
       do while(.not. q%empty())
         if (target_id > 0) then
@@ -574,12 +669,102 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
           ! Add next node to the queue, mark which edge was used to come-in
           prev_edge(ngb_id) = iedge
           call q%enqueue(transfer(ngb_id,INTEGER_MOLD))
+
+          ! Save the distance from source
+          if (present(levels)) then
+            levels(ngb_id) = levels(current_id) + 1
+          end if
         end do NGBS_LOOP
       end do
       ! Now it is possible use "prev_edge(target_id)" to see if path from
       ! source to target exists and back-track the path back to source.
       ! The source vertex remains MAP_NULL as it has no predecessor.
+      ! The optional levels array is
+      !   source vertex - 0
+      !   all rachable vertices - positive integer
+      !   all not reachable vertices - MAP_NULL
     end subroutine bfs_residual_search
+
+
+    subroutine dfs_dinic(this, levels, forward_capacity, backward_capacity, &
+              source_id, sink_id, prev_edge, iterators)
+      class(graph_t), intent(in) :: this
+      integer, intent(in) :: levels(:), source_id, sink_id
+      real(dp), intent(in) :: forward_capacity(:), backward_capacity(:)
+      integer, intent(out) :: prev_edge(:)
+      type(iterator_t), intent(inout) :: iterators(:)
+!
+! DFS for Dinic's algorithm
+!
+      type(stack_t) :: s
+      integer :: current_id, iedge, ngb_id
+      real(dp) :: capacity
+      integer :: i
+
+      call s%initialize(chunksize=size(transfer(current_id,INTEGER_MOLD)))
+      prev_edge = MAP_NULL
+      call s%push(transfer(source_id,INTEGER_MOLD))
+
+      STACK_LOOP: do while (.not. s%empty())
+        current_id = transfer(s%peek(), current_id)
+
+        NGBS_LOOP: do while (this%vertices(current_id)%ngbs%has_next( &
+            iterators(current_id)))
+          call this%vertices(current_id)%ngbs%next_noadvance( &
+              iterators(current_id), iedge)
+          ngb_id = other_vertex_id(this, iedge, current_id)
+
+          ! consider to follow in the direction of increasing level only
+          if (levels(ngb_id)>levels(current_id)) then
+            ! determine available capacity
+            if (ngb_id == get_index_from_handle(this,this%edges(iedge)%dst_handle)) then
+              ! forward edge
+              capacity = forward_capacity(iedge)
+            else if (ngb_id == get_index_from_handle(this,this%edges(iedge)%src_handle)) then
+              ! backward edge
+              ! no backward edge can appear in directed graph
+              if (this%is_directed_graph) error stop &
+                  'dfs_dinic - assertion for directed graph fails'
+              capacity = backward_capacity(iedge)
+            else
+              error stop 'dfs_dinic - should not reach this branch'
+            end if
+
+            ! if path to ngb vertex has available capacity, mark which edge was
+            ! used to come-in
+            if (capacity > 0.0_dp) then
+              prev_edge(ngb_id) = iedge
+              if (ngb_id==sink_id) then
+                ! target found, we can exit
+                exit STACK_LOOP
+              else
+                ! add ngb to stack, and follow this vertex
+                call s%push(transfer(ngb_id,INTEGER_MOLD))
+                cycle STACK_LOOP
+              end if
+            end if
+          end if
+
+          ! Path to the ngb vertex is blocked, try next neighbour
+          call this%vertices(current_id)%ngbs%advance(iterators(current_id))
+        end do NGBS_LOOP
+
+        ! there are no more neighbours to follow, back-track
+
+        current_id = transfer(s%pop(), current_id)
+
+        if (.not. s%empty()) then
+          current_id = transfer(s%peek(), current_id)
+          if (this%vertices(current_id)%ngbs%has_next(iterators(current_id))) &
+            call this%vertices(current_id)%ngbs%advance(iterators(current_id))
+        end if
+
+      end do STACK_LOOP
+      ! Now it is possible use "prev_edge(target_id)" to see if path from
+      ! source to target exists and back-track the path back to source.
+      ! The source vertex remains MAP_NULL as it has no predecessor.
+
+    end subroutine dfs_dinic
 
 
     subroutine process_path(this, forward_capacity, backward_capacity, &

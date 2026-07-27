@@ -14,7 +14,7 @@
     private
 
     type, public :: iterator_t
-      private
+!     private
       integer :: i = 1
     end type
     interface iterator_t
@@ -31,6 +31,8 @@
       procedure :: find=>adjlist_find
       procedure :: contains=>adjlist_contains
       procedure :: next=>adjlist_next
+      procedure :: next_noadvance=>adjlist_next_noadvance
+      procedure :: advance=>adjlist_advance
       procedure :: has_next=>adjlist_has_next
       procedure :: back=>adjlist_back
       procedure :: add=>adjlist_add
@@ -115,6 +117,39 @@
       end if
       error stop 'adjlist_next - could not obtain next item'
     end subroutine adjlist_next
+
+
+    pure subroutine adjlist_next_noadvance(this, iterator, item)
+      class(adjlist_t), intent(in) :: this
+      type(iterator_t), intent(in) :: iterator
+      integer, intent(out) :: item
+!
+! Return current item but do not advance iterator.
+!
+      if (allocated(this%arr)) then
+        if (iterator%i <= this%n) then
+          item = this%arr(iterator%i)
+          return
+        end if
+      end if
+      error stop 'adjlist_next_noadvance - could not obtain next item'
+    end subroutine adjlist_next_noadvance
+
+
+    pure subroutine adjlist_advance(this, iterator)
+      class(adjlist_t), intent(in) :: this
+      type(iterator_t), intent(inout) :: iterator
+!
+! Advance iterator
+!
+      if (allocated(this%arr)) then
+        if (iterator%i <= this%n) then
+          iterator%i = iterator%i + 1
+          return
+        end if
+      end if
+      error stop 'adjlist_advance - error'
+    end subroutine adjlist_advance
 
 
     pure function adjlist_has_next(this, iterator)
