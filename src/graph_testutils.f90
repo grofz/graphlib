@@ -14,7 +14,8 @@ module graph_testutils_mod
     integer, allocatable :: expected_s(:), expected_t(:)
     real(dp), allocatable :: positions(:,:)
     integer, allocatable :: sources(:), sinks(:)
-    logical :: is_directed_graph
+    real(dp), allocatable :: expected_eb(:), expected_vb(:)
+    logical :: is_directed_graph = .false.
   end type
 
 contains
@@ -37,7 +38,7 @@ contains
       call split_nonempty(lines(current_line)%str, ' ', words)
       current_line = current_line + 1
       if (size(words)==0 .and. ts%g%nvertices>0) then
-        exit ! current_line is empty line 
+        exit ! current_line is empty line
       else if (size(words)==0) then
         cycle
       else if (words(1)%str(1:1)=='#') then
@@ -53,6 +54,7 @@ contains
           print '(a)', lines(current_line-1)%str
           error stop 'error reading number (mincut)'
         end if
+
       case ('EXPECTED_MAXFLOW')
         if (size(words)<3) error stop 'two values expected for EXPECTED_MAXFLOW'
         read(words(2)%str,*,iostat=ios ) ts%expected_maxflow(1)
@@ -60,6 +62,20 @@ contains
         if (ios/=0 .or. ios2/=0) then
           print '(a)', lines(current_line-1)%str
           error stop 'error reading number (maxflow)'
+        end if
+
+      case('EXPECTED_VB')
+        call parse_list_of_reals(words, ts%expected_vb, ios)
+        if (ios/=0) then
+          print '(a)', '<'//words(i)%str//'>'
+          error stop 'erro reading reals'
+        end if
+
+      case('EXPECTED_EB')
+        call parse_list_of_reals(words, ts%expected_eb, ios)
+        if (ios/=0) then
+          print '(a)', '<'//words(i)%str//'>'
+          error stop 'erro reading reals'
         end if
 
       case ('EXPECTED_SET_A')
@@ -89,6 +105,9 @@ contains
           print '(a)', '<'//words(i)%str//'>'
           error stop 'error reading numbers'
         end if
+
+      case('DIRECTED')
+        ts%is_directed_graph = .true.
 
       case('VERTICES')
         ! must be before 'EDGES'
@@ -141,7 +160,12 @@ contains
             read(tokens(1)%str,*,iostat=ios) i1
             if (ios /= 0) exit
             read(tokens(2)%str,*,iostat=ios1) i2
-            read(tokens(3)%str,*,iostat=ios2) w1
+            if (size(tokens)>=3) then
+              read(tokens(3)%str,*,iostat=ios2) w1
+            else
+              ios2 = 0
+              w1 = 1.0_dp
+            end if
             if (ios1/=0 .or. ios2/=0) then
               print '(a)', lines(current_line+k)%str
               print '(a)', '<'//words(i)%str//'>'
@@ -211,6 +235,25 @@ contains
   end subroutine parse_list_of_ints
 
 
+  subroutine parse_list_of_reals(words, numbers, ierr)
+    type(string_t), intent(in) :: words(:)
+    real(dp), allocatable, intent(out) :: numbers(:)
+    integer, intent(out) :: ierr
+
+    integer :: i, ios
+
+    ierr = 0
+    if (allocated(numbers)) deallocate(numbers)
+    allocate(numbers(size(words)-1))
+    do i=2, size(words)
+      read(words(i)%str,*,iostat=ios) numbers(i-1)
+      if (ios==0) cycle
+      ierr = 1
+      exit
+    end do
+  end subroutine parse_list_of_reals
+
+
   subroutine graph_from_arrays(g, cons, vidata, vrdata, eidata, erdata, &
       is_directed_graph)
     type(graph_t), intent(inout) :: g
@@ -259,7 +302,7 @@ contains
 
     ! Initialize the graph
     call g%initialize(is_directed_graph=is_directed_graph)
-    
+
     ! Add vertices
     allocate(vhandles(nv))
     do i=1, nv

@@ -8,7 +8,7 @@
 # path to sources and objects
 DIR = build
 BINDIR = bin
-vpath %.f90 src:test
+vpath %.f90 src:testsrc
 
 # path to modules
 JDIR = include
@@ -105,7 +105,7 @@ $(DIR)/vtuio26.o : $(DIR)/graph.o $(DIR)/vtuio_tree.o
 #build_test/concomtest.o : $(MODOBJECTS)
 
 #.f.o:
-build_test/%.o : test/%.f90
+build_test/%.o : testsrc/%.f90
 	$(FC) $(FFLAGS) -J$(JDIR) -c $< -o $@
 $(DIR)/%.o : src/%.f90
 	$(FC) $(FFLAGS) -J$(JDIR) -c $< -o $@
