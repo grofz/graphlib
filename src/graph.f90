@@ -207,7 +207,7 @@
 
       module subroutine graph_maxflow(this, source, sink, position_capacity, &
           flow, position_mincutlabel, position_flow, &
-          vmask, emask, vselector, eselector, algorithm_maxflow)
+          vmask, emask, vselector, eselector, algorithm)
         class(graph_t), intent(inout) :: this
         type(handle_t), intent(in) :: source, sink
         integer, intent(in) :: position_capacity
@@ -217,7 +217,7 @@
         logical, intent(in), optional :: vmask(:), emask(:)
         procedure(is_vertex_selected), optional :: vselector
         procedure(is_edge_selected), optional :: eselector
-        integer, intent(in), optional :: algorithm_maxflow
+        integer, intent(in), optional :: algorithm
 !
 ! Maximum flow from the source to sink.
 !
@@ -230,11 +230,9 @@
 !   source            - handle to the source vertex
 !   sink              - handle to the sink vertex
 !   position_capacity - "edges/rpar" array item giving the edge capacity
-!   vselector         - user function to select open verices (OPTIONAL)
-!   eselector         - user function to select open edges (OPTIONAL)
-!   algorithm_maxflow - which algorithm to use:
-!                         MAXFLOW_EDMOND_KARP, or
-!                         MAXFLOW_DINIC
+!   vselector         - (OPTIONAL) user function to select open vertices
+!   eselector         - (OPTIONAL) user function to select open edges
+!   algorithm         - (OPTIONAL) MAXFLOW_EDMOND_KARP or MAXFLOW_DINIC
 !
 ! OUTPUT
 !   flow                 - the maximum flow from source to sink
@@ -257,7 +255,7 @@
 
       module subroutine graph_maxflow_multiple(this, sources, sinks, &
           position_capacity, flow, position_mincutlabel, position_flow, &
-          vmask, emask, vselector, eselector, algorithm_maxflow)
+          vmask, emask, vselector, eselector, algorithm)
         class(graph_t), intent(inout) :: this
         type(handle_t), intent(in) :: sources(:), sinks(:)
         integer, intent(in) :: position_capacity
@@ -267,13 +265,12 @@
         logical, intent(in), optional :: vmask(:), emask(:)
         procedure(is_vertex_selected), optional :: vselector
         procedure(is_edge_selected), optional :: eselector
-        integer, intent(in), optional :: algorithm_maxflow
+        integer, intent(in), optional :: algorithm
 !
-! Maximum flow using multiple sources and sinks
+! Maximum flow using multiple sources and sinks.
 !
-!   algorithm_maxflow - which algorithm to use:
-!                         MAXFLOW_EDMOND_KARP, or
-!                         MAXFLOW_DINIC
+! See graph_maxflow interface for details
+!
       end subroutine graph_maxflow_multiple
 
     end interface ! submodules

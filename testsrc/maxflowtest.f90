@@ -65,7 +65,7 @@
               ts%g%vertices(ts%sinks(1))%handle, &
               EPOS_WEIGHT, maxflow, &
               position_mincutlabel=VPOS_TYPE, position_flow=EPOS_FLOW, &
-              algorithm_maxflow = algorithm(ia))
+              algorithm = algorithm(ia))
           print '("MAXFLOW RESULT: ",g0," (expected ",g0,")")', maxflow, ts%expected_maxflow(j)
           ! sum flow across min-cut plane
           block

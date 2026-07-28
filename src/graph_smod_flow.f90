@@ -281,22 +281,22 @@
 ! -----------------------------------------------------------------------------
 !   subroutine graph_maxflow(this, source, sink, position_capacity, &
 !       flow, position_mincutlabel, position_flow, &
-!       vmask, emask, vselector, eselector, algorithm_maxflow)
+!       vmask, emask, vselector, eselector, algorithm)
 ! -----------------------------------------------------------------------------
     module procedure graph_maxflow
       integer, parameter :: &
         CLOSED=0, SOURCE_REACHABLE=1, SINK_REACHABLE=2, DISCONNECTED=3
-      integer, parameter :: NOT_DISCONNECTED=-1
+      integer, parameter :: UNKNOWN=-1
       real(dp), allocatable :: forward_capacity(:), backward_capacity(:)
       integer, allocatable :: prev_edge(:), pair_edge(:)
       integer :: source_id, sink_id
       type(stack_t) :: added_edges
       logical, allocatable :: vmask0(:), emask0(:)
-      integer :: algorithm_maxflow0
+      integer :: algorithm0
 
       ! Select algorithm - Edmond-Karp or Dinic
-      algorithm_maxflow0 = MAXFLOW_DINIC ! default value
-      if (present(algorithm_maxflow)) algorithm_maxflow0 = algorithm_maxflow
+      algorithm0 = MAXFLOW_DINIC ! default value
+      if (present(algorithm)) algorithm0 = algorithm
 
       ! Set up working arrays
       allocate(forward_capacity(this%nedges), backward_capacity(this%nedges))
@@ -418,12 +418,15 @@
               source_id, 0, prev_edge)
           do i=1,this%nvertices
             associate(label=>this%vertices(i)%ipar(position_mincutlabel))
-              ! the labels are just temporary, will be relabeled later
-              if (prev_edge(i)==MAP_NULL .and. i/=source_id) then
-                ! this vertex could not be reached from source
+              if (.not. vmask0(i)) then
+                ! unselected vertex
+                label = CLOSED
+              else if (prev_edge(i)==MAP_NULL .and. i/=source_id) then
+                ! this selected vertex could not be reached from source
                 label = DISCONNECTED
               else
-                label = NOT_DISCONNECTED
+                ! temporary label, will be relabeled later
+                label = UNKNOWN
               end if
             end associate
           end do
@@ -436,7 +439,7 @@
       end if
 
       ! The core of the algorithm
-      select case(algorithm_maxflow0)
+      select case(algorithm0)
       case(MAXFLOW_EDMOND_KARP)
         call edmond_karp_loop(this, forward_capacity, backward_capacity, &
             source_id, sink_id, prev_edge, pair_edge, flow, position_flow)
@@ -459,7 +462,10 @@
           do i=1,this%nvertices
             associate(label=>this%vertices(i)%ipar(position_mincutlabel))
               if (.not. vmask0(i)) then
-                label = CLOSED
+                ! should have been already labeled
+                if (label/=CLOSED) error stop 'graph_maxflow -&
+                    & CLOSED label expected (internal error)'
+                continue
               else if (i==source_id) then
                 label = SOURCE_REACHABLE
               else if (prev_edge(i)/=MAP_NULL) then
@@ -878,7 +884,7 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
 ! -----------------------------------------------------------------------------
 !   subroutine graph_maxflow_multiple(this, sources, sinks, &
 !       position_capacity, flow, position_mincutlabel, position_flow, &
-!       vmask, emask, vselector, eselector, algorithm_maxflow)
+!       vmask, emask, vselector, eselector, algorithm)
 ! -----------------------------------------------------------------------------
     module procedure graph_maxflow_multiple
       type(handle_t) :: super_source, super_sink, edge
@@ -985,7 +991,7 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
           this, super_source, super_sink, position_capacity, flow, &
           position_mincutlabel=position_mincutlabel, &
           position_flow=position_flow, vmask=vmask0, emask=emask0, &
-          algorithm_maxflow=algorithm_maxflow)
+          algorithm=algorithm)
 
       ! Remove added edges/vertices and assert number of objects did not change
       do while (.not. added_edges%empty())
