@@ -42,7 +42,8 @@ MAIN1 = build_test/vtuiotest.o
 MAIN2 = build_test/maxflowtest.o
 MAIN3 = build_test/betweennesstest.o
 MAIN4 = build_test/concomtest.o
-ALLOBJECTS = $(MODOBJECTS) $(MAIN1) $(MAIN2) $(MAIN3) $(MAIN4)
+MAIN5 = build_test/scctest.o
+ALLOBJECTS = $(MODOBJECTS) $(MAIN1) $(MAIN2) $(MAIN3) $(MAIN4) $(MAIN5)
 
 # dependent libraries
 #ldir = ./lib/odepack
@@ -56,15 +57,17 @@ ifdef OS
 	EXE2 = test_maxflow.exe
 	EXE3 = test_betweeness.exe
 	EXE4 = test_concom.exe
+	EXE5 = test_scc.exe
 else
 	EXE1 = $(BINDIR)/test_vtuio.x
 	EXE2 = $(BINDIR)/test_maxflow.x
 	EXE3 = $(BINDIR)/test_betweeness.x
 	EXE4 = $(BINDIR)/test_concom.x
+	EXE5 = $(BINDIR)/test_scc.x
 endif
 
 # default goal and dependencies
-all: directories $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(OUTLIB)
+all: directories $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(OUTLIB)
 
 # Ensure directories exist before compilation begins
 directories:
@@ -77,6 +80,8 @@ $(EXE2) : $(MODOBJECTS) $(MAIN2)
 $(EXE3) : $(MODOBJECTS) $(MAIN3)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
 $(EXE4) : $(MODOBJECTS) $(MAIN4)
+	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
+$(EXE5) : $(MODOBJECTS) $(MAIN5)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
 
 $(OUTLIB) : $(MODOBJECTS)
@@ -112,7 +117,7 @@ $(DIR)/%.o : src/%.f90
 
 # phony clean-up target
 clean :
-	-rm -f $(DIR)/*.o build_test/*.o $(JDIR)/*.mod $(JDIR)/*.smod $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(OUTLIB)
+	-rm -f $(DIR)/*.o build_test/*.o $(JDIR)/*.mod $(JDIR)/*.smod $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(OUTLIB)
 
 # Include the generated dependency files if they exist
 -include $(MODOBJECTS:.o=.d) $(ALLOBJECTS:.o=.d)

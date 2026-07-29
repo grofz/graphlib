@@ -1,0 +1,164 @@
+# Stronlgy connected components
+# Single directed edge
+EXPECTED_SCC 2 1
+EDGES
+1 2
+
+# Single directed edge
+EXPECTED_SCC 1 2
+EDGES
+2 1
+
+# Two node cycle
+EXPECTED_SCC 1 1
+EDGES
+2 1
+1 2
+
+# Long chain
+EXPECTED_SCC 6 5 4 3 2 1
+EDGES
+1 2
+2 3
+3 4
+4 5
+5 6
+
+# One big cycle
+EXPECTED_SCC 1 1 1 1 1 1
+EDGES
+1 2
+2 3
+3 4
+4 5
+5 1
+
+# Two SCC connected one-way
+EXPECTED_SCC 2 2 1 1
+EDGES
+1 2
+2 1
+2 3
+3 4
+4 3
+
+# Diamond DAG
+EXPECTED_SCC 4 2 3 1
+EDGES
+1 2
+1 3
+2 4
+3 4
+
+# Cross-edge inside DFS
+EXPECTED_SCC 2 2 2 1
+EDGES
+1 2
+2 3
+3 1
+2 4
+
+# Nested back-edge
+EXPECTED_SCC 2 1 1 1
+EDGES
+1 2
+2 3
+3 4
+4 2
+
+# Forward edge only
+EXPECTED_SCC 3 1 2
+EDGES
+1 2
+1 3
+
+# Cross edge between completed SCC
+EXPECTED_SCC 2 2 1 1
+EDGES
+1 2
+2 1
+3 4
+4 3
+1 3
+
+# Three SCC
+EXPECTED_SCC 3 3 2 2 1 1
+EDGES
+1 2
+2 1
+2 3
+3 4
+4 3
+4 5
+5 6
+6 5
+
+# Star
+EXPECTED_SCC 6 5 4 3 2 1
+EDGES
+1 2
+1 3
+1 4
+1 5
+1 6
+
+# Reverse star
+EXPECTED_SCC 6 5 4 3 2 1
+EDGES
+2 1
+3 1
+4 1
+5 1
+6 1
+
+# Duplicate paths
+EXPECTED_SCC 2 2 1
+EDGES
+1 2
+1 3
+2 3
+3 2
+
+# Disconnected graph
+EXPECTED_SCC 1 2 3 3
+EDGES
+3 4
+4 3
+
+# large scc reached later
+EXPECTED_SCC 4 3 2 1 1 1
+EDGES
+1 2
+2 3
+3 4
+4 5
+5 6
+6 4
+
+# Test case 1
+EXPECTED_SCC 2 2 2 2 3 1
+EDGES
+5 4
+4 1
+1 6
+1 2
+2 3
+3 4
+
+# Test case 2
+EXPECTED_SCC 3 2 4 1
+EDGES
+1 2
+3 2
+3 4
+2 4
+
+# Test case 3
+EXPECTED_SCC 1 1 1 1 2 2
+EDGES
+1 2
+3 1
+4 3
+2 4
+5 6
+6 5

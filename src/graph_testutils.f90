@@ -11,7 +11,7 @@ module graph_testutils_mod
     type(graph_t) :: g
     real(dp) :: expected_mincut = INVALID
     real(dp) :: expected_maxflow(2) = INVALID
-    integer, allocatable :: expected_s(:), expected_t(:)
+    integer, allocatable :: expected_s(:), expected_t(:), expected_scc(:)
     real(dp), allocatable :: positions(:,:)
     integer, allocatable :: sources(:), sinks(:)
     real(dp), allocatable :: expected_eb(:), expected_vb(:)
@@ -87,6 +87,13 @@ contains
 
       case ('EXPECTED_SET_B')
         call parse_list_of_ints(words, ts%expected_t, ios)
+        if (ios/=0) then
+          print '(a)', '<'//words(i)%str//'>'
+          error stop 'error reading numbers'
+        end if
+
+      case ('EXPECTED_SCC')
+        call parse_list_of_ints(words, ts%expected_scc, ios)
         if (ios/=0) then
           print '(a)', '<'//words(i)%str//'>'
           error stop 'error reading numbers'

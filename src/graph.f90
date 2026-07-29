@@ -84,6 +84,7 @@
       procedure :: find_edge_id => graph_find_edge_id
       procedure :: print => graph_print
       procedure :: connected_components => graph_connected_components
+      procedure :: label_scc => graph_label_scc
       procedure :: shortest_path => graph_shortest_path
       procedure :: maxflow => graph_maxflow
       procedure :: maxflow_multiple => graph_maxflow_multiple
@@ -1195,6 +1196,146 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
             & neighbour belongs to another component (internal error)'
       end if
     end subroutine follow_edge
+
+
+    ! ------------------
+    ! Tarjan's algorithm
+    ! ------------------
+    subroutine graph_label_scc(this, labels, lab_count, &
+        position_label, vselector, eselector, vmask, emask)
+      class(graph_t), intent(inout) :: this
+      integer, intent(out), allocatable, optional :: labels(:)
+      integer, intent(out), optional :: lab_count
+      integer, intent(in), optional :: position_label
+      procedure(is_vertex_selected), optional :: vselector
+      procedure(is_edge_selected), optional :: eselector
+      logical, intent(in), optional :: vmask(:), emask(:)
+!
+! Identify strongly connected components (SCC) in a directed graph
+!
+      logical, allocatable :: vmask0(:), emask0(:)
+      integer :: scc_counter, id_counter
+      integer, allocatable :: components(:), discovered_id(:), lowlink(:)
+      type(iterator_t), allocatable :: iterators(:)
+      type(stack_t) :: dfs_stack, scc_stack
+      integer :: istart, iu, ingb, iedge
+      integer, parameter :: UNASSIGNED=0, UNVISITED=0
+
+      if (.not. this%is_directed_graph) error stop &
+          'graph_label_scc: algorithm requires a directed graph'
+
+      call graph_build_selection_masks(this, vmask0, emask0, &
+          vselector=vselector, eselector=eselector, vmask_provided=vmask, &
+          emask_provided=emask)
+
+      ! Initialize working arrays and global counters
+      scc_counter = 0
+      id_counter = 0
+      allocate(components(this%nvertices), source=UNASSIGNED)
+        ! vertices not yet assigned to a particular SCC
+      allocate(discovered_id(this%nvertices), source=UNVISITED)
+        ! vertices not yet discovered
+      allocate(lowlink(this%nvertices))
+        ! lowest DFS discovery index reachable from this vertex
+      allocate(iterators(this%nvertices))
+      do iu=1, this%nvertices
+        iterators(iu) = iterator_t()
+      end do
+        ! to keep track of explored outgoing edges
+
+      ! Initialize stacks to store vertice positions in graph array
+      call dfs_stack%initialize(chunksize=size(transfer(2,INTEGER_MOLD)))
+      call scc_stack%initialize(chunksize=size(transfer(1,INTEGER_MOLD)))
+
+      ! Loop to make sure all vertices are discovered
+      MAIN_LOOP: do istart=1, this%nvertices
+        ! Push an open, undiscovered vertex as a first item on the stack
+        if ((.not. vmask0(istart)) .or. discovered_id(istart)/=UNVISITED) cycle
+        call dfs_stack%push(transfer(istart,INTEGER_MOLD))
+
+        DFS_LOOP: do while(.not. dfs_stack%empty())
+          iu = transfer(dfs_stack%peek(), iu)
+          ! If U discovered, initialize it and add it on the working stack
+          if (discovered_id(iu)==UNVISITED) then
+            id_counter = id_counter+1
+            discovered_id(iu) = id_counter
+            lowlink(iu) = discovered_id(iu)
+            call scc_stack%push(transfer(iu,INTEGER_MOLD))
+          end if
+
+          ! Check if U has remaining unexplored neighbours
+          if (this%vertices(iu)%ngbs%has_next(iterators(iu))) then
+            call this%vertices(iu)%ngbs%next(iterators(iu), iedge)
+            if (.not. emask0(iedge)) cycle DFS_LOOP
+            ingb = other_vertex_id(this, iedge, iu)
+
+            if (discovered_id(ingb)==UNVISITED) then
+              ! Case A: unvisited neighbor (down one level of recursion)
+              call dfs_stack%push(transfer(ingb,INTEGER_MOLD))
+            else if (components(ingb)==UNASSIGNED) then
+              ! Case B: neighbour currently on the SCC stack
+              ! Update lowlink using its DFS index
+              lowlink(iu) = min(lowlink(iu), discovered_id(ingb))
+            else
+              ! Case C: neighbour already assigned to an SCC
+              continue ! ignore this neighbor
+            end if
+            cycle DFS_LOOP
+          end if
+
+          ! All neighbours of U have been processed
+          block
+            integer :: itmp
+            itmp = transfer(dfs_stack%pop(),itmp)
+              ! up one level of recursion
+          end block
+
+          ! DFS returns to the parent. Propagate the minimum reachable
+          ! DFS index upwards.
+          if (.not. dfs_stack%empty()) then
+            block
+              integer :: iparent
+              iparent = transfer(dfs_stack%peek(),iparent)
+              lowlink(iparent) = min(lowlink(iparent), lowlink(iu))
+            end block
+          end if
+
+          ! Check if U is an SCC root
+          if (lowlink(iu)==discovered_id(iu)) then
+            ! New SCC is complete...
+            scc_counter = scc_counter + 1
+            ! ...label and remove all SCC vertices from working stack
+            block
+              integer :: imoved
+              do
+                imoved = transfer(scc_stack%pop(),imoved)
+                components(imoved) = scc_counter
+                if (imoved==iu) exit
+              end do
+            end block
+          end if
+
+        end do DFS_LOOP
+
+      end do MAIN_LOOP
+
+      if (.not. scc_stack%empty()) error stop &
+          'graph_label_scc - unprocessed vertices in stack (internal error)'
+
+      ! Write labels to vertex/ipar array
+      if (present(position_label)) then
+        where (vmask0) &
+            this%vertices(1:this%nvertices)%ipar(position_label) = components
+      end if
+
+      if (present(labels)) call move_alloc(components, labels)
+
+      if (present(lab_count)) lab_count = scc_counter
+
+      ! Clean-up (explicitly deallocate array of iterator_t)
+      deallocate(iterators)
+
+    end subroutine graph_label_scc
 
 
     ! -----------------------------
