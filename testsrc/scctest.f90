@@ -13,7 +13,7 @@ program scc
   integer :: i, k
   character(len=2) :: numstr
   logical, allocatable :: vmask(:), emask(:)
-  integer, allocatable :: labels(:)
+  integer, allocatable :: labels(:), levels(:)
   type(handle_t) :: handle
   integer :: vipar(VSIZE_IPAR)
   real(dp) :: vrpar(VSIZE_RPAR)
@@ -44,6 +44,12 @@ program scc
       print '("Lables: ",*(i0,1x))', labels
       print '("Expect: ",*(i0,1x))', ts%expected_scc
     end if
+
+    ! Test levels
+    print '("Scc:     ",*(i0,1x))', labels
+    call ts%g%topological_levels(levels, components=labels)
+    print '("Levels:  ",*(i0,1x))', levels
+    print *
 
     write(numstr,'(i2.2)') k
 !   call vtuio_write('sccsample'//numstr, ts%g, VTUIO_MASK, vtudata=vtudata)

@@ -85,6 +85,7 @@
       procedure :: print => graph_print
       procedure :: connected_components => graph_connected_components
       procedure :: label_scc => graph_label_scc
+      procedure :: topological_levels => graph_topological_levels
       procedure :: shortest_path => graph_shortest_path
       procedure :: maxflow => graph_maxflow
       procedure :: maxflow_multiple => graph_maxflow_multiple
@@ -1237,14 +1238,14 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
         ! vertices not yet discovered
       allocate(lowlink(this%nvertices))
         ! lowest DFS discovery index reachable from this vertex
-      allocate(iterators(this%nvertices))
-      do iu=1, this%nvertices
-        iterators(iu) = iterator_t()
-      end do
+      allocate(iterators(this%nvertices), source=iterator_t())
+     !do iu=1, this%nvertices
+     !  iterators(iu) = iterator_t()
+     !end do
         ! to keep track of explored outgoing edges
 
       ! Initialize stacks to store vertice positions in graph array
-      call dfs_stack%initialize(chunksize=size(transfer(2,INTEGER_MOLD)))
+      call dfs_stack%initialize(chunksize=size(transfer(1,INTEGER_MOLD)))
       call scc_stack%initialize(chunksize=size(transfer(1,INTEGER_MOLD)))
 
       ! Loop to make sure all vertices are discovered
@@ -1255,7 +1256,7 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
 
         DFS_LOOP: do while(.not. dfs_stack%empty())
           iu = transfer(dfs_stack%peek(), iu)
-          ! If U discovered, initialize it and add it on the working stack
+          ! If U discovered, initialize it and add it on SCC stack
           if (discovered_id(iu)==UNVISITED) then
             id_counter = id_counter+1
             discovered_id(iu) = id_counter
@@ -1270,7 +1271,7 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
             ingb = other_vertex_id(this, iedge, iu)
 
             if (discovered_id(ingb)==UNVISITED) then
-              ! Case A: unvisited neighbor (down one level of recursion)
+              ! Case A: unvisited neighbour (down one level of recursion)
               call dfs_stack%push(transfer(ingb,INTEGER_MOLD))
             else if (components(ingb)==UNASSIGNED) then
               ! Case B: neighbour currently on the SCC stack
@@ -1278,7 +1279,7 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
               lowlink(iu) = min(lowlink(iu), discovered_id(ingb))
             else
               ! Case C: neighbour already assigned to an SCC
-              continue ! ignore this neighbor
+              continue ! ignore this neighbour
             end if
             cycle DFS_LOOP
           end if
@@ -1304,7 +1305,7 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
           if (lowlink(iu)==discovered_id(iu)) then
             ! New SCC is complete...
             scc_counter = scc_counter + 1
-            ! ...label and remove all SCC vertices from working stack
+            ! ...label and remove all SCC vertices from SCC stack
             block
               integer :: imoved
               do
@@ -1336,6 +1337,171 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
       deallocate(iterators)
 
     end subroutine graph_label_scc
+
+
+    subroutine graph_topological_levels(this, levels, components, vmask, &
+        emask, vselector, eselector)
+      class(graph_t), intent(in) :: this
+      integer, allocatable, intent(out) :: levels(:)
+      integer, intent(in), optional :: components(:)
+      logical, intent(in), optional :: vmask(:), emask(:)
+      procedure(is_vertex_selected), optional :: vselector
+      procedure(is_edge_selected), optional :: eselector
+!
+! Determine topological levels of a directed graph. If "components" is provided,
+! vertices, that belong to the same component are treated as a single contracted
+! vertex. The assigned level of each component equals one plus the maximum level
+! among its predecessors. Consequently, the level represents the longest
+! directed path from any source component.
+!
+! The graph (or a contracted graph due to "component") may be disjoint, however
+! vertices labeled as a single component must be connected. The algorithm may
+! not function properly otherwise. No connectivity check is done in this
+! procedure. 
+!
+! The graph must be a directed acyclic graph (DAG). If there are cycles in the
+! graph, they must be identified as strongly connected components (SCC) first
+! (see graph_label_scc) before calling this procedure. The SCC labeling output
+! must be passed as "components" array.
+! 
+! The procedure accepts optional selectors (logical masks or functions) to
+! unselect some vertices and edges, effectivelly making a sub-graph (without
+! actually removing objects from the storage).
+!
+! The assigned levels are positive numbers in the increasing order for selected
+! vertices, while level of unselected vertices is set to 0
+!
+! This procedure uses a Khan's algorithm.
+!
+      logical, allocatable :: vmask0(:), emask0(:)
+      integer, allocatable :: indegree_c(:), levels_c(:), components0(:)
+      type(adjlist_t), allocatable :: list_c(:)
+      integer :: icomp, vertex_id, iedge, ngb_id
+      integer, parameter :: UNASSIGNED=0, UNDEFINED=-1
+      type(queue_t) :: queue
+      type(iterator_t) :: viterator, eiterator
+
+      if (.not. this%is_directed_graph) error stop &
+          'graph_topological_levels: algorithm requires a directed graph'
+
+      ! Select sub-graph
+      call graph_build_selection_masks(this, vmask0, emask0, &
+          vmask_provided=vmask, emask_provided=emask, vselector=vselector, &
+          eselector=eselector)
+
+      ! Build or verify components (i.e. group of vertices)
+      block
+        integer :: max_component_label, k
+
+        if (present(components)) then
+          ! Assert valid components provided
+          if (size(components)/=this%nvertices) error stop &
+              'graph_topological_levels - size of components invalid'
+          if (any(components<0)) error stop &
+              'graph_topological_levels - negative value in components'
+          if ((any(components/=UNASSIGNED .and. .not. vmask0)) .or. &
+              (any(components==UNASSIGNED .and. vmask0))) error stop &
+              'graph_topological_levels - selected vertices list mismatch with assigned components list'
+          components0 = components
+        else
+          ! Make each vertex its own component.
+          allocate(components0(this%nvertices), source=UNASSIGNED)
+          k = 1
+          do vertex_id=1, this%nvertices
+            if (.not. vmask0(vertex_id)) cycle
+            components0(vertex_id) = k
+            k = k + 1
+          end do
+        end if
+
+        max_component_label = maxval(components0)
+        allocate(indegree_c(max_component_label), source=0)
+        allocate(levels_c(max_component_label), source=UNDEFINED)
+        allocate(list_c(max_component_label))
+        do icomp=1, max_component_label
+          call list_c(icomp)%initialize()
+        end do
+        do vertex_id=1, this%nvertices
+          if (.not. vmask0(vertex_id)) cycle
+          call list_c(components0(vertex_id))%add(vertex_id)
+        end do
+      end block
+
+      ! Calculate indegree, i.e. the number of incomming edges to each component
+      ! (group of vertices)
+      block
+        integer :: src, dst
+        do iedge=1, this%nedges
+          if (.not. emask0(iedge)) cycle
+          src = get_index_from_handle(this, this%edges(iedge)%src_handle)
+          dst = get_index_from_handle(this, this%edges(iedge)%dst_handle)
+          ! ignore internal edges within a component
+          if (components0(src)==components0(dst)) cycle
+          indegree_c(components0(dst)) = indegree_c(components0(dst))+1
+        end do
+      end block
+
+      ! Initialize resulting array
+      allocate(levels(this%nvertices), source=0)
+        ! unselected vertices will keep this initial value (0)
+
+      ! Enqueue the components with zero indegree
+      call queue%initialize(chunksize=size(transfer(1,INTEGER_MOLD)))
+      do icomp=1, size(indegree_c)
+        if (indegree_c(icomp)>0) cycle
+        levels_c(icomp) = 1 ! starting topological level
+        if (list_c(icomp)%size()/=0) then
+          call queue%enqueue(transfer(icomp,INTEGER_MOLD))
+        else
+          ! If items in provided "components" array do not form a serie of
+          ! consecutive values, groups of zero vertices may be present.
+          ! To make them harmless, We assign the initial level to these groups
+          ! but will not add then to the queue.
+          continue
+        end if
+      end do
+
+      ! Process components in topological order
+      QLOOP: do while (.not. queue%empty())
+        icomp = transfer(queue%dequeue(),icomp)
+        viterator = iterator_t()
+        ! Loop over every vertex in the "icomp" group...
+        VLOOP: do while (list_c(icomp)%has_next(viterator))
+          call list_c(icomp)%next(viterator, vertex_id)
+          ! ... assign level to this vertex
+          levels(vertex_id) = levels_c(icomp)
+          ! ... and loop over its neighbours and decrease indegree
+          !     of the destination group
+          eiterator = iterator_t()
+          NGBLOOP: do while (this%vertices(vertex_id)%ngbs%has_next(eiterator))
+            call this%vertices(vertex_id)%ngbs%next(eiterator, iedge)
+            if (.not. emask0(iedge)) cycle
+            ngb_id = other_vertex_id(this, iedge, vertex_id)
+            ! ignore intra-group vertices
+            if (components0(ngb_id)==components0(vertex_id)) cycle
+
+            associate (X=>indegree_c(components0(ngb_id)))
+              if (X<1) error stop 'graph_topological_levels -&
+                  & indegree drops under zero (internal error)'
+              X = X - 1
+              if (X==0) then
+                ! No more dependencies for the group, add it to the queue
+                if (levels_c(components0(ngb_id))/=UNDEFINED) error stop &
+                    & 'graph_topological_levels - rediscovering group (internal error)'
+                levels_c(components0(ngb_id)) = levels_c(icomp)+1
+                call queue%enqueue(transfer(components0(ngb_id),INTEGER_MOLD))
+              end if
+            end associate
+          end do NGBLOOP
+        end do VLOOP
+      end do QLOOP
+
+      ! Verify all groups were processed.
+      ! Unprocessed groups mean that a cycle is present in the graph.
+      if (any(levels_c==UNDEFINED)) error stop 'graph_topological_levels -&
+          & graph contains directed cycles, topological levels cannot be derermined'
+
+    end subroutine graph_topological_levels
 
 
     ! -----------------------------
