@@ -25,7 +25,7 @@ EDGES
 5 6
 
 # One big cycle
-EXPECTED_SCC 1 1 1 1 1 1
+EXPECTED_SCC 1 1 1 1 1
 EDGES
 1 2
 2 3

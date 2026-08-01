@@ -137,10 +137,10 @@
 
 
 ! ----------------------------------------------------------------------------
-!   subroutine graph_label_scc(this, labels, lab_count, &
+!   subroutine graph_strongly_connected_components(this, labels, lab_count, &
 !       position_label, vselector, eselector, vmask, emask)
 ! ----------------------------------------------------------------------------
-    module procedure graph_label_scc
+    module procedure graph_strongly_connected_components
       logical, allocatable :: vmask0(:), emask0(:)
       integer :: scc_counter, id_counter
       integer, allocatable :: components(:), discovered_id(:), lowlink(:)
@@ -260,7 +260,7 @@
       ! Clean-up (explicitly deallocate array of iterator_t)
       deallocate(iterators)
 
-    end procedure graph_label_scc
+    end procedure graph_strongly_connected_components
 
 
 ! ----------------------------------------------------------------------------
@@ -397,5 +397,55 @@
           & graph contains directed cycles, topological levels cannot be derermined'
 
     end procedure graph_topological_levels
+
+
+! ----------------------------------------------------------------------------
+!   module function graph_verify_topological_levels(this, levels, &
+!       components, vmask, emask, vselector, eselector) result(is_ok)
+! ----------------------------------------------------------------------------
+    module procedure graph_verify_topological_levels
+      logical, allocatable :: vmask0(:), emask0(:)
+      integer :: iedge, iu, iv
+
+      if (.not. this%is_directed_graph) error stop &
+          'graph_verify_topological_levels - a directed graph required'
+
+      if (size(levels)/=this%nvertices) error stop &
+          'graph_verify_topological_levels - levels size is invalid'
+
+      if (present(components)) then
+        if (size(components)/=this%nvertices) error stop &
+          'graph_verify_topological_levels - components size is invalid'
+      end if
+
+      call graph_build_selection_masks(this, vmask0, emask0, &
+          vmask_provided=vmask, emask_provided=emask, &
+          vselector=vselector, eselector=eselector)
+
+      is_ok = .false. ! must reach end if all is ok
+
+      ! level>0 is expected for selected vertices
+      ! level=0 is expected for unselected vertices
+      if (any(levels<0)) return
+      if (any(levels==0 .and. vmask0)) return
+      if (any(levels>0 .and. .not. vmask0)) return
+
+      do iedge=1, this%nedges
+        if (.not. emask0(iedge)) cycle
+        iu = get_index_from_handle(this, this%edges(iedge)%src_handle)
+        iv = get_index_from_handle(this, this%edges(iedge)%dst_handle)
+        if (present(components)) then
+          if (components(iv)==components(iu)) then
+            ! intra-component edge
+            ! all vertices within a component must have same level
+            if (levels(iu)/=levels(iv)) return
+            cycle
+          end if
+        end if
+        ! verify topological level definition is met
+        if (levels(iu)>=levels(iv)) return
+      end do
+      is_ok = .true.
+    end procedure graph_verify_topological_levels
 
   end submodule graph_smod_connectivity

@@ -84,8 +84,9 @@
       procedure :: find_edge_id => graph_find_edge_id
       procedure :: print => graph_print
       procedure :: connected_components => graph_connected_components
-      procedure :: label_scc => graph_label_scc
+      procedure :: strongly_connected_components => graph_strongly_connected_components
       procedure :: topological_levels => graph_topological_levels
+      procedure :: verify_topological_levels => graph_verify_topological_levels
       procedure :: shortest_path => graph_shortest_path
       procedure :: maxflow => graph_maxflow
       procedure :: maxflow_multiple => graph_maxflow_multiple
@@ -202,8 +203,8 @@
       end subroutine graph_connected_components
 
 
-      module subroutine graph_label_scc(this, labels, lab_count, &
-          position_label, vselector, eselector, vmask, emask)
+      module subroutine graph_strongly_connected_components(this, labels, &
+          lab_count, position_label, vselector, eselector, vmask, emask)
         class(graph_t), intent(inout) :: this
         integer, intent(out), allocatable, optional :: labels(:)
         integer, intent(out), optional :: lab_count
@@ -213,9 +214,11 @@
         logical, intent(in), optional :: vmask(:), emask(:)
 !
 ! Identify strongly connected components (SCC) in a directed graph
-! TODO complete documentaion
+! The interface is same as that for "graph_connected_components".
 !
-      end subroutine
+! (Tarjan's algorithm)
+!
+      end subroutine graph_strongly_connected_components
 
 
       module subroutine graph_topological_levels(this, levels, components, &
@@ -253,6 +256,24 @@
 ! This procedure uses a Khan's algorithm.
 !
       end subroutine graph_topological_levels
+
+
+      module function graph_verify_topological_levels(this, levels, &
+          components, vmask, emask, vselector, eselector) result(is_ok)
+        class(graph_t), intent(in) :: this
+        integer, intent(in) :: levels(:)
+        integer, intent(in), optional :: components(:)
+        logical, intent(in), optional :: vmask(:), emask(:)
+        procedure(is_vertex_selected), optional :: vselector
+        procedure(is_edge_selected), optional :: eselector
+        logical :: is_ok
+!
+! Verify that levels represents a valid topological level assignment for the
+! selected subgraph. For every selected edge connecting different components,
+! the destination level must be strictly greater than the source level.
+! If components is present, edges within the same component are ignored.
+!
+      end function graph_verify_topological_levels
 
 
 ! -------------------
