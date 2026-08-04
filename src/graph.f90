@@ -90,6 +90,7 @@
       procedure :: shortest_path => graph_shortest_path
       procedure :: maxflow => graph_maxflow
       procedure :: maxflow_multiple => graph_maxflow_multiple
+      procedure :: conductance => graph_conductance
       procedure :: betweenness => graph_betweenness
       procedure :: mincut => graph_mincut
       procedure :: build_selection_masks => graph_build_selection_masks
@@ -400,6 +401,28 @@
 ! See graph_maxflow interface for details
 !
       end subroutine graph_maxflow_multiple
+
+
+      module subroutine graph_conductance(this, position_conductance, &
+          bc_label, x_low, x_high, flow, xfield, edge_flow, vmask, emask, &
+          vselector, eselector)
+        class(graph_t), intent(in) :: this
+        integer, intent(in) :: position_conductance
+        integer, intent(inout) :: bc_label(:)
+        real(dp), intent(in) :: x_low, x_high
+        real(dp), intent(out) :: flow
+        real(dp), intent(out), allocatable, optional :: xfield(:)
+        real(dp), intent(out), allocatable, optional :: edge_flow(:)
+        logical, intent(in), optional :: vmask(:), emask(:)
+        procedure(is_vertex_selected), optional :: vselector
+        procedure(is_edge_selected), optional :: eselector
+!
+! Calculate flow through network for the given potential difference.
+!
+! TBC
+!
+      end subroutine graph_conductance
+
 
     end interface ! submodules
 

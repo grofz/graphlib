@@ -2,8 +2,13 @@
 !
 ! Stoer-Wagner algorithm for min-cut partition
 ! Edmond-Karp and Dinics algorithms for maximum flow
+! Network conductance via Conjugate Gradient method
 !
     implicit none (type, external)
+
+    integer, parameter :: CG_OK=0, CG_MAXITER=1, CG_TRIVIAL=2, &
+        CG_OUT_VALID_RANGE=3, CG_NOT_POSDEF_MATRIX=4, CG_NOTHING_DONE=5, &
+        CG_RESIDUAL_ZERO=6
 
   contains
 
@@ -705,7 +710,6 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       type(stack_t) :: s
       integer :: current_id, iedge, ngb_id
       real(dp) :: capacity
-      integer :: i
 
       ! Initialize prev_edge and an empty stack. Push source vertex to stack
       prev_edge = MAP_NULL
@@ -1005,5 +1009,355 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
           'graph_maxflow_multiple - number of edges changed (internal error)'
 
     end procedure graph_maxflow_multiple
+
+
+    ! ==================
+    ! Conjugate Gradient
+    ! ==================
+
+! -----------------------------------------------------------------------------
+!   subroutine graph_conductance(this, position_conductance, &
+!       bc_label, x_low, x_high, flow, xfield, edge_flow, vmask, emask, &
+!       vselector, eselector)
+! -----------------------------------------------------------------------------
+    module procedure graph_conductance
+      logical, allocatable :: vmask0(:), emask0(:), is_external(:)
+      real(dp), allocatable :: x(:)
+      real(dp) :: x_middle
+      integer :: ierr
+      integer, parameter :: BC_LOW=1, BC_HIGH=2, BC_NONE=0, BC_NONPERCOLATING=3
+
+      if (size(bc_label) /= this%nvertices) error stop &
+          'graph_conductance - size of bc_label is invalid'
+
+      call this%build_selection_masks(vmask0, emask0, vmask_provided=vmask, &
+          emask_provided=emask, vselector=vselector, eselector=eselector)
+
+      x_middle = 0.5_dp*(x_low+x_high)
+      allocate(x(this%nvertices))
+      allocate(is_external(this%nvertices))
+      where(bc_label == BC_LOW)
+        x = x_low
+        is_external = .true.
+      else where(bc_label == BC_HIGH)
+        x = x_high
+        is_external = .true.
+      else where(bc_label == BC_NONE .and. vmask0)
+        x = x_middle
+        is_external = .false.
+      else where
+        x = x_low
+        is_external = .true.
+      end where
+
+      ! Solve set of algebraic equations for x
+      call conjugate_gradient(this, x, position_conductance, is_external, &
+          emask0, ierr)
+      select case (ierr)
+      case(CG_OK, CG_MAXITER)
+        if (ierr==CG_MAXITER) print &
+            '("graph_conductance WARNING - maximum number of iterations reached")'
+        ! continue assuming solution of AE is correct
+      case(CG_TRIVIAL)
+        x = x_low ! make sure flow returns zero
+        print '("graph_conductance WARNING - network seems non-percolating")'
+      case(CG_OUT_VALID_RANGE, CG_NOT_POSDEF_MATRIX, CG_RESIDUAL_ZERO)
+        print '("graph_conductance - conjugate gradient error code ",i0)', ierr
+        error stop &
+          'graph_conductance - conjugate gradient break-up'
+      case(CG_NOTHING_DONE)
+        print '("graph_conductance WARNING - CG skipped as initial tolerance is oartially met")'
+        ! sum of residuals is met, but accumulation at some node(s) is not met
+        ! continue
+      case default
+        error stop 'graph_conductance - unknown ierr (internal error)'
+      end select
+
+      ! Try to relabel nodes that seem be nonpercolating (experimental)
+      block
+        integer :: nonper_count
+        nonper_count = count(x==x_middle .and. .not. is_external)
+        where(x==x_middle .and. .not. is_external) bc_label = BC_NONPERCOLATING
+        if (nonper_count > 0) print &
+            '("graph_conductance WARNING - ",i0," vertices were reclassified as non-percolating")', &
+            nonper_count
+      end block
+
+      ! Use solution to calculate flow
+      block
+        real(dp), allocatable :: accumulation(:)
+        real(dp) :: flow_source, flow_sink
+        call flow_accumulation(this, position_conductance, emask0, x, &
+            accumulation, edge_flow)
+        flow_sink = sum(accumulation, mask=bc_label==BC_LOW)
+        flow_source = sum(accumulation, mask=bc_label==BC_HIGH)
+print '("accumulation sink    : ",g0)', flow_sink
+print '("accumulation source  : ",g0)', flow_source
+print '("accumulation internal: ",g0)', &
+  sum(accumulation, mask=.not. is_external .and. bc_label/=BC_NONPERCOLATING)
+print '("accumulation non-per : ",g0)', &
+  sum(accumulation, mask=bc_label==BC_NONPERCOLATING)
+
+        if (abs(flow_source+flow_sink) >= 1.0e-4) print &
+           '("graph_conductance WARNING - source/sink imbalance")'
+        flow = 0.5_dp*(abs(flow_source)+abs(flow_sink))
+      end block
+
+      ! Return xfield if asked for
+      if (present(xfield)) call move_alloc(x, xfield)
+    end procedure graph_conductance
+
+
+    subroutine conjugate_gradient(g, x, position_conductance, is_external, emask, ierr)
+      class(graph_t), intent(in) :: g
+      real(dp), intent(inout) :: x(:)
+      integer, intent(in) :: position_conductance
+      logical, intent(in) :: emask(:), is_external(:)
+      integer, intent(out) :: ierr
+!
+! TBC
+!
+      real(dp), allocatable :: y(:), r(:), rnew(:), p(:), b(:)
+      real(dp) :: alfa, beta, b_norm, b2_norm, denom
+      integer :: k, maxiter
+      real(dp), parameter :: RESIDUAL_TOL = 1.0e-8, IMBALANCE_TOL = 1.0e-8
+      integer, parameter :: MAXITER_FACTOR = 1, R_EXACT_FREQUENCY = 20
+
+      associate(n=>g%nvertices)
+        allocate (y(n), r(n), rnew(n), p(n), b(n))
+      end associate
+
+      ! b-vector
+      call b_vector(g, position_conductance, is_external, emask, x, b)
+      b2_norm = sum(b**2)
+      b_norm = sqrt(b2_norm)
+      if (b2_norm < tiny(b2_norm)) then
+        ! Vector b contains only zeros. This could mean no internal node has
+        ! contact with external node, or the system is trivial.
+        ierr = CG_TRIVIAL
+        return
+      end if
+
+      ! initial residual (r = b - Ax)
+      call laplacian_multiply(g, position_conductance, is_external, emask, x, y)
+      r = b - y
+      if (sum(r**2)/b2_norm < RESIDUAL_TOL**2) then
+        if (maxval(abs(r))/b_norm < IMBALANCE_TOL) then
+          ! Equations seem solved already with error tolerances met.
+          ierr = CG_OK
+        else
+          ! Residual sum tolerance met, but imbalance for some node(s) not.
+          ! To be on the safe side, just report an error and exit.
+          ierr = CG_NOTHING_DONE
+        end if
+        return
+      end if
+
+      ! initialize iterations
+      p = r
+      k = 0
+      maxiter = max(100, MAXITER_FACTOR * count(.not. is_external))
+
+print '("Iter / Residual norm**2 / Max imbalance / Where / alfa / beta")'
+print '(i5,1x,e10.4,1x,e10.4,1x,i6,1x,g0,1x,g0)', &
+            k, sum(r**2), maxval(abs(r)), maxloc(abs(r)), 0.0, 0.0
+
+      CGLOOP: do
+        ! periodically recalculate residual to clear accumulated round-off errors
+        if (mod(k,R_EXACT_FREQUENCY)==0) then
+          call laplacian_multiply(g, position_conductance, is_external, emask, x, y)
+          r = b - y
+        end if
+
+        ! alfa = |r*r| / |p*Ap|
+        call laplacian_multiply(g, position_conductance, is_external, emask, p, y)
+        denom = dot_product(p, y)
+        if (denom <= 0.0_dp) then
+          ! Laplacian matrix is not positive definite (something got terribly wrong)
+          ierr = CG_NOT_POSDEF_MATRIX
+          return
+        end if
+        alfa = dot_product(r, r) / denom
+
+        ! update x and check if prescirbed tolerances are met
+        where (.not. is_external) x = x + alfa*p
+        rnew = r - alfa*y
+        if (sum(rnew**2)/b2_norm < RESIDUAL_TOL**2 .and. &
+            maxval(abs(rnew))/b_norm < IMBALANCE_TOL) then
+          ierr = CG_OK
+          exit CGLOOP
+        end if
+
+        ! beta = |rnew*rnew| / |r*r|
+        denom = dot_product(r, r)
+        if (abs(denom) < tiny(denom)) then
+          ! avoid division by zero, can not continue
+          ierr = CG_RESIDUAL_ZERO
+          return
+        endif
+        beta = dot_product(rnew, rnew)/denom
+        p = rnew + beta*p
+
+        k = k + 1
+
+print '(i5,1x,e10.4,1x,e10.4,1x,i6,1x,g0,1x,g0)', &
+            k, sum(rnew**2), maxval(abs(rnew)), maxloc(abs(rnew)), alfa, beta
+
+        r = rnew
+
+        ! avoid never-ending loop
+        if (k==maxiter) then
+          ierr = CG_MAXITER
+          exit CGLOOP
+        end if
+      end do CGLOOP
+
+      ! verify output is in the range
+      block
+        real(dp) :: min_bc, max_bc
+        integer :: ioutrange, i, ioutrange_strict
+        min_bc = minval(x, mask=is_external)
+        max_bc = maxval(x, mask=is_external)
+        ioutrange = count( &
+            (x+10.0*b_norm*IMBALANCE_TOL <= min_bc .and. .not. is_external) .or. &
+            (x-10.0*b_norm*IMBALANCE_TOL >= max_bc .and. .not. is_external) )
+        ioutrange_strict = count( &
+            (x <= min_bc .and. .not. is_external) .or. &
+            (x >= max_bc .and. .not. is_external) )
+        if (ioutrange_strict > 0) print '("Internal nodes close to bc ",i0)', ioutrange_strict
+        if (ioutrange > 0) ierr = CG_OUT_VALID_RANGE
+      end block
+
+    end subroutine conjugate_gradient
+
+
+    pure subroutine laplacian_multiply(g, position_conductance, is_external, &
+        emask, x, y)
+      class(graph_t), intent(in) :: g
+      integer, intent(in) :: position_conductance
+      logical, intent(in) :: is_external(:), emask(:)
+      real(dp), intent(in) :: x(:)
+      real(dp), intent(out) :: y(:)
+!
+! Multiply Laplacian matrix by vector x.
+!
+! OUTPUT
+!   i is internal node
+!     y_i = sum_j (g_ij * (x_i-x_j)) + sum_k (g_ik * x_i),
+!     j is an internal neighbour of i,
+!     k is an external neighbour of i
+!   i is external node
+!     y_i = 0
+!
+      integer :: iedge, ivertices(2)
+
+      ! TODO - add array size check in debug mode
+
+      y = 0.0_DP
+      do iedge = 1, g%nedges
+        if (.not. emask(iedge)) cycle
+        ivertices = g%edges(iedge)%vertex_indices(g)
+        associate(gij=>g%edges(iedge)%rpar(position_conductance), &
+            i=>ivertices(1), j=>ivertices(2))
+          if (.not. is_external(i) .and. is_external(j)) then
+            ! j is external, "-gij*x(j)" goes to the b-vector
+            y(i) = y(i) + gij*x(i)
+          else if (is_external(i) .and. .not. is_external(j)) then
+            ! i is external, "gij*x(i)" goes to the b-vector
+            y(j) = y(j) + gij*x(j) ! must be +
+          else if (.not. is_external(i) .and. .not. is_external(j)) then
+            ! fully internal connection
+            y(i) = y(i) + gij*(x(i)-x(j))
+            y(j) = y(j) - gij*(x(i)-x(j))
+          else
+            ! ignore intra-external connection
+          end if
+        end associate
+      end do
+    end subroutine laplacian_multiply
+
+
+    pure subroutine b_vector(g, position_conductance, is_external, &
+        emask, x, b)
+      class(graph_t), intent(in) :: g
+      integer, intent(in) :: position_conductance
+      logical, intent(in) :: is_external(:), emask(:)
+      real(dp), intent(in) :: x(:)
+      real(dp), intent(out) :: b(:)
+!
+! Construct the right-hand side vector. For vector x, only values of external
+! nodes are used, the values of internal nodes are ignored here.
+!
+! OUTPUT
+!   i is internal node
+!     b_i = sum_j (g_ij * x_j), j is external neighbour of i
+!   i is external node
+!     b_i = 0
+!
+      integer :: iedge, ivertices(2)
+
+      if (size(is_external) /= g%nvertices) error stop &
+          'b_vector - size of is_ecternal is invalid'
+      if (size(emask) /= g%nedges) error stop &
+          'b_vector - size of emask is invalid'
+
+      b = 0.0_dp
+      do iedge = 1, g%nedges
+        if (.not. emask(iedge)) cycle
+        ivertices = g%edges(iedge)%vertex_indices(g)
+        associate(gij=>g%edges(iedge)%rpar(position_conductance), &
+            i=>ivertices(1), j=>ivertices(2))
+          if (.not. is_external(i) .and. is_external(j)) then
+            ! j is external, "-gij*x(j)" goes to the b-vector
+            b(i) = b(i) + gij*x(j)
+          else if (is_external(i) .and. .not. is_external(j)) then
+            ! i is external, "gij*x(i)" goes to the b-vector
+            b(j) = b(j) + gij*x(i) ! must be +
+          end if
+        end associate
+      end do
+    end subroutine b_vector
+
+
+    pure subroutine flow_accumulation(g, position_conductance, emask, x, &
+        accumulation, flow)
+      class(graph_t), intent(in) :: g
+      integer, intent(in) :: position_conductance
+      logical, intent(in) :: emask(:)
+      real(dp), intent(in) :: x(:)
+      real(dp), intent(out), allocatable :: accumulation(:)
+      real(dp), intent(out), allocatable, optional :: flow(:)
+!
+! Compute accumulation at each vertex and optionally flow along each edge
+! for the actual potential field "x" using the conductance in edges/rpar
+! array at position_conductance. Only edges selected by emask are considered.
+!
+! For each i-j edge:
+!   flow_ij = g_ij * (x_i - x_j) if emask_ij is .TRUE.
+!   flow_ij = 0                  if emask_ij is .FALSE.
+!
+      integer :: iedge, ivertices(2)
+      real(dp) :: flow_current
+
+      if (size(emask) /= g%nedges) error stop &
+          'flow_accumulation - size of emask is invalid.'
+      if (size(x) /= g%nvertices) error stop &
+          'flow_accumulation - size of x is invalis'
+
+      allocate(accumulation(g%nvertices), source=0.0_dp)
+      if (present(flow)) allocate(flow(g%nedges), source=0.0_dp)
+
+      do iedge=1, g%nedges
+        if (.not. emask(iedge)) cycle
+        ivertices = g%edges(iedge)%vertex_indices(g)
+        associate(gij=>g%edges(iedge)%rpar(position_conductance), &
+            i=>ivertices(1), j=>ivertices(2))
+          flow_current = gij * (x(i) - x(j))
+          accumulation(i) = accumulation(i) - flow_current
+          accumulation(j) = accumulation(j) + flow_current
+          if (present(flow)) flow(iedge) = flow_current
+        end associate
+      end do
+    end subroutine flow_accumulation
 
   end submodule graph_smod_flow
