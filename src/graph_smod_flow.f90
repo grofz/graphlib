@@ -1023,9 +1023,8 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
     module procedure graph_conductance
       logical, allocatable :: vmask0(:), emask0(:), is_external(:)
       real(dp), allocatable :: x(:)
-      real(dp) :: x_middle
       integer :: ierr
-      integer, parameter :: BC_LOW=1, BC_HIGH=2, BC_NONE=0, BC_NONPERCOLATING=3
+      integer, parameter :: BC_LOW=1, BC_HIGH=2
 
       if (size(bc_label) /= this%nvertices) error stop &
           'graph_conductance - size of bc_label is invalid'
@@ -1033,22 +1032,14 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       call this%build_selection_masks(vmask0, emask0, vmask_provided=vmask, &
           emask_provided=emask, vselector=vselector, eselector=eselector)
 
-      x_middle = 0.5_dp*(x_low+x_high)
-      allocate(x(this%nvertices))
-      allocate(is_external(this%nvertices))
-      where(bc_label == BC_LOW)
-        x = x_low
-        is_external = .true.
-      else where(bc_label == BC_HIGH)
-        x = x_high
-        is_external = .true.
-      else where(bc_label == BC_NONE .and. vmask0)
-        x = x_middle
+      allocate(x(this%nvertices), source=x_low)
+      allocate(is_external(this%nvertices), source=.true.)
+      ! internal nodes must be selected and not labeled as a boundary
+      where (vmask0 .and. bc_label/=BC_LOW .and. bc_label/=BC_HIGH)
         is_external = .false.
-      else where
-        x = x_low
-        is_external = .true.
+        x = 0.5_dp*(x_low+x_high)
       end where
+      where(bc_label == BC_HIGH) x = x_high
 
       ! Solve set of algebraic equations for x
       call conjugate_gradient(this, x, position_conductance, is_external, &
@@ -1073,16 +1064,6 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
         error stop 'graph_conductance - unknown ierr (internal error)'
       end select
 
-      ! Try to relabel nodes that seem be nonpercolating (experimental)
-      block
-        integer :: nonper_count
-        nonper_count = count(x==x_middle .and. .not. is_external)
-        where(x==x_middle .and. .not. is_external) bc_label = BC_NONPERCOLATING
-        if (nonper_count > 0) print &
-            '("graph_conductance WARNING - ",i0," vertices were reclassified as non-percolating")', &
-            nonper_count
-      end block
-
       ! Use solution to calculate flow
       block
         real(dp), allocatable :: accumulation(:)
@@ -1094,9 +1075,9 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
 print '("accumulation sink    : ",g0)', flow_sink
 print '("accumulation source  : ",g0)', flow_source
 print '("accumulation internal: ",g0)', &
-  sum(accumulation, mask=.not. is_external .and. bc_label/=BC_NONPERCOLATING)
+  sum(accumulation, mask=.not. is_external)
 print '("accumulation non-per : ",g0)', &
-  sum(accumulation, mask=bc_label==BC_NONPERCOLATING)
+  sum(accumulation, mask=(is_external .and. bc_label/=BC_LOW .and. bc_label/=BC_HIGH))
 
         if (abs(flow_source+flow_sink) >= 1.0e-4) print &
            '("graph_conductance WARNING - source/sink imbalance")'
@@ -1119,10 +1100,25 @@ print '("accumulation non-per : ",g0)', &
       logical, intent(in) :: emask(:), is_external(:)
       integer, intent(out) :: ierr
 !
-! TBC
+! Solve A*x = b using conjugate gradient algorithm.
 !
+! IN:
+!   g           - the undirected graph 
+!   x           - potential
+!               i is an external node
+!                 - boundary value of the potential (Dirichlet b.c)
+!               i is an internal node
+!                 - initial guess of unknowns
+!   position_conductance - position of g_ij in edges/rpar array
+!   is_external - .true. marks external nodes
+!   emask       - .true. marks selected (open for flow) edges
+!
+! OUT:
+!   x           - solution for internal nodes
+!   ierr        - returns CG_OK if solved successfully
+!               
       real(dp), allocatable :: y(:), r(:), rnew(:), p(:), b(:)
-      real(dp) :: alfa, beta, b_norm, b2_norm, denom
+      real(dp) :: alfa, beta, tol_max, tol2_norm, denom
       integer :: k, maxiter
       real(dp), parameter :: RESIDUAL_TOL = 1.0e-8, IMBALANCE_TOL = 1.0e-8
       integer, parameter :: MAXITER_FACTOR = 1, R_EXACT_FREQUENCY = 20
@@ -1133,9 +1129,9 @@ print '("accumulation non-per : ",g0)', &
 
       ! b-vector
       call b_vector(g, position_conductance, is_external, emask, x, b)
-      b2_norm = sum(b**2)
-      b_norm = sqrt(b2_norm)
-      if (b2_norm < tiny(b2_norm)) then
+      tol2_norm = dot_product(b, b) * RESIDUAL_TOL**2
+      tol_max = max(1.0_dp, maxval(abs(b))) * IMBALANCE_TOL
+      if (dot_product(b, b) <= tiny(1.0_dp)) then
         ! Vector b contains only zeros. This could mean no internal node has
         ! contact with external node, or the system is trivial.
         ierr = CG_TRIVIAL
@@ -1145,8 +1141,8 @@ print '("accumulation non-per : ",g0)', &
       ! initial residual (r = b - Ax)
       call laplacian_multiply(g, position_conductance, is_external, emask, x, y)
       r = b - y
-      if (sum(r**2)/b2_norm < RESIDUAL_TOL**2) then
-        if (maxval(abs(r))/b_norm < IMBALANCE_TOL) then
+      if (dot_product(r, r) < tol2_norm) then
+        if (maxval(abs(r)) < tol_max) then
           ! Equations seem solved already with error tolerances met.
           ierr = CG_OK
         else
@@ -1187,8 +1183,8 @@ print '(i5,1x,e10.4,1x,e10.4,1x,i6,1x,g0,1x,g0)', &
         ! update x and check if prescirbed tolerances are met
         where (.not. is_external) x = x + alfa*p
         rnew = r - alfa*y
-        if (sum(rnew**2)/b2_norm < RESIDUAL_TOL**2 .and. &
-            maxval(abs(rnew))/b_norm < IMBALANCE_TOL) then
+        if (dot_product(rnew, rnew) < tol2_norm .and. &
+            maxval(abs(rnew)) < tol_max) then
           ierr = CG_OK
           exit CGLOOP
         end if
@@ -1219,15 +1215,16 @@ print '(i5,1x,e10.4,1x,e10.4,1x,i6,1x,g0,1x,g0)', &
         end if
       end do CGLOOP
 
-      ! verify output is in the range
+      ! verify output is in the (x_low, x_high) range
       block
-        real(dp) :: min_bc, max_bc
+        real(dp) :: min_bc, max_bc, x_tol
         integer :: ioutrange, i, ioutrange_strict
         min_bc = minval(x, mask=is_external)
         max_bc = maxval(x, mask=is_external)
+        x_tol = 10*IMBALANCE_TOL*max(abs(min_bc), abs(max_bc), 1.0_dp)
         ioutrange = count( &
-            (x+10.0*b_norm*IMBALANCE_TOL <= min_bc .and. .not. is_external) .or. &
-            (x-10.0*b_norm*IMBALANCE_TOL >= max_bc .and. .not. is_external) )
+            (x+x_tol <= min_bc .and. .not. is_external) .or. &
+            (x-x_tol >= max_bc .and. .not. is_external) )
         ioutrange_strict = count( &
             (x <= min_bc .and. .not. is_external) .or. &
             (x >= max_bc .and. .not. is_external) )

@@ -408,7 +408,7 @@
           vselector, eselector)
         class(graph_t), intent(in) :: this
         integer, intent(in) :: position_conductance
-        integer, intent(inout) :: bc_label(:)
+        integer, intent(in) :: bc_label(:)
         real(dp), intent(in) :: x_low, x_high
         real(dp), intent(out) :: flow
         real(dp), intent(out), allocatable, optional :: xfield(:)
