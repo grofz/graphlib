@@ -1108,7 +1108,11 @@ print '("accumulation non-per : ",g0)', &
     end procedure graph_conductance
 
 
+#ifdef DEBUG
     subroutine conjugate_gradient(g, x, position_conductance, is_external, emask, ierr)
+#else
+    pure subroutine conjugate_gradient(g, x, position_conductance, is_external, emask, ierr)
+#endif
       class(graph_t), intent(in) :: g
       real(dp), intent(inout) :: x(:)
       integer, intent(in) :: position_conductance
@@ -1157,10 +1161,11 @@ print '("accumulation non-per : ",g0)', &
       p = r
       k = 0
       maxiter = max(100, MAXITER_FACTOR * count(.not. is_external))
-
+#ifdef DEBUG
 print '("Iter / Residual norm**2 / Max imbalance / Where / alfa / beta")'
 print '(i5,1x,e10.4,1x,e10.4,1x,i6,1x,g0,1x,g0)', &
             k, sum(r**2), maxval(abs(r)), maxloc(abs(r)), 0.0, 0.0
+#endif
 
       CGLOOP: do
         ! periodically recalculate residual to clear accumulated round-off errors
@@ -1200,8 +1205,10 @@ print '(i5,1x,e10.4,1x,e10.4,1x,i6,1x,g0,1x,g0)', &
 
         k = k + 1
 
+#ifdef DEBUG
 print '(i5,1x,e10.4,1x,e10.4,1x,i6,1x,g0,1x,g0)', &
             k, sum(rnew**2), maxval(abs(rnew)), maxloc(abs(rnew)), alfa, beta
+#endif
 
         r = rnew
 
@@ -1224,7 +1231,9 @@ print '(i5,1x,e10.4,1x,e10.4,1x,i6,1x,g0,1x,g0)', &
         ioutrange_strict = count( &
             (x <= min_bc .and. .not. is_external) .or. &
             (x >= max_bc .and. .not. is_external) )
+#ifdef DEBUG
         if (ioutrange_strict > 0) print '("Internal nodes close to bc ",i0)', ioutrange_strict
+#endif
         if (ioutrange > 0) ierr = CG_OUT_VALID_RANGE
       end block
 
