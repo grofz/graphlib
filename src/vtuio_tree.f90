@@ -9,7 +9,7 @@
     private
     public object_t, vtuio_tree_read
 
-    integer, parameter :: DEBUG = 0
+    integer, parameter :: IDEBUG = 0
 
 integer :: counter=0
 
@@ -131,7 +131,7 @@ counter = counter - 1
       end do
       ! must deallocate the list to avoid a "second" finalization (!)
       deallocate(this%list)
-      if (DEBUG>0) print *, 'Finalized tag ',this%tag, counter
+      if (IDEBUG>0) print *, 'Finalized tag ',this%tag, counter
     end subroutine
 
 
@@ -182,7 +182,7 @@ print '("File size ",i0," bytes. Scan completed.")', pos-1
 
       call read_tag(fid, tag, lastch)
       new => object_t(tag)
-      if (DEBUG>0) print '("Reading tag ",a)', '"'//trim(new%tag)//'"...'
+      if (IDEBUG>0) print '("Reading tag ",a)', '"'//trim(new%tag)//'"...'
 
       was_closed = .false.
       if (lastch /= '>') then  ! i.e. not <Tag> but <Tag ... >
@@ -191,7 +191,7 @@ print '("File size ",i0," bytes. Scan completed.")', pos-1
           call read_attribute(fid, nam, val, was_success, was_closed)
           if (.not. was_success) exit
           call addobj(new, object_t(nam, val))
-          if (DEBUG>0) call object_print(new%list(size(new%list))%ptr)
+          if (IDEBUG>0) call object_print(new%list(size(new%list))%ptr)
         end do
       end if
 
@@ -207,7 +207,7 @@ print '("File size ",i0," bytes. Scan completed.")', pos-1
         if (err) then
           call read_raw(fid, new%tag, obj)
           call addobj(new, obj)
-          if (DEBUG>0) call object_print(new%list(size(new%list))%ptr)
+          if (IDEBUG>0) call object_print(new%list(size(new%list))%ptr)
         else if (chtag(1:1)=='/' .and. chtag(2:)==tag) then
           was_closed=.true.
         else
@@ -216,8 +216,8 @@ print '("File size ",i0," bytes. Scan completed.")', pos-1
           call addobj(new, obj)
         end if
       end do
-      if (DEBUG>0) call object_print(new)
-      if (DEBUG>0) print '("..reading done ",a,1x,i0)','"'//trim(new%tag)//'"', size(new%list)
+      if (IDEBUG>0) call object_print(new)
+      if (IDEBUG>0) print '("..reading done ",a,1x,i0)','"'//trim(new%tag)//'"', size(new%list)
     end subroutine read_obj
 
 

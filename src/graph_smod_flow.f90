@@ -6,9 +6,14 @@
 !
     implicit none (type, external)
 
+    ! Return codes for conjugate gradient solver
     integer, parameter :: CG_OK=0, CG_MAXITER=1, CG_TRIVIAL=2, &
-        CG_OUT_VALID_RANGE=3, CG_NOT_POSDEF_MATRIX=4, CG_NOTHING_DONE=5, &
-        CG_RESIDUAL_ZERO=6
+        CG_OUT_VALID_RANGE=3, CG_NOT_POSDEF_MATRIX=4
+    ! Default values for CG solver
+      real(dp), parameter :: &
+        RTOL_L2_DEFAULT     = 1.0e-8, &
+        RTOL_LINF_DEFAULT   = 1.0e-8, &
+        RTOL_BOUNDS_DEFAULT = 1.0e-7
 
   contains
 
@@ -1018,13 +1023,16 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
 ! -----------------------------------------------------------------------------
 !   subroutine graph_conductance(this, position_conductance, &
 !       bc_label, x_low, x_high, flow, xfield, edge_flow, vmask, emask, &
-!       vselector, eselector)
+!       vselector, eselector, rtol_l2, rtol_linf, rtol_bounds)
 ! -----------------------------------------------------------------------------
     module procedure graph_conductance
       logical, allocatable :: vmask0(:), emask0(:), is_external(:)
       real(dp), allocatable :: x(:)
-      integer :: ierr
+      integer :: iflag
       integer, parameter :: BC_LOW=1, BC_HIGH=2
+
+      if (this%is_directed_graph) error stop &
+          'graph_conductance - algorithm requires undirected graph'
 
       if (size(bc_label) /= this%nvertices) error stop &
           'graph_conductance - size of bc_label is invalid'
@@ -1033,77 +1041,102 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
           emask_provided=emask, vselector=vselector, eselector=eselector)
 
       allocate(x(this%nvertices), source=x_low)
+      where (bc_label == BC_HIGH) x = x_high
       allocate(is_external(this%nvertices), source=.true.)
-      ! internal nodes must be selected and not labeled as a boundary
-      where (vmask0 .and. bc_label/=BC_LOW .and. bc_label/=BC_HIGH)
+      ! Internal nodes must be selected and labeled differently than boundary
+      where (vmask0 .and. .not. is_boundary(bc_label))
         is_external = .false.
+        ! the initial guess just in the middle of the range
         x = 0.5_dp*(x_low+x_high)
       end where
-      where(bc_label == BC_HIGH) x = x_high
 
-      ! Solve set of algebraic equations for x
+      ! CG solver
       call conjugate_gradient(this, x, position_conductance, is_external, &
-          emask0, ierr)
-      select case (ierr)
+        emask0, iflag, rtol_l2, rtol_linf, rtol_bounds)
+      select case (iflag)
       case(CG_OK, CG_MAXITER)
-        if (ierr==CG_MAXITER) print &
-            '("graph_conductance WARNING - maximum number of iterations reached")'
-        ! continue assuming solution of AE is correct
+        ! continue assuming solution of AE is good enough
+        if (iflag==CG_MAXITER) print &
+          '("graph_conductance WARNING - maximum number of iterations reached")'
       case(CG_TRIVIAL)
-        x = x_low ! make sure flow returns zero
+        ! make sure flow returns zero
+        x = x_low
         print '("graph_conductance WARNING - network seems non-percolating")'
-      case(CG_OUT_VALID_RANGE, CG_NOT_POSDEF_MATRIX, CG_RESIDUAL_ZERO)
-        print '("graph_conductance - conjugate gradient error code ",i0)', ierr
+      case(CG_NOT_POSDEF_MATRIX)
         error stop &
-          'graph_conductance - conjugate gradient break-up'
-      case(CG_NOTHING_DONE)
-        print '("graph_conductance WARNING - CG skipped as initial tolerance is oartially met")'
-        ! sum of residuals is met, but accumulation at some node(s) is not met
-        ! continue
+          'graph_conductance - matrix is not positive definite as required by CG'
+      case(CG_OUT_VALID_RANGE)
+        error stop &
+          'graph_conductance - CG returning values out of boundary ranges'
       case default
-        error stop 'graph_conductance - unknown ierr (internal error)'
+        error stop 'graph_conductance - unknown iflag (internal error)'
       end select
 
-      ! Use solution to calculate flow
+      ! Use solution to calculate flow.
       block
-        real(dp), allocatable :: accumulation(:)
-        real(dp) :: flow_source, flow_sink
-        call flow_accumulation(this, position_conductance, emask0, x, &
-            accumulation, edge_flow)
-        flow_sink = sum(accumulation, mask=bc_label==BC_LOW)
-        flow_source = sum(accumulation, mask=bc_label==BC_HIGH)
-print '("accumulation sink    : ",g0)', flow_sink
-print '("accumulation source  : ",g0)', flow_source
-print '("accumulation internal: ",g0)', &
-  sum(accumulation, mask=.not. is_external)
-print '("accumulation non-per : ",g0)', &
-  sum(accumulation, mask=(is_external .and. bc_label/=BC_LOW .and. bc_label/=BC_HIGH))
+        real(dp), allocatable :: accum(:)
+        real(dp) :: flow_source, flow_sink, flow_gap, tol_gap, rtol_l2_used
 
-        if (abs(flow_source+flow_sink) >= 1.0e-4) print &
-           '("graph_conductance WARNING - source/sink imbalance")'
+        call flow_accumulation(this, position_conductance, emask0, x, &
+            accum, edge_flow)
+
+        flow_sink = sum(accum, mask=bc_label==BC_LOW)
+        flow_source = sum(accum, mask=bc_label==BC_HIGH)
         flow = 0.5_dp*(abs(flow_source)+abs(flow_sink))
+        flow_gap = abs(flow_source+flow_sink)
+        rtol_l2_used = RTOL_L2_DEFAULT
+        if (present(rtol_l2)) rtol_l2_used = rtol_l2
+        tol_gap = rtol_l2_used * max(1.0_dp, 2.0_dp*flow)
+#ifdef DEBUG
+        print '("Accum sink    : ",g0)', flow_sink
+        print '("accum source  : ",g0)', flow_source
+        print '("accum internal: ",g0)', sum(accum, mask=.not. is_external)
+        print '("accum closed  : ",g0)', sum(accum, mask=is_external .and. .not. is_boundary(bc_label))
+        print '("flow gap: ",g0," (tolerated ",g0,")")', flow_gap, tol_gap
+#endif
+        if (flow_gap > tol_gap) then
+          print &
+           '("graph_conductance WARNING - source/sink imbalance")'
+#ifndef DEBUG
+          print '("Accum sink    : ",g0)', flow_sink
+          print '("accum source  : ",g0)', flow_source
+          print '("accum internal: ",g0)', sum(accum, mask=.not. is_external)
+          print '("accum closed  : ",g0)', sum(accum, mask=is_external .and. .not. is_boundary(bc_label))
+          print '("flow gap: ",g0," (tolerated ",g0,")")', flow_gap, tol_gap
+#endif
+        end if
       end block
 
       ! Return xfield if asked for
       if (present(xfield)) call move_alloc(x, xfield)
+
+    contains
+
+      elemental logical function is_boundary(label)
+        integer, intent(in) :: label
+        is_boundary = label==BC_LOW .or. label==BC_HIGH
+      end function
+
     end procedure graph_conductance
 
 
 #ifdef DEBUG
-    subroutine conjugate_gradient(g, x, position_conductance, is_external, emask, ierr)
+    subroutine conjugate_gradient(g, x, position_conductance, is_external, &
+        emask, iflag, rtol_l2, rtol_linf, rtol_bounds)
 #else
-    pure subroutine conjugate_gradient(g, x, position_conductance, is_external, emask, ierr)
+    pure subroutine conjugate_gradient(g, x, position_conductance, is_external, emask, ierr, rtol_l2, rtol_linf, rtol_bounds)
 #endif
       class(graph_t), intent(in) :: g
       real(dp), intent(inout) :: x(:)
       integer, intent(in) :: position_conductance
       logical, intent(in) :: emask(:), is_external(:)
-      integer, intent(out) :: ierr
+      integer, intent(out) :: iflag
+      real(dp), intent(in), optional :: rtol_l2, rtol_linf, rtol_bounds
 !
-! Solve A*x = b using conjugate gradient algorithm.
+! Solve A*x = b, A must be positive definite and b non-zero.
 !
 ! IN:
-!   g           - the undirected graph 
+!   g           - undirected graph
 !   x           - potential
 !               i is an external node
 !                 - boundary value of the potential (Dirichlet b.c)
@@ -1112,16 +1145,23 @@ print '("accumulation non-per : ",g0)', &
 !   position_conductance - position of g_ij in edges/rpar array
 !   is_external - .true. marks external nodes
 !   emask       - .true. marks selected (open for flow) edges
+!   rtol_l2, rtol_linf, rtol_bounds - optional tolerance setting
 !
 ! OUT:
 !   x           - solution for internal nodes
-!   ierr        - returns CG_OK if solved successfully
-!               
+!   iflag       - output flag:
+!                 - CG_OK if solved successfully
+!                 - CG_MAXITER if convergence tolerances not met after the
+!                   set maximum number of iterations.
+!                 - CG_TRIVIAL if vector b is zero (non-percolating network).
+!                 - CG_OUT_VALID_RANGE if, after leaving iteration loop, some
+!                   x values are out of (x_low,x_high) range
+!                 - CG_NOT_POSDEF_MATRIX if matrix is not positive definite.
+!
       real(dp), allocatable :: y(:), r(:), rnew(:), p(:), b(:)
-      real(dp) :: alfa, beta, tol_max, tol2_norm, denom
+      real(dp) :: alfa, beta, tol_linf, tol_l2, denom, b2
       integer :: k, maxiter
-      real(dp), parameter :: RESIDUAL_TOL = 1.0e-8, IMBALANCE_TOL = 1.0e-8
-      integer, parameter :: MAXITER_FACTOR = 1, R_EXACT_FREQUENCY = 20
+      integer, parameter :: MAXITER_FACTOR = 2, R_EXACT_FREQUENCY = 15
 
       associate(n=>g%nvertices)
         allocate (y(n), r(n), rnew(n), p(n), b(n))
@@ -1129,27 +1169,31 @@ print '("accumulation non-per : ",g0)', &
 
       ! b-vector
       call b_vector(g, position_conductance, is_external, emask, x, b)
-      tol2_norm = dot_product(b, b) * RESIDUAL_TOL**2
-      tol_max = max(1.0_dp, maxval(abs(b))) * IMBALANCE_TOL
-      if (dot_product(b, b) <= tiny(1.0_dp)) then
+      b2 = dot_product(b, b)
+      if (b2 <= tiny(1.0_dp)) then
         ! Vector b contains only zeros. This could mean no internal node has
         ! contact with external node, or the system is trivial.
         ierr = CG_TRIVIAL
         return
       end if
 
+      ! stopping criteria tolerance
+      block
+        real(dp) :: rtol_l2_used, rtol_linf_used
+        rtol_l2_used = RTOL_L2_DEFAULT
+        if (present(rtol_l2)) rtol_l2_used = rtol_l2
+        rtol_linf_used = RTOL_LINF_DEFAULT
+        if (present(rtol_linf)) rtol_linf_used = rtol_linf
+        tol_l2 = b2 * rtol_l2_used**2
+        tol_linf = max(1.0_dp, maxval(abs(b))) * rtol_linf_used
+      end block
+
       ! initial residual (r = b - Ax)
       call laplacian_multiply(g, position_conductance, is_external, emask, x, y)
       r = b - y
-      if (dot_product(r, r) < tol2_norm) then
-        if (maxval(abs(r)) < tol_max) then
-          ! Equations seem solved already with error tolerances met.
-          ierr = CG_OK
-        else
-          ! Residual sum tolerance met, but imbalance for some node(s) not.
-          ! To be on the safe side, just report an error and exit.
-          ierr = CG_NOTHING_DONE
-        end if
+      if (dot_product(r, r) < tol_l2 .and. maxval(abs(r)) < tol_linf) then
+        ! Equations seem solved already with error tolerances met.
+        ierr = CG_OK
         return
       end if
 
@@ -1158,23 +1202,27 @@ print '("accumulation non-per : ",g0)', &
       k = 0
       maxiter = max(100, MAXITER_FACTOR * count(.not. is_external))
 #ifdef DEBUG
-print '("Iter / Residual norm**2 / Max imbalance / Where / alfa / beta")'
-print '(i5,1x,e10.4,1x,e10.4,1x,i6,1x,g0,1x,g0)', &
-            k, sum(r**2), maxval(abs(r)), maxloc(abs(r)), 0.0, 0.0
+      100 format (i5,1x,e12.4e3,1x,e12.4e3,1x,i6,1x,f10.5,1x,f10.5)
+      print &
+          '("    #       |r|**2        r_max  i_max       alfa       beta")'
+      !     |12345_123456789012_123456789012_123456_1234567890_1234567890
+      print 100, k, dot_product(r,r), maxval(abs(r)), maxloc(abs(r)), 0.0, 0.0
 #endif
 
       CGLOOP: do
         ! periodically recalculate residual to clear accumulated round-off errors
         if (mod(k,R_EXACT_FREQUENCY)==0) then
-          call laplacian_multiply(g, position_conductance, is_external, emask, x, y)
+          call laplacian_multiply( &
+              g, position_conductance, is_external, emask, x, y)
           r = b - y
         end if
 
         ! alfa = |r*r| / |p*Ap|
-        call laplacian_multiply(g, position_conductance, is_external, emask, p, y)
+        call laplacian_multiply( &
+            g, position_conductance, is_external, emask, p, y)
         denom = dot_product(p, y)
         if (denom <= 0.0_dp) then
-          ! Laplacian matrix is not positive definite (something got terribly wrong)
+          ! Laplacian matrix is not positive definite
           ierr = CG_NOT_POSDEF_MATRIX
           return
         end if
@@ -1183,27 +1231,26 @@ print '(i5,1x,e10.4,1x,e10.4,1x,i6,1x,g0,1x,g0)', &
         ! update x and check if prescirbed tolerances are met
         where (.not. is_external) x = x + alfa*p
         rnew = r - alfa*y
-        if (dot_product(rnew, rnew) < tol2_norm .and. &
-            maxval(abs(rnew)) < tol_max) then
+        if (dot_product(rnew, rnew) < tol_l2 .and. &
+            maxval(abs(rnew)) < tol_linf) then
           ierr = CG_OK
           exit CGLOOP
         end if
 
         ! beta = |rnew*rnew| / |r*r|
+        ! The residual norm must be positive here.
+        ! Otherwise, the convergence test above should exit the loop.
         denom = dot_product(r, r)
-        if (abs(denom) < tiny(denom)) then
-          ! avoid division by zero, can not continue
-          ierr = CG_RESIDUAL_ZERO
-          return
-        endif
+        if (denom <= tiny(0.0)) error stop &
+            'conjugate_gradient - zero residual is unexpected (internal error)'
         beta = dot_product(rnew, rnew)/denom
         p = rnew + beta*p
 
         k = k + 1
 
 #ifdef DEBUG
-print '(i5,1x,e10.4,1x,e10.4,1x,i6,1x,g0,1x,g0)', &
-            k, sum(rnew**2), maxval(abs(rnew)), maxloc(abs(rnew)), alfa, beta
+        print 100, k, dot_product(rnew,rnew), maxval(abs(rnew)), &
+            maxloc(abs(rnew)), alfa, beta
 #endif
 
         r = rnew
@@ -1215,13 +1262,17 @@ print '(i5,1x,e10.4,1x,e10.4,1x,i6,1x,g0,1x,g0)', &
         end if
       end do CGLOOP
 
-      ! verify output is in the (x_low, x_high) range
+      ! verify x on output is within (x_low, x_high) range
+      ! tolerance is rtol_bounds * (x_high - x_low)
       block
-        real(dp) :: min_bc, max_bc, x_tol
+        real(dp) :: min_bc, max_bc, x_tol, rtol_bounds_used
         integer :: ioutrange, i, ioutrange_strict
+
         min_bc = minval(x, mask=is_external)
         max_bc = maxval(x, mask=is_external)
-        x_tol = 10*IMBALANCE_TOL*max(abs(min_bc), abs(max_bc), 1.0_dp)
+        rtol_bounds_used = RTOL_BOUNDS_DEFAULT
+        if (present(rtol_bounds)) rtol_bounds_used = rtol_bounds
+        x_tol = rtol_bounds_used*max(abs(max_bc-min_bc), 1.0_dp)
         ioutrange = count( &
             (x+x_tol <= min_bc .and. .not. is_external) .or. &
             (x-x_tol >= max_bc .and. .not. is_external) )
@@ -1229,7 +1280,9 @@ print '(i5,1x,e10.4,1x,e10.4,1x,i6,1x,g0,1x,g0)', &
             (x <= min_bc .and. .not. is_external) .or. &
             (x >= max_bc .and. .not. is_external) )
 #ifdef DEBUG
-        if (ioutrange_strict > 0) print '("Internal nodes close to bc ",i0)', ioutrange_strict
+        if (ioutrange_strict > 0) &
+            print '("CG WARNING - x of ",i0,&
+            & " internal nodes outside (x_low,x_high) range")', ioutrange_strict
 #endif
         if (ioutrange > 0) ierr = CG_OUT_VALID_RANGE
       end block

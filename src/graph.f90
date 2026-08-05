@@ -405,7 +405,7 @@
 
       module subroutine graph_conductance(this, position_conductance, &
           bc_label, x_low, x_high, flow, xfield, edge_flow, vmask, emask, &
-          vselector, eselector)
+          vselector, eselector, rtol_l2, rtol_linf, rtol_bounds)
         class(graph_t), intent(in) :: this
         integer, intent(in) :: position_conductance
         integer, intent(in) :: bc_label(:)
@@ -416,10 +416,62 @@
         logical, intent(in), optional :: vmask(:), emask(:)
         procedure(is_vertex_selected), optional :: vselector
         procedure(is_edge_selected), optional :: eselector
+        real(dp), intent(in), optional :: rtol_l2, rtol_linf, rtol_bounds
 !
-! Calculate flow through network for the given potential difference.
+! Compute flow in an undirected network by solving the steady-state potential
+! field using the conjugate gradient method. The effective conductance can
+! be determined from the calculated flow:
 !
-! TBC
+!     G_eff = flow / abs(x_high - x_low)
+!
+! The graph is interpreted as a network of conductances, where each edge
+! connects two vertices with conductance stored in the edge rpar array.
+! Boundary conditions are imposed by assigning vertices to two fixed
+! potential groups. All other selected vertices are treated as internal nodes
+! and their potentials are determined from the conservation equation:
+!
+!     sum_j g_ij (x_i - x_j) = 0
+!
+! for every internal vertex i.
+!
+! IN:
+!   this                - graph object (must be undirected)
+!   position_conductance
+!                       - position of edge conductance in the rpar array
+!   bc_label            - boundary condition label for each vertex
+!                         - BC_LOW  : fixed potential x_low
+!                         - BC_HIGH : fixed potential x_high
+!                         - other   : internal node (if selected)
+!   x_low, x_high       - imposed potentials at low and high boundaries
+!   vmask, emask        - optional masks selecting active vertices/edges
+!   vselector, eselector
+!                       - optional user-defined vertex/edge selection
+!   rtol_l2             - optional relative L2 residual tolerance
+!   rtol_linf           - optional relative maximum imbalance tolerance
+!   rtol_bounds         - optional tolerance for checking the potential is
+!                         within the (x_low,x_high) range
+!
+! OUT:
+!   flow                - total network flow between the two boundaries
+!   xfield              - optional calculated potential at each vertex
+!   edge_flow           - optional flow through each edge
+!
+! NOTES:
+!   - Only vertices selected by vmask (or vselector) and not marked as
+!     boundary vertices in bc_labels become internal nodes.
+!   - Vertices not selected by vmask (or vselector) are inactive and do not
+!     participate in the calculation.
+!   - Only edges selected by emask (or eselector) are included in the
+!     calculation.
+!   - All edge conductances must be non-negative.
+!   - The method requires a positive definite system matrix. This is normally
+!     satisfied for connected networks with at least one conducting path
+!     between the two boundary groups.
+!   - A non-zero difference between source and sink flux indicates either
+!     a numerical imbalance or an incorrectly defined network.
+!   - For robust convergence, it is recommended to remove or unselect
+!     disconnected components (non-percolating vertices) before calling this
+!     routine.
 !
       end subroutine graph_conductance
 

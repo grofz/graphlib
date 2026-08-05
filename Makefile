@@ -20,7 +20,7 @@ COMMON_FLAGS = -Wall -Wextra -pedantic -std=gnu -fimplicit-none -fbacktrace -fPI
 #   $ make DEBUG=yes
 #
 ifdef DEBUG
-  FFLAGS =-Og -g -fcheck=all -Wtrampolines $(COMMON_FLAGS)
+  FFLAGS =-Og -g -fcheck=all -Wtrampolines -DDEBUG $(COMMON_FLAGS)
 else
   FFLAGS =-Ofast -march=native $(COMMON_FLAGS)
 endif

@@ -93,7 +93,7 @@
 
     integer, parameter :: RADIUS_DATA_SIZE = 4
 
-    integer, parameter :: DEBUG=0
+    integer, parameter :: IDEBUG=0
 
     ! legend for items in "mask" array argument
     integer, parameter :: MASK_RADIUS=1, MASK_POSITION=2, MASK_POINT_TYPE=3, MASK_CELL_TYPE=4
@@ -544,12 +544,12 @@
       val = obj2%findval('NumberOfPoints', was_found)
       if (was_found) read(val,*,iostat=ios) npoints
       if (ios/=0) error stop 'vtuio_read - could not determine npoints'
-      if (DEBUG>0) print *, 'npoints=',npoints
+      if (IDEBUG>0) print *, 'npoints=',npoints
       ios = -1
       val = obj2%findval('NumberOfCells', was_found)
       if (was_found) read(val,*,iostat=ios) ncells
       if (ios/=0) error stop 'vtuio_read - could not determine ncells'
-      if (DEBUG>0) print *, 'ncells=',ncells
+      if (IDEBUG>0) print *, 'ncells=',ncells
 
       ! get offsets for points and connections
       obj3 => obj2%findtag('Points')
@@ -559,7 +559,7 @@
       val = obj3%findval('offset', was_found)
       if (was_found) read(val,*,iostat=ios) offset_points
       if (ios/=0) error stop 'vtuio_read - could not determine offset_points'
-      if (DEBUG>0) print '("offset points ",i0)', offset_points
+      if (IDEBUG>0) print '("offset points ",i0)', offset_points
       obj3 => obj2%findtag('Cells')
       if (.not. associated(obj3)) error stop &
       & 'vtuio_read - tag "Cells" not found'
@@ -567,17 +567,17 @@
       val = obj3%findval('Name','connectivity','offset', was_found)
       if (was_found) read(val,*,iostat=ios) offset_cones
       if (ios/=0) error stop 'vtuio_read - could not determine offset_cones'
-      if (DEBUG>0) print '("offset cones ",i0)', offset_cones
+      if (IDEBUG>0) print '("offset cones ",i0)', offset_cones
       ios = -1
       val = obj3%findval('Name','offsets','offset', was_found)
       if (was_found) read(val,*,iostat=ios) offset_offsets
       if (ios/=0) error stop 'vtuio_read - could not determine offset_offsets'
-      if (DEBUG>0) print '("offset offsets ",i0)', offset_offsets
+      if (IDEBUG>0) print '("offset offsets ",i0)', offset_offsets
       ios = -1
       val = obj3%findval('Name','types','offset', was_found)
       if (was_found) read(val,*,iostat=ios) offset_types
       if (ios/=0) error stop 'vtuio_read - could not determine offset_types'
-      if (DEBUG>0) print '("offset types ",i0)', offset_types
+      if (IDEBUG>0) print '("offset types ",i0)', offset_types
 
       ! is timevalue present?
       time_pos = 0
@@ -585,7 +585,7 @@
       if (was_found) then
         time_pos = obj1%findraw()
       end if
-      if (DEBUG>0) print '("time pos ",i0,1x,i0)', time_pos
+      if (IDEBUG>0) print '("time pos ",i0,1x,i0)', time_pos
 
       ! get offsets for point data
       offset_r = -1
@@ -608,7 +608,7 @@
         val = obj2%findval('Name','con t','offset', was_found)
         if (was_found) read(val,*,iostat=ios) offset_ct
       end if
-      if (DEBUG>0) then
+      if (IDEBUG>0) then
         print '("offset radii ",i0)', offset_r
         print '("offset atom type ",i0)', offset_at
         print '("offset cell type ",i0)', offset_ct
@@ -619,7 +619,7 @@
       if (.not. associated(obj1)) error stop &
       & 'vtuio_read - tag "AppendedData" not found'
       data_pos = obj1%findraw()
-      if (DEBUG>0) print '("data pos ",i0,1x,i0)', data_pos
+      if (IDEBUG>0) print '("data pos ",i0,1x,i0)', data_pos
 
 
       ! PART TWO
@@ -645,7 +645,7 @@
       ! TODO better validation???
       read(fid, pos=data_pos(1)+1+offset_points) nblock
       associate(item=>int(nblock)/(3*npoints), check=>mod(int(nblock),3*npoints))
-        if (DEBUG>0) print '("-points = ",i0,1x,i0,1x,i0)', nblock, item, check
+        if (IDEBUG>0) print '("-points = ",i0,1x,i0,1x,i0)', nblock, item, check
         if (check/=0) error stop &
         & 'vtuio_read - validation fails, header size 32/64 mismatch?'
         if (item/=POSITIONS_SIZE) error stop &
@@ -654,7 +654,7 @@
 
       read(fid, pos=data_pos(1)+1+offset_cones) nblock
       associate(item=>int(nblock)/(2*ncells), check=>mod(int(nblock),2*ncells))
-        if (DEBUG>0) print '("-cones = ",i0,1x,i0,1x,i0)', nblock, item, check
+        if (IDEBUG>0) print '("-cones = ",i0,1x,i0,1x,i0)', nblock, item, check
         if (check/=0) error stop &
         & 'vtuio_read - validation fails, header size 32/64 mismatch?'
         if (item/=CONNECTIONS_SIZE) error stop &
@@ -662,10 +662,10 @@
       end associate
 
       read(fid, pos=data_pos(1)+1+offset_offsets) nblock
-      if (DEBUG>0) print '("-offsets = ",i0,1x,i0,1x,i0)', nblock, int(nblock)/(ncells), mod(int(nblock),ncells)
+      if (IDEBUG>0) print '("-offsets = ",i0,1x,i0,1x,i0)', nblock, int(nblock)/(ncells), mod(int(nblock),ncells)
 
       read(fid, pos=data_pos(1)+1+offset_types) nblock
-      if (DEBUG>0) print '("-types = ",i0,1x,i0,1x,i0)', nblock, int(nblock)/(ncells), mod(int(nblock),ncells)
+      if (IDEBUG>0) print '("-types = ",i0,1x,i0,1x,i0)', nblock, int(nblock)/(ncells), mod(int(nblock),ncells)
 
 
       ! PART THREE
@@ -778,7 +778,7 @@
 
       read(fid, pos=pos_start) nblock
       nbytes = int(nblock)/nvals
-      if (DEBUG>0) print '("read_data - ",i0," blocks, ",i0," bytes")', &
+      if (IDEBUG>0) print '("read_data - ",i0," blocks, ",i0," bytes")', &
           nblock, nbytes, mod(int(nblock),nvals)
       if (mod(int(nblock),nvals)/=0) error stop &
       & 'read_data - validation fails (input data incosistent)'
