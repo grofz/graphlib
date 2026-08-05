@@ -2,15 +2,19 @@
 !
 ! Stoer-Wagner algorithm for min-cut partition
 ! Edmond-Karp and Dinics algorithms for maximum flow
-! Network conductance via Conjugate Gradient method
+! Network conductance via conjugate gradient method
 !
     implicit none (type, external)
 
     ! Return codes for conjugate gradient solver
-    integer, parameter :: CG_OK=0, CG_MAXITER=1, CG_TRIVIAL=2, &
-        CG_OUT_VALID_RANGE=3, CG_NOT_POSDEF_MATRIX=4
-    ! Default values for CG solver
-      real(dp), parameter :: &
+    integer, parameter :: &
+        CG_OK                = 0, &
+        CG_MAXITER           = 1, &
+        CG_TRIVIAL           = 2, &
+        CG_OUT_VALID_RANGE   = 3, &
+        CG_NOT_POSDEF_MATRIX = 4
+    ! Default tolerance values for CG solver
+    real(dp), parameter :: &
         RTOL_L2_DEFAULT     = 1.0e-8, &
         RTOL_LINF_DEFAULT   = 1.0e-8, &
         RTOL_BOUNDS_DEFAULT = 1.0e-7
@@ -529,7 +533,10 @@
         ! The flow can be augmented. How much flow can we send?
         call process_path(this, forward_capacity, backward_capacity, &
             source_id, sink_id, prev_edge, pair_edge, additional_flow, .false.)
-print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
+#ifdef DEBUG
+        print '("Edmond-Karp: Current flow is ",g0,". Augmenting by ",g0,".")', &
+            flow, additional_flow
+#endif
         ! Update capacity of the network
         call process_path(this, forward_capacity, backward_capacity, &
             source_id, sink_id, prev_edge, pair_edge, additional_flow, .true., &
@@ -570,7 +577,9 @@ print *, 'Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
 
         ! No more path from source to sink with non-zero capacity exists
         if (levels(sink_id)==MAP_NULL) exit MAIN
-print '("Dinic: Sink distance is ",i0," levels")', levels(sink_id)
+#ifdef DEBUG
+        print '("Dinic: Sink distance is ",i0," levels.")', levels(sink_id)
+#endif
 
         ! Initialize iterators for DFS
         do i = 1, this%nvertices
@@ -588,7 +597,10 @@ print '("Dinic: Sink distance is ",i0," levels")', levels(sink_id)
           ! The flow can be augmented. How much flow can we send?
           call process_path(this, forward_capacity, backward_capacity, &
               source_id, sink_id, prev_edge, pair_edge, additional_flow, .false.)
-print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
+#ifdef DEBUG
+          print '("Dinic: Current flow is ",g0,". Augmenting by ",g0,".")', &
+              flow, additional_flow
+#endif
           ! Update capacity of the network
           call process_path(this, forward_capacity, backward_capacity, &
               source_id, sink_id, prev_edge, pair_edge, additional_flow, .true., &
@@ -1074,19 +1086,45 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
 
       ! Use solution to calculate flow.
       block
-        real(dp), allocatable :: accum(:)
+        real(dp), allocatable :: accum(:), b(:)
         real(dp) :: flow_source, flow_sink, flow_gap, tol_gap, rtol_l2_used
+        integer :: n
+
+        ! tolerance for consistency checks
+        rtol_l2_used = RTOL_L2_DEFAULT
+        if (present(rtol_l2)) rtol_l2_used = rtol_l2
+        allocate(b(size(x)))
+        call b_vector(this, position_conductance, is_external, emask0, x, b)
+        n = count(.not. is_external)
 
         call flow_accumulation(this, position_conductance, emask0, x, &
             accum, edge_flow)
-
         flow_sink = sum(accum, mask=bc_label==BC_LOW)
         flow_source = sum(accum, mask=bc_label==BC_HIGH)
         flow = 0.5_dp*(abs(flow_source)+abs(flow_sink))
         flow_gap = abs(flow_source+flow_sink)
-        rtol_l2_used = RTOL_L2_DEFAULT
-        if (present(rtol_l2)) rtol_l2_used = rtol_l2
-        tol_gap = rtol_l2_used * max(1.0_dp, 2.0_dp*flow)
+
+        ! If "r" is residual vector, then the flow imbalance must be the
+        ! summation over all internal nodes, sum(r).
+        ! Let us express sum(r) as a mean of r multiplied by
+        ! the number of internal nodes N
+        !
+        !   flow_gap = |sum(r)| = N * |mean(r)|
+        !
+        ! By the Cauchy-Swarz inequality
+        !
+        !   |mean(r)| <= ||r|| / sqrt(N)
+        !
+        ! Also, based om CG convergence criteria
+        !
+        !   ||r|| <= rtol_l2 * ||b||
+        !
+        ! Therefore
+        !
+        !   flow_gap = N * |mean(r)| <= sqrt(N)*||r|| <= sqrt(N)*rtol_l2*||b||
+        !
+        tol_gap = sqrt(real(n,dp)) * rtol_l2_used * sqrt(dot_product(b,b))
+
 #ifdef DEBUG
         print '("Accum sink    : ",g0)', flow_sink
         print '("accum source  : ",g0)', flow_source
@@ -1121,10 +1159,11 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
 
 
 #ifdef DEBUG
-    subroutine conjugate_gradient(g, x, position_conductance, is_external, &
-        emask, iflag, rtol_l2, rtol_linf, rtol_bounds)
+    subroutine conjugate_gradient(g, x, position_conductance, &
+        is_external, emask, iflag, rtol_l2, rtol_linf, rtol_bounds)
 #else
-pure subroutine conjugate_gradient(g, x, position_conductance, is_external, emask, iflag, rtol_l2, rtol_linf, rtol_bounds)
+    pure subroutine conjugate_gradient(g, x, position_conductance, &
+        is_external, emask, iflag, rtol_l2, rtol_linf, rtol_bounds)
 #endif
       class(graph_t), intent(in) :: g
       real(dp), intent(inout) :: x(:)
@@ -1284,7 +1323,7 @@ pure subroutine conjugate_gradient(g, x, position_conductance, is_external, emas
             print '("CG WARNING - x of ",i0,&
             & " internal nodes outside (x_low,x_high) range")', ioutrange_strict
 #endif
-if (ioutrange > 0) iflag = CG_OUT_VALID_RANGE
+        if (ioutrange > 0) iflag = CG_OUT_VALID_RANGE
       end block
 
     end subroutine conjugate_gradient
