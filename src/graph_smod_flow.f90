@@ -1124,7 +1124,7 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
     subroutine conjugate_gradient(g, x, position_conductance, is_external, &
         emask, iflag, rtol_l2, rtol_linf, rtol_bounds)
 #else
-    pure subroutine conjugate_gradient(g, x, position_conductance, is_external, emask, ierr, rtol_l2, rtol_linf, rtol_bounds)
+pure subroutine conjugate_gradient(g, x, position_conductance, is_external, emask, iflag, rtol_l2, rtol_linf, rtol_bounds)
 #endif
       class(graph_t), intent(in) :: g
       real(dp), intent(inout) :: x(:)
@@ -1173,7 +1173,7 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       if (b2 <= tiny(1.0_dp)) then
         ! Vector b contains only zeros. This could mean no internal node has
         ! contact with external node, or the system is trivial.
-        ierr = CG_TRIVIAL
+        iflag = CG_TRIVIAL
         return
       end if
 
@@ -1193,7 +1193,7 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
       r = b - y
       if (dot_product(r, r) < tol_l2 .and. maxval(abs(r)) < tol_linf) then
         ! Equations seem solved already with error tolerances met.
-        ierr = CG_OK
+        iflag = CG_OK
         return
       end if
 
@@ -1223,7 +1223,7 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
         denom = dot_product(p, y)
         if (denom <= 0.0_dp) then
           ! Laplacian matrix is not positive definite
-          ierr = CG_NOT_POSDEF_MATRIX
+          iflag = CG_NOT_POSDEF_MATRIX
           return
         end if
         alfa = dot_product(r, r) / denom
@@ -1233,7 +1233,7 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
         rnew = r - alfa*y
         if (dot_product(rnew, rnew) < tol_l2 .and. &
             maxval(abs(rnew)) < tol_linf) then
-          ierr = CG_OK
+            iflag = CG_OK
           exit CGLOOP
         end if
 
@@ -1257,7 +1257,7 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
 
         ! avoid never-ending loop
         if (k==maxiter) then
-          ierr = CG_MAXITER
+          iflag = CG_MAXITER
           exit CGLOOP
         end if
       end do CGLOOP
@@ -1284,7 +1284,7 @@ print *, 'Dinic: Current flow is ', flow,'. Augmenting by ',additional_flow,'.'
             print '("CG WARNING - x of ",i0,&
             & " internal nodes outside (x_low,x_high) range")', ioutrange_strict
 #endif
-        if (ioutrange > 0) ierr = CG_OUT_VALID_RANGE
+if (ioutrange > 0) iflag = CG_OUT_VALID_RANGE
       end block
 
     end subroutine conjugate_gradient
