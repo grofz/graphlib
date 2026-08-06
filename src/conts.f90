@@ -1,5 +1,5 @@
 module conts_mod
-  use, intrinsic :: iso_fortran_env, only : error_unit, dp=>real64
+  use, intrinsic :: iso_fortran_env, only : dp=>real64
   implicit none (type, external)
   private
 
@@ -13,32 +13,47 @@ module conts_mod
   contains
     procedure, non_overridable :: size => container_size
     procedure, non_overridable :: empty => container_empty
-    procedure, non_overridable :: clear => container_clear
     procedure, non_overridable :: initialized => container_initialized
+    procedure(container_clear_ai), deferred :: clear
   end type
 
+  abstract interface
+    pure subroutine container_clear_ai(this)
+      import container_t
+      implicit none
+      class(container_t), intent(inout) :: this
+    end subroutine
+  end interface
 
+
+  ! STACK
   type, extends(container_t), public :: stack_t
     private
   contains
     procedure :: initialize => stack_initialize
-    procedure :: push => stack_push, pop => stack_pop
+    procedure :: push => stack_push
+    procedure :: pop => stack_pop
     procedure :: export => stack_export
     procedure :: peek => stack_peek
+    procedure :: clear => stack_clear
   end type
 
 
+  ! QUEUE
   type, extends(container_t), public :: queue_t
     private
     integer :: rear
   contains
     procedure :: initialize => queue_initialize
-    procedure :: enqueue => queue_enqueue, dequeue => queue_dequeue
+    procedure :: enqueue => queue_enqueue
+    procedure :: dequeue => queue_dequeue
     procedure :: export => queue_export
     procedure :: peek => queue_peek
+    procedure :: clear => queue_clear
   end type
 
 
+  ! PRIORITY QUEUE
   integer, parameter :: HMAP_NULL = -1
   integer, parameter, public :: &
     PQUEUE_MIN = 1, & ! lower P is higher priority
@@ -51,36 +66,42 @@ module conts_mod
   contains
     procedure, private :: handle_eq, handle_write_formatted
     generic :: operator(==) => handle_eq
-    ! There may be a compiler error: with this on, the allocatable array of handle_t
-    ! does not deallocate automatically and must be deallocated manually.
+    ! There may be a compiler error: with this on, the allocatable array
+    ! of handle_t does not deallocate automatically and must be deallocated
+    ! manually. We keep it commented out for now as this is not needed
     !generic :: write(formatted) => handle_write_formatted
   end type
   interface handle_t
     module procedure handle_new
   end interface
 
-
   type, extends(container_t), public :: pqueue_t
     private
     ! "values" ... heap of values inherited from base class
-    real(DP), allocatable :: priorities(:)     ! heap of priorities
-    type(handle_t), allocatable :: handles(:) ! heap of handles
-    integer, allocatable :: hmap(:)           ! handle to map to item's position in heaps
+    real(DP), allocatable :: priorities(:)
+      ! heap of priorities
+    type(handle_t), allocatable :: handles(:)
+      ! heap of handles
+    integer, allocatable :: hmap(:)
+      ! handle to map to item's position in heaps
     type(queue_t) :: free_handles
     integer :: ordering = PQUEUE_MIN
   contains
     procedure :: initialize => pqueue_initialize
-    procedure :: insert => pqueue_insert, pop => pqueue_pop
+    procedure :: insert => pqueue_insert
+    procedure :: pop => pqueue_pop
     procedure :: remove => pqueue_remove
     procedure :: priority => pqueue_priority
     procedure :: update_priority => pqueue_update_priority
     procedure :: contains => pqueue_contains
     procedure :: peek => pqueue_peek
-    procedure :: export => pqueue_export, export_priorities => pqueue_export_priorities
+    procedure :: export => pqueue_export
+    procedure :: export_priorities => pqueue_export_priorities
     procedure :: export_handles => pqueue_export_handles
     procedure :: valid => pqueue_valid
+    procedure :: clear => pqueue_clear
   end type
-  ! TODO: get_priority(handle)
+  ! TODO: heapify, update (insert/update_priority)
 
 contains
 
@@ -102,37 +123,38 @@ contains
   end function container_empty
 
 
-  pure subroutine container_clear(this)
-    class(container_t), intent(inout) :: this
-
-!if (this%n == NOT_INITIALIZED) error stop 'clear - container not initialized'
-    if (.not. this%initialized()) error stop 'clear - container not initialized'
-    select type(this)
-    class is (stack_t)
-      this%n = 0
-    class is (queue_t)
-      this%n = 0
-      this%rear = 1
-    class is (pqueue_t)
-      block
-        integer :: i
-        do i=1, this%n
-          this%hmap(this%handles(i)%index_to_hmap) = HMAP_NULL
-          call return_handle(this, this%handles(i))
-        end do
-      end block
-      this%n = 0
-    class default
-      error stop 'container_clear - unknown class'
-    end select
-  end subroutine container_clear
-
-
   pure function container_initialized(this) result(is)
     class(container_t), intent(in) :: this
     logical :: is
     is = this%n /= NOT_INITIALIZED
   end function container_initialized
+
+
+  pure subroutine stack_clear(this)
+    class(stack_t), intent(inout) :: this
+    if (.not. this%initialized()) error stop 'clear - container not initialized'
+    this%n = 0
+  end subroutine stack_clear
+
+
+  pure subroutine queue_clear(this)
+    class(queue_t), intent(inout) :: this
+    if (.not. this%initialized()) error stop 'clear - container not initialized'
+    this%n = 0
+    this%rear = 1
+  end subroutine queue_clear
+
+
+  pure subroutine pqueue_clear(this)
+    class(pqueue_t), intent(inout) :: this
+    integer :: i
+    if (.not. this%initialized()) error stop 'clear - container not initialized'
+    do i=1, this%n
+      this%hmap(this%handles(i)%index_to_hmap) = HMAP_NULL
+      call return_handle(this, this%handles(i))
+    end do
+    this%n = 0
+  end subroutine pqueue_clear
 
 
 ! -------------
@@ -255,7 +277,6 @@ contains
     class(stack_t), intent(inout) :: this
     integer, intent(in) :: newitem(:)
 
-!if (this%n == NOT_INITIALIZED) then
     if (.not. this%initialized()) then
       error stop 'stack_push - stack is not initialized'
     else if (size(newitem) /= size(this%values,dim=1)) then
@@ -274,7 +295,6 @@ contains
     class(queue_t), intent(inout) :: this
     integer, intent(in) :: newitem(:)
 
-!if (this%n == NOT_INITIALIZED) then
     if (.not. this%initialized()) then
       error stop 'queue_enqueue - queue is not itialized'
     else if (size(newitem) /= size(this%values,dim=1)) then
@@ -639,7 +659,6 @@ contains
 ! this item while it is in the queue. After item is removed from queue,
 ! the handle is no longer valid.
 !
-!if (this%n == NOT_INITIALIZED) then
     if (.not. this%initialized()) then
       error stop 'pqueue_insert - pqueue is not itialized'
     else if (size(values) /= size(this%values,dim=1)) then
@@ -693,7 +712,6 @@ contains
 !
     integer :: id
 
-!if (this%n == NOT_INITIALIZED) &
     if (.not. this%initialized()) error stop &
         'pqueue_remove - pqueue is not itialized'
     id = get_idheap(this, handle)
@@ -736,7 +754,6 @@ contains
 !
     integer :: id
 
-!if (this%n == NOT_INITIALIZED) &
     if (.not. this%initialized()) error stop 'pqueue_priority - not initialized'
     id = get_idheap(this, handle)
     if (id == HMAP_NULL) error stop  'pqueue_priority - invalid handle'
@@ -755,7 +772,6 @@ contains
     integer :: id
     real(dp) :: old_priority
 
-!if (this%n == NOT_INITIALIZED) &
     if (.not. this%initialized()) error stop 'pqueue_update - not itialized'
     id = get_idheap(this, handle)
     if (id == HMAP_NULL) error stop 'pqueue_update - invalid handle'
@@ -817,7 +833,6 @@ contains
     class(pqueue_t), intent(in) :: this
     logical :: valid
 
-!if (this%n == NOT_INITIALIZED) then
     if (.not. this%initialized()) then
       ! uninitialized quueue is assumed valid
       valid = .true.
