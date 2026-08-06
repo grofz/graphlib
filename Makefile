@@ -43,7 +43,8 @@ MAIN2 = build_test/maxflowtest.o
 MAIN3 = build_test/betweennesstest.o
 MAIN4 = build_test/concomtest.o
 MAIN5 = build_test/scctest.o
-ALLOBJECTS = $(MODOBJECTS) $(MAIN1) $(MAIN2) $(MAIN3) $(MAIN4) $(MAIN5)
+MAIN6 = build_test/contstest.o
+ALLOBJECTS = $(MODOBJECTS) $(MAIN1) $(MAIN2) $(MAIN3) $(MAIN4) $(MAIN5) $(MAIN6)
 
 # dependent libraries
 #ldir = ./lib/odepack
@@ -58,16 +59,18 @@ ifdef OS
 	EXE3 = test_betweeness.exe
 	EXE4 = test_concom.exe
 	EXE5 = test_scc.exe
+	EXE6 = test_conts.exe
 else
 	EXE1 = $(BINDIR)/test_vtuio.x
 	EXE2 = $(BINDIR)/test_maxflow.x
 	EXE3 = $(BINDIR)/test_betweeness.x
 	EXE4 = $(BINDIR)/test_concom.x
 	EXE5 = $(BINDIR)/test_scc.x
+	EXE6 = $(BINDIR)/test_conts.exe
 endif
 
 # default goal and dependencies
-all: directories $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(OUTLIB)
+all: directories $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(OUTLIB)
 
 # Ensure directories exist before compilation begins
 directories:
@@ -83,31 +86,22 @@ $(EXE4) : $(MODOBJECTS) $(MAIN4)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
 $(EXE5) : $(MODOBJECTS) $(MAIN5)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
+$(EXE6) : $(MODOBJECTS) $(MAIN6)
+	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
 
 $(OUTLIB) : $(MODOBJECTS)
 	$(AR) $@ $^
 
 $(ALLOBJECTS) : Makefile
 
-# module dependencies
+# module dependencies (just for bootstraping)
 $(DIR)/graph.o : $(DIR)/graph_user.o $(DIR)/graph_adjlist.o $(DIR)/conts.o
-
-#$(DIR)/graph_smod_centrality.o : $(DIR)/graph.o
-#$(DIR)/graph_smod_flow.o : $(DIR)/graph.o
 
 $(DIR)/graph_testutils.o : $(DIR)/graph_user.o $(DIR)/graph.o $(DIR)/parse.o
 
 $(DIR)/vtuio26.o : $(DIR)/graph.o $(DIR)/vtuio_tree.o
 
-# dependencies for unit test programs
-#
-#build_test/vtuiotest.o : $(MODOBJECTS)
-
-#build_test/maxflowtest.o : $(MODOBJECTS)
-
-#build_test/betweenesstest.o : $(MODOBJECTS)
-
-#build_test/concomtest.o : $(MODOBJECTS)
+$(DIR)/conts_test.o : $(DIR)/utest.o
 
 #.f.o:
 build_test/%.o : testsrc/%.f90
@@ -117,7 +111,7 @@ $(DIR)/%.o : src/%.f90
 
 # phony clean-up target
 clean :
-	-rm -f $(DIR)/*.o build_test/*.o $(JDIR)/*.mod $(JDIR)/*.smod $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(OUTLIB)
+	-rm -f $(DIR)/*.o build_test/*.o $(JDIR)/*.mod $(JDIR)/*.smod $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(OUTLIB)
 
 # Include the generated dependency files if they exist
 -include $(MODOBJECTS:.o=.d) $(ALLOBJECTS:.o=.d)

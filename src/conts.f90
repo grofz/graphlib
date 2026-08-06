@@ -5,16 +5,16 @@ module conts_mod
 
   integer, parameter :: NOT_INITIALIZED = -1
   integer, parameter :: DEFAULT_CAPACITY = 10
-  integer, parameter, public :: &
-    ERR_OK = 0, ERR_EMPTY = 1, ERR_INVALID_HANDLE = 2, ERR_INVALID_ARG_SIZE = 3
   integer, parameter :: INTEGER_MOLD(0) = [integer ::]
 
   type, abstract :: container_t
     integer :: n = NOT_INITIALIZED
     integer, allocatable :: values(:,:)
   contains
-    procedure, non_overridable :: size => container_size, empty => container_empty
+    procedure, non_overridable :: size => container_size
+    procedure, non_overridable :: empty => container_empty
     procedure, non_overridable :: clear => container_clear
+    procedure, non_overridable :: initialized => container_initialized
   end type
 
 
@@ -56,7 +56,7 @@ module conts_mod
     !generic :: write(formatted) => handle_write_formatted
   end type
   interface handle_t
-    module procedure handle_initialize
+    module procedure handle_new
   end interface
 
 
@@ -105,7 +105,8 @@ contains
   pure subroutine container_clear(this)
     class(container_t), intent(inout) :: this
 
-    if (this%n == NOT_INITIALIZED) error stop 'clear - container not initialized'
+!if (this%n == NOT_INITIALIZED) error stop 'clear - container not initialized'
+    if (.not. this%initialized()) error stop 'clear - container not initialized'
     select type(this)
     class is (stack_t)
       this%n = 0
@@ -122,9 +123,16 @@ contains
       end block
       this%n = 0
     class default
-      error stop 'unknown class'
+      error stop 'container_clear - unknown class'
     end select
   end subroutine container_clear
+
+
+  pure function container_initialized(this) result(is)
+    class(container_t), intent(in) :: this
+    logical :: is
+    is = this%n /= NOT_INITIALIZED
+  end function container_initialized
 
 
 ! -------------
@@ -243,18 +251,15 @@ contains
 !  F           R            F = 10-9-1 % 18 + 1 = 1
 
 
-  pure subroutine stack_push(this, newitem, ierr)
+  pure subroutine stack_push(this, newitem)
     class(stack_t), intent(inout) :: this
     integer, intent(in) :: newitem(:)
-    integer, intent(out), optional :: ierr
 
-    if (this%n == NOT_INITIALIZED) then
+!if (this%n == NOT_INITIALIZED) then
+    if (.not. this%initialized()) then
       error stop 'stack_push - stack is not initialized'
     else if (size(newitem) /= size(this%values,dim=1)) then
-      call handle_error(ERR_INVALID_ARG_SIZE, 'stack_push - unexpected size of newitem', ierr)
-      return
-    else
-      if (present(ierr)) ierr = ERR_OK
+      error stop 'stack_push - newitem size invalid'
     end if
     if (size(this%values,dim=2) == this%n) &
       & call stack_increase_capacity(this, 2*size(this%values,dim=2))
@@ -265,18 +270,15 @@ contains
   end subroutine stack_push
 
 
-  pure subroutine queue_enqueue(this, newitem, ierr)
+  pure subroutine queue_enqueue(this, newitem)
     class(queue_t), intent(inout) :: this
     integer, intent(in) :: newitem(:)
-    integer, intent(out), optional :: ierr
 
-    if (this%n == NOT_INITIALIZED) then
+!if (this%n == NOT_INITIALIZED) then
+    if (.not. this%initialized()) then
       error stop 'queue_enqueue - queue is not itialized'
     else if (size(newitem) /= size(this%values,dim=1)) then
-      call handle_error(ERR_INVALID_ARG_SIZE, 'queue_enqueue - unexpected size of newitem', ierr)
-      return
-    else
-      if (present(ierr)) ierr = ERR_OK
+      error stop 'queue_enqueue - newitem size invalid'
     end if
     if (size(this%values,dim=2) == this%n) &
       & call queue_increase_capacity(this, 2*size(this%values,dim=2))
@@ -288,67 +290,40 @@ contains
   end subroutine queue_enqueue
 
 
-  function stack_pop(this, ierr) result(pop_item)
+  function stack_pop(this) result(pop_item)
     class(stack_t), intent(inout) :: this
-    integer, intent(out), optional :: ierr
     integer :: pop_item(size(this%values,dim=1))
 
-    if (this%n < 1) then
-      call handle_error(ERR_EMPTY, 'stack_pop - empty stack', ierr)
-      return
-    else
-      if (present(ierr)) ierr = ERR_OK
-    end if
-
+    if (this%n < 1) error stop 'stack_pop - empty stack'
     pop_item = this%values(:,this%n)
     this%n = this%n - 1
   end function stack_pop
 
 
-  function queue_dequeue(this, ierr) result(pop_item)
+  function queue_dequeue(this) result(pop_item)
     class(queue_t), intent(inout) :: this
-    integer, intent(out), optional :: ierr
     integer :: pop_item(size(this%values,dim=1))
 
-    if (this%n < 1) then
-      call handle_error(ERR_EMPTY, 'queue_dequeue - empty queue', ierr)
-      return
-    else
-      if (present(ierr)) ierr = ERR_OK
-    end if
-
+    if (this%n < 1) error stop 'queue_dequeue - empty queue'
     pop_item = this%values(:, modulo(this%rear-this%n-1, size(this%values,dim=2)) + 1)
     this%n = this%n - 1
   end function queue_dequeue
 
 
-  function stack_peek(this, ierr) result(item)
+  function stack_peek(this) result(item)
     class(stack_t), intent(in) :: this
-    integer, intent(out), optional :: ierr
     integer :: item(size(this%values,dim=1))
 
-    if (this%n < 1) then
-      call handle_error(ERR_EMPTY, 'stack_peek - empty stack', ierr)
-      return
-    else
-      if (present(ierr)) ierr = ERR_OK
-    end if
+    if (this%n < 1) error stop 'stack_peek - empty stack'
     item = this%values(:,this%n)
   end function stack_peek
 
 
-  function queue_peek(this, ierr) result(item)
+  function queue_peek(this) result(item)
     class(queue_t), intent(in) :: this
-    integer, intent(out), optional :: ierr
     integer :: item(size(this%values,dim=1))
 
-    if (this%n < 1) then
-      call handle_error(ERR_EMPTY, 'queue_peek - empty queue', ierr)
-      return
-    else
-      if (present(ierr)) ierr = ERR_OK
-    end if
-
+    if (this%n < 1) error stop 'queue_peek - empty queue'
     item = this%values(:, modulo(this%rear-this%n-1, size(this%values,dim=2)) + 1)
   end function queue_peek
 
@@ -393,11 +368,11 @@ contains
   end function handle_eq
 
 
-  pure function handle_initialize() result(new)
+  pure function handle_new() result(new)
     type(handle_t) :: new
     new%version = 1
     new%index_to_hmap = HMAP_NULL
-  end function handle_initialize
+  end function handle_new
 
 
   pure function is_higher_priority(pa, pb, this) result(is)
@@ -412,7 +387,7 @@ contains
     case default
       error stop 'invalid ORDERING flag in pqueue'
     end select
-  end function
+  end function is_higher_priority
 
 
   pure function is_lower_priority(pa, pb, this) result(is)
@@ -427,7 +402,7 @@ contains
     case default
       error stop 'invalid ORDERING flag in pqueue'
     end select
-  end function
+  end function is_lower_priority
 
 
   pure subroutine pqueue_initialize(this, chunksize, capacity, ordering)
@@ -654,24 +629,21 @@ contains
   end subroutine push_down
 
 
-  function pqueue_insert(this, values, priority, ierr) result(handle)
+  function pqueue_insert(this, values, priority) result(handle)
     class(pqueue_t), intent(inout) :: this
     integer, intent(in) :: values(:)
     real(dp), intent(in) :: priority
-    integer, intent(out), optional :: ierr
     type(handle_t) :: handle
 !
 ! Insert (item, priority) pair to the queue. The "handle" is used to reference
 ! this item while it is in the queue. After item is removed from queue,
 ! the handle is no longer valid.
 !
-    if (this%n == NOT_INITIALIZED) then
+!if (this%n == NOT_INITIALIZED) then
+    if (.not. this%initialized()) then
       error stop 'pqueue_insert - pqueue is not itialized'
     else if (size(values) /= size(this%values,dim=1)) then
-      call handle_error(ERR_INVALID_ARG_SIZE, 'pqueue_insert - unexpected size of newitem', ierr)
-      return
-    else
-      if (present(ierr)) ierr=ERR_OK
+      error stop 'pqueue_insert - invalid size of newitem'
     end if
 
     call borrow_handle(this, handle)
@@ -684,11 +656,10 @@ contains
   end function pqueue_insert
 
 
-  function pqueue_pop(this, top_priority, top_handle, ierr) result(top_value)
+  function pqueue_pop(this, top_priority, top_handle) result(top_value)
     class(pqueue_t), intent(inout) :: this
     real(dp), intent(out), optional :: top_priority
     type(handle_t), intent(out), optional :: top_handle
-    integer, intent(out), optional :: ierr
     integer :: top_value(size(this%values,dim=1))
 !
 ! Pop item with the highest priority (a lowest value of "p") from the queue.
@@ -696,12 +667,7 @@ contains
 ! The item from the heap bottom is moved to the postion of removed item and
 ! then moved down the queue according its priority.
 !
-    if (this%n < 1) then
-      call handle_error(ERR_EMPTY, 'pop: empty queue', ierr)
-      return
-    else
-      if (present(ierr)) ierr = ERR_OK
-    end if
+    if (this%n < 1) error stop 'pop: empty pqueue'
 
     ! swap top with the last item, then copy "top" into output variables
     if (this%n /= 1) call swap(this, 1, this%n)
@@ -719,24 +685,19 @@ contains
   end function pqueue_pop
 
 
-  pure subroutine pqueue_remove(this, handle, ierr)
+  pure subroutine pqueue_remove(this, handle)
     class(pqueue_t), intent(inout) :: this
     type(handle_t), intent(in) :: handle
-    integer, intent(out), optional :: ierr
 !
 ! Remove an item from the queue
 !
     integer :: id
 
-    if (this%n == NOT_INITIALIZED) &
-      & error stop 'pqueue_remove - pqueue is not itialized'
+!if (this%n == NOT_INITIALIZED) &
+    if (.not. this%initialized()) error stop &
+        'pqueue_remove - pqueue is not itialized'
     id = get_idheap(this, handle)
-    if (id == HMAP_NULL) then
-      call handle_error(ERR_INVALID_HANDLE, 'pqueue_remove - invalid handle', ierr)
-      return
-    else
-      if (present(ierr)) ierr = ERR_OK
-    end if
+    if (id == HMAP_NULL) error stop 'pqueue_remove - invalid handle'
 
     ! swap removed item with the last item
     if (this%n /= id) call swap(this, id, this%n)
@@ -749,21 +710,15 @@ contains
   end subroutine pqueue_remove
 
 
-  function pqueue_peek(this, top_priority, top_handle, ierr) result(top_value)
+  function pqueue_peek(this, top_priority, top_handle) result(top_value)
     class(pqueue_t), intent(in) :: this
     real(dp), intent(out), optional :: top_priority
     type(handle_t), intent(out), optional :: top_handle
-    integer, intent(out), optional :: ierr
     integer :: top_value(size(this%values,dim=1))
 !
 ! Look at item with highest priority in the queue without removing it
 !
-    if (this%n < 1) then
-      call handle_error(ERR_EMPTY, 'peek: empty queue', ierr)
-      return
-    else
-      if (present(ierr)) ierr = ERR_OK
-    end if
+    if (this%n < 1) error stop 'peek: empty pqueue'
 
     ! swap top with the last item, then copy "top" into output variables
     top_value = this%values(:, 1)
@@ -781,8 +736,8 @@ contains
 !
     integer :: id
 
-    if (this%n == NOT_INITIALIZED) &
-      & error stop 'pqueue_priority - pqueue is not itialized'
+!if (this%n == NOT_INITIALIZED) &
+    if (.not. this%initialized()) error stop 'pqueue_priority - not initialized'
     id = get_idheap(this, handle)
     if (id == HMAP_NULL) error stop  'pqueue_priority - invalid handle'
     priority = this%priorities(id)
@@ -790,26 +745,20 @@ contains
   end function pqueue_priority
 
 
-  subroutine pqueue_update_priority(this, handle, new_priority, ierr)
+  subroutine pqueue_update_priority(this, handle, new_priority)
     class(pqueue_t), intent(inout) :: this
     type(handle_t), intent(in) :: handle
     real(dp), intent(in) :: new_priority
-    integer, intent(out), optional :: ierr
 !
 ! Update the priority of an item using handle.
 !
     integer :: id
     real(dp) :: old_priority
 
-    if (this%n == NOT_INITIALIZED) &
-      & error stop 'pqueue_update - pqueue is not itialized'
+!if (this%n == NOT_INITIALIZED) &
+    if (.not. this%initialized()) error stop 'pqueue_update - not itialized'
     id = get_idheap(this, handle)
-    if (id == HMAP_NULL) then
-      call handle_error(ERR_INVALID_HANDLE, 'pqueue_update - invalid handle', ierr)
-      return
-    else
-      if (present(ierr)) ierr = ERR_OK
-    end if
+    if (id == HMAP_NULL) error stop 'pqueue_update - invalid handle'
 
     old_priority = this%priorities(id)
     this%priorities(id) = new_priority
@@ -868,7 +817,8 @@ contains
     class(pqueue_t), intent(in) :: this
     logical :: valid
 
-    if (this%n == NOT_INITIALIZED) then
+!if (this%n == NOT_INITIALIZED) then
+    if (.not. this%initialized()) then
       ! uninitialized quueue is assumed valid
       valid = .true.
       return
@@ -900,21 +850,6 @@ contains
   ! OTHER
   ! -----
 
-  pure subroutine handle_error(error_code, msg, ierr)
-    integer, intent(in) :: error_code
-    character(len=*), intent(in) :: msg
-    integer, intent(inout), optional :: ierr
-
-    !TODO we must review the error handling concept here
-   !write(error_unit,'("ERROR ",a)') msg
-    if (present(ierr)) then
-      ierr = error_code
-    else
-      error stop msg
-    end if
-  end subroutine handle_error
-
-
   subroutine handle_write_formatted(dtv, unit, iotype, v_list, iostat, iomsg)
     class(handle_t), intent(in) :: dtv
     integer, intent(in) :: unit
@@ -922,7 +857,6 @@ contains
     integer, intent(in) :: v_list(:)
     integer, intent(out) :: iostat
     character(len=*), intent(inout) :: iomsg
-
 
     ! just to avoig "unused dummy variables warning'
     block

@@ -7,3 +7,4 @@
 *.vtu
 log
 lib*.a
+*.pvsm
