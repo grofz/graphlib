@@ -1,3 +1,31 @@
+! =============================================================================
+! Container data structures
+!
+! General-purpose container data structures used by the library.
+! The containers store integer arrays internally, so arbitrary data can
+! be stored by using transfer() as a wrapper. The array size must be set
+! during initialization (see "chunksize" argument) and stays until container
+! is reinitialized.
+!
+! These containers are provided
+!
+! - stack_t
+! LIFO stack with dynamically growing storage.
+!
+! - queue_t
+! FIFO queue with dynamically growing storage.
+!
+! - pqueue_t
+! Priority queue implemented as an indexed binary heap. Items are
+! identified by handles, allowing their priority to be queried, updated,
+! or removed in O(1) / O(log N) time as appropriate.
+!
+! The priority queue maintains a handle for each stored item. Handles remain
+! valid while the corresponding item is in the queue and become invalid after
+! the item is removed. This allows algorithms such as Dijkstra's shortest-path
+! search to update priorities without searching the queue for the item.
+! =============================================================================
+
 module conts_mod
   use, intrinsic :: iso_fortran_env, only : dp=>real64
   implicit none (type, external)
