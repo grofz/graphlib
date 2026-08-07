@@ -54,10 +54,10 @@ program betweeness
     call vtuio_write('betweennesssample'//numstr, ts%g, VTUIO_MASK, vtudata=vtudata)
     k = k+1
 
-    call utest%assert_eq( .true., all(almost_equal( &
+    call utest%assert( .true., all(almost_equal( &
         ts%g%vertices(1:ts%g%nvertices)%rpar(VPOS_VB), ts%expected_vb)), &
         'Graph '//numstr//': vertex betweenness match expected values')
-    call utest%assert_eq(.true., all(almost_equal( &
+    call utest%assert(.true., all(almost_equal( &
         ts%g%edges(1:ts%g%nedges)%rpar(EPOS_EB), ts%expected_eb)), &
         'Graph '//numstr//': edge betweenness match expected values')
     print *

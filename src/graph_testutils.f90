@@ -34,7 +34,6 @@ contains
     call ts%g%initialize()
     do
       ! split current line into tokens
-!print '(i3,2x,a)', current_line, lines(current_line)%str
       call split_nonempty(lines(current_line)%str, ' ', words)
       current_line = current_line + 1
       if (size(words)==0 .and. ts%g%nvertices>0) then
@@ -42,7 +41,9 @@ contains
       else if (size(words)==0) then
         cycle
       else if (words(1)%str(1:1)=='#') then
+#ifdef DEBUG
         print '(a)', '<'//lines(current_line-1)%str//'>'
+#endif
         cycle ! current_line is a comment
       end if
 
@@ -326,6 +327,7 @@ contains
     end do
 
     ! report
+#ifdef DEBUG
     block
       character(len=:), allocatable :: str
       str = 'undirected'
@@ -333,5 +335,6 @@ contains
       print '("new ",a," graph with ",i0," vertices and ",i0," edges")', &
           str, g%nvertices, g%nedges
     end block
+#endif
   end subroutine graph_from_arrays
 end module graph_testutils_mod

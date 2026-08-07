@@ -3,6 +3,7 @@
 ! assertions that passed/failed. A summary is generated at the end.
 !
   module utest_mod
+    use iso_fortran_env, only : dp=>real64
     implicit none
     private
 
@@ -13,10 +14,14 @@
       type(assert_line_t), pointer :: first => null()
       type(assert_line_t), pointer :: last => null()
     contains
-      generic :: assert_eq => assert_equals_integer, assert_equals_logical
+      generic :: assert => assert_equals_integer, assert_equals_logical, &
+          assert_equals_dp, &
+          assert_equals_integer_arr, assert_equals_integer_4arr
       procedure :: summarize
       final :: utest_finalize
-      procedure, private :: assert_equals_integer, assert_equals_logical
+      procedure, private :: assert_equals_integer, assert_equals_logical, &
+          assert_equals_dp, &
+          assert_equals_integer_arr, assert_equals_integer_4arr
     end type utest_t
 
     interface utest_t
@@ -43,7 +48,6 @@
     end function utest_construct
 
 
-
     subroutine utest_finalize(utest)
       type(utest_t), intent(inout) :: utest
 !
@@ -63,7 +67,6 @@
       utest % first => null()
       utest % last => null()
     end subroutine utest_finalize
-
 
 
     subroutine assert_equals_integer(this, a, b, msg1)
@@ -92,6 +95,138 @@
     end subroutine assert_equals_integer
 
 
+    subroutine assert_equals_integer_4arr(this, a, b, p, q, msg1)
+      class(utest_t), intent(inout) :: this
+      integer, intent(in) :: a(:), b(:), p(:), q(:)
+      character(len=*), intent(in) :: msg1
+!
+! Add line to "utest" table specifying that "a(:)"=="b(:)"
+!
+      type(assert_line_t) :: line
+      character(len=100) :: stra, strb, strp, strq
+      integer :: imatch_ap, imatch_bq, imatch_aq, imatch_bp
+      integer, allocatable :: pp(:), qq(:)
+
+      imatch_ap = count_match(a,p)
+      imatch_aq = count_match(a,q)
+      imatch_bp = count_match(b,p)
+      imatch_bq = count_match(b,q)
+      if (imatch_ap+imatch_bq > imatch_aq+imatch_bp) then
+        ! A-P B-Q
+        pp = p
+        qq = q
+      else
+        ! A-Q B-P
+        pp = q
+        imatch_ap = imatch_aq
+        qq = p
+        imatch_bq = imatch_bp
+      end if
+
+      line % msg1 = msg1
+      if (size(a)/=size(pp) .or. size(b)/=size(qq)) then
+        write(stra,*) size(a)
+        write(strb,*) size(b)
+        write(strp,*) size(pp)
+        write(strq,*) size(qq)
+        line % ispass = .false.
+        line % msg2 = &
+          'size(a)='//trim(adjustl(stra))//' and size(b)='//trim(adjustl(strb))// &
+          ' /= '// &
+          'size(p)='//trim(adjustl(strp))//' and size(q)='//trim(adjustl(strq))
+      else
+        write(stra,*) imatch_ap
+        write(strb,*) imatch_bq
+        write(strp,*) size(pp)
+        write(strq,*) size(qq)
+        line % msg2 = 'Matching '// &
+          trim(adjustl(stra))//' out of '//trim(adjustl(strp))// &
+          ' and '// &
+          trim(adjustl(strb))//' out of '//trim(adjustl(strq))// &
+          ' items'
+        if (imatch_ap==size(a) .and. imatch_bq==size(b)) then
+          line % ispass = .true.
+        else
+          line % ispass = .false.
+        end if
+      end if
+      call add_assertline(this, line)
+    end subroutine assert_equals_integer_4arr
+
+
+    function count_match(a, b) result(imatch)
+      integer, intent(in) :: a(:), b(:)
+      integer :: imatch
+
+      integer, allocatable :: asorted(:), bsorted(:)
+
+      if (size(a) /= size(b)) then
+        imatch = 0
+      else
+        asorted = a
+        bsorted = b
+        call sort_int(asorted)
+        call sort_int(bsorted)
+        imatch = count(asorted==bsorted)
+      end if
+    end function count_match
+
+
+    subroutine assert_equals_integer_arr(this, a, b, msg1)
+      class(utest_t), intent(inout) :: this
+      integer, intent(in) :: a(:), b(:)
+      character(len=*), intent(in) :: msg1
+!
+! Add line to "utest" table specifying that "a(:)"=="b(:)"
+!
+      type(assert_line_t) :: line
+      character(len=100) :: stra, strb
+      integer :: imatch
+
+      line % msg1 = msg1
+      if (size(a)/=size(b)) then
+        write(stra,*) size(a)
+        write(strb,*) size(b)
+        stra = adjustl(stra)
+        strb = adjustl(strb)
+        line % ispass = .false.
+        line % msg2 = 'size(a)='//trim(stra)//' /= size(b)='//trim(strb)
+      else
+        imatch = count_match(a, b)
+        write(stra,*) imatch
+        write(strb,*) size(a)
+        stra = adjustl(stra)
+        strb = adjustl(strb)
+        line % msg2 = 'Matching '//trim(stra)//' out of '//trim(strb)//' items'
+        if (imatch == size(a)) then
+          line % ispass = .true.
+        else
+          line % ispass = .false.
+        end if
+      end if
+      call add_assertline(this, line)
+    end subroutine assert_equals_integer_arr
+
+
+    subroutine sort_int(arr)
+      integer, intent(inout) :: arr(:)
+!
+! Insert sort of integer arrays
+!
+      integer :: i, j, x
+
+      do i=2, size(arr)
+        x = arr(i)
+        j = i
+        do while (j > 1)
+          if (arr(j-1) <= x) exit
+          arr(j) = arr(j-1)
+          j = j - 1
+        end do
+        arr(j) = x
+      end do
+    end subroutine sort_int
+
 
     subroutine assert_equals_logical(this, a, b, msg1)
       class(utest_t), intent(inout) :: this
@@ -118,6 +253,31 @@
       call add_assertline(this, line)
     end subroutine assert_equals_logical
 
+
+    subroutine assert_equals_dp(this, a, b, msg1)
+      class(utest_t), intent(inout) :: this
+      real(dp), intent(in) :: a, b
+      character(len=*), intent(in) :: msg1
+!
+! Add line to "utest" table specifying that "a" near "b"
+!
+      type(assert_line_t) :: line
+      character(len=100) :: stra, strb
+
+      line % msg1 = msg1
+      write(stra,*) a
+      write(strb,*) b
+      stra = adjustl(stra)
+      strb = adjustl(strb)
+      if (abs(a-b)<= max(1.0_dp,a,b)*5.0*epsilon(1.0_dp)) then
+        line % ispass = .true.
+        line % msg2 = trim(stra) // ' is ' // trim(strb)
+      else
+        line % ispass = .false.
+        line % msg2 = trim(stra) // ' is not ' // trim(strb)
+      end if
+      call add_assertline(this, line)
+    end subroutine assert_equals_dp
 
 
     subroutine summarize(this)
@@ -151,7 +311,6 @@
       end if
       print *
     end subroutine summarize
-
 
 
     subroutine add_assertline(this, line)

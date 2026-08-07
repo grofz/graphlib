@@ -563,9 +563,14 @@
     end function get_index_from_handle
 
 
-    elemental integer function handle_get_index_to_map(this) result(id)
+    elemental integer function handle_get_index_to_map(this, graph) result(id)
       class(handle_t), intent(in) :: this
-      id = this%index_to_map
+      class(graph_t), intent(in), optional :: graph
+      if (present(graph)) then
+        id = get_index_from_handle(graph, this)
+      else
+        id = this%index_to_map
+      end if
     end function
 
 
