@@ -2,11 +2,11 @@
 ! A unit test for grpah_betweenness calculation
 ! ----------------------------------------------
 program betweeness
-  use graph_testutils_mod, only : testsample_t, parse_lines
+  use testutils_mod, only : testsample_t, parse_lines
   use parse_mod, only : string_t, read_strings
-  use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR, &
-      VTUIO_MASK, &
-      POS_COST=>EPOS_WEIGHT, EPOS_EB, VPOS_VB, VPOS_TYPE
+  use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR
+  use map_mod, only : VTUIO_MASK, POS_COST=>EPOS_WEIGHT, EPOS_EB, VPOS_VB, &
+    VPOS_TYPE
   use graph_mod, only : graph_t, handle_t
   use iso_fortran_env, only : dp=>real64, output_unit
   use vtuio_mod, only : vtuio_read, vtuio_write, vtuio_data_t

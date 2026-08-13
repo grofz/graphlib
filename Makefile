@@ -38,6 +38,9 @@ OBJ_NAMES = $(patsubst src/%.f90, %.o, $(SRC_FILES))
 # 3. Add the 'build/' directory prefix to all of them
 MODOBJECTS = $(addprefix $(DIR)/, $(OBJ_NAMES))
 
+MODOBJECTS += build_test/map.o build_test/utils.o
+
+
 MAIN1 = build_test/vtuiotest.o
 MAIN2 = build_test/maxflowtest.o
 MAIN3 = build_test/betweennesstest.o
@@ -95,6 +98,8 @@ $(OUTLIB) : $(MODOBJECTS)
 $(ALLOBJECTS) : Makefile
 
 # module dependencies (just for bootstraping)
+build_test/vtuiotest.o : build_test/map.o
+
 $(DIR)/graph.o : $(DIR)/graph_user.o $(DIR)/graph_adjlist.o $(DIR)/conts.o
 
 $(DIR)/graph_testutils.o : $(DIR)/graph_user.o $(DIR)/graph.o $(DIR)/parse.o

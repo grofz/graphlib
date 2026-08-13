@@ -20,13 +20,10 @@
     ! Workaround to gfortran bug (procedures used by submodules)
     public other_vertex_id, get_index_from_handle
 
-    ! Parametrized derived type (PDT) not working reliably with compilers.
-    ! To avoid PDT, array sizes required for the actual implementation
-    ! are hardcoded in "graph_user.f90" and imported as ?SIZE_?PAR named
-    ! constants
-    !
-    ! Alternativelly, array sizes can be hardcoded here
-    ! integer, parameter :: VSIZE_IPAR=?, VSIZE_RPAR=?, ESIZE_IPAR=?, ESIZE_RPAR=?
+    ! Implementation note:
+    ! To avoid parmatrized derived type (PDT), array sizes required for the
+    ! actual implementation are hardcoded in "graph_user.f90" and imported as
+    ! *SIZE_*PAR constants.
 
     ! Exported constants used by module procedures (graph_mincut)
     integer, parameter, public :: &

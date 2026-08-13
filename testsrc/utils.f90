@@ -1,7 +1,8 @@
-module graph_testutils_mod
-  use graph_mod, only : graph_t, handle_t
-  use graph_user_mod
+module testutils_mod
   use iso_fortran_env, only : dp=>real64, output_unit
+  use graph_mod, only : graph_t, handle_t
+  use map_mod
+  use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR
   use parse_mod, only : string_t, split_nonempty
   implicit none (type, external)
 
@@ -337,4 +338,4 @@ contains
     end block
 #endif
   end subroutine graph_from_arrays
-end module graph_testutils_mod
+end module testutils_mod
