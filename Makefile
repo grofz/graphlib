@@ -3,7 +3,7 @@
 #
 .SUFFIXES:
 
-.PHONY: all clean directories
+.PHONY: all test clean directories
 
 # path to sources and objects
 DIR = build
@@ -38,8 +38,7 @@ OBJ_NAMES = $(patsubst src/%.f90, %.o, $(SRC_FILES))
 # 3. Add the 'build/' directory prefix to all of them
 MODOBJECTS = $(addprefix $(DIR)/, $(OBJ_NAMES))
 
-MODOBJECTS += build_test/map.o build_test/utils.o
-
+TESTUTILS = build_test/map.o build_test/utils.o
 
 MAIN1 = build_test/vtuiotest.o
 MAIN2 = build_test/maxflowtest.o
@@ -47,11 +46,6 @@ MAIN3 = build_test/betweennesstest.o
 MAIN4 = build_test/concomtest.o
 MAIN5 = build_test/scctest.o
 MAIN6 = build_test/contstest.o
-ALLOBJECTS = $(MODOBJECTS) $(MAIN1) $(MAIN2) $(MAIN3) $(MAIN4) $(MAIN5) $(MAIN6)
-
-# dependent libraries
-#ldir = ./lib/odepack
-#libs = -lodepack
 
 # output library
 OUTLIB = libgraph.a
@@ -59,50 +53,49 @@ OUTLIB = libgraph.a
 ifdef OS
 	EXE1 = test_vtuio.exe
 	EXE2 = test_maxflow.exe
-	EXE3 = test_betweeness.exe
+	EXE3 = test_betweenness.exe
 	EXE4 = test_concom.exe
 	EXE5 = test_scc.exe
 	EXE6 = test_conts.exe
 else
 	EXE1 = $(BINDIR)/test_vtuio.x
 	EXE2 = $(BINDIR)/test_maxflow.x
-	EXE3 = $(BINDIR)/test_betweeness.x
+	EXE3 = $(BINDIR)/test_betweenness.x
 	EXE4 = $(BINDIR)/test_concom.x
 	EXE5 = $(BINDIR)/test_scc.x
-	EXE6 = $(BINDIR)/test_conts.exe
+	EXE6 = $(BINDIR)/test_conts.x
 endif
 
 # default goal and dependencies
-all: directories $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(OUTLIB)
+all: directories $(OUTLIB)
+test: directories $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(OUTLIB)
 
 # Ensure directories exist before compilation begins
 directories:
 	@mkdir -p $(DIR) build_test $(BINDIR) $(JDIR)
 
-$(EXE1) : $(MODOBJECTS) $(MAIN1)
+$(EXE1) : $(MODOBJECTS) $(TESTUTILS) $(MAIN1)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
-$(EXE2) : $(MODOBJECTS) $(MAIN2)
+$(EXE2) : $(MODOBJECTS) $(TESTUTILS) $(MAIN2)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
-$(EXE3) : $(MODOBJECTS) $(MAIN3)
+$(EXE3) : $(MODOBJECTS) $(TESTUTILS) $(MAIN3)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
-$(EXE4) : $(MODOBJECTS) $(MAIN4)
+$(EXE4) : $(MODOBJECTS) $(TESTUTILS) $(MAIN4)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
-$(EXE5) : $(MODOBJECTS) $(MAIN5)
+$(EXE5) : $(MODOBJECTS) $(TESTUTILS) $(MAIN5)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
-$(EXE6) : $(MODOBJECTS) $(MAIN6)
+$(EXE6) : $(MODOBJECTS) $(TESTUTILS) $(MAIN6)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
 
 $(OUTLIB) : $(MODOBJECTS)
 	$(AR) $@ $^
-
-$(ALLOBJECTS) : Makefile
 
 # module dependencies (just for bootstraping)
 build_test/vtuiotest.o : build_test/map.o
 
 $(DIR)/graph.o : $(DIR)/graph_user.o $(DIR)/graph_adjlist.o $(DIR)/conts.o
 
-$(DIR)/graph_testutils.o : $(DIR)/graph_user.o $(DIR)/graph.o $(DIR)/parse.o
+build_test/utils.o : $(DIR)/graph_user.o $(DIR)/graph.o $(DIR)/parse.o
 
 $(DIR)/vtuio26.o : $(DIR)/graph.o $(DIR)/vtuio_tree.o
 
@@ -110,14 +103,14 @@ $(DIR)/conts_test.o : $(DIR)/utest.o
 
 #.f.o:
 build_test/%.o : testsrc/%.f90
-	$(FC) $(FFLAGS) -J$(JDIR) -c $< -o $@
+	$(FC) $(FFLAGS) -I$(JDIR) -Jbuild_test/ -c $< -o $@
 $(DIR)/%.o : src/%.f90
 	$(FC) $(FFLAGS) -J$(JDIR) -c $< -o $@
 
 # phony clean-up target
 clean :
-	-rm -f $(DIR)/*.o build_test/*.o $(JDIR)/*.mod $(JDIR)/*.smod $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(OUTLIB)
+	-rm -f $(DIR)/*.o build_test/*.o build_test/*.mod build_test/*.smod $(JDIR)/*.mod $(JDIR)/*.smod $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(OUTLIB)
 
 # Include the generated dependency files if they exist
--include $(MODOBJECTS:.o=.d) $(ALLOBJECTS:.o=.d)
+-include $(MODOBJECTS:.o=.d) $(TESTUTILS:.o=.d)
 # end of makefile
