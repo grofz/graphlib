@@ -377,9 +377,9 @@ contains
   end function
 
 
-  ! ------------------------------
-  ! PRIORITY QUEUE implementation
-  ! ------------------------------
+  ! --------------
+  ! PRIORITY QUEUE
+  ! --------------
 
   pure function handle_eq(a, b) result(eq)
     class(handle_t), intent(in) :: a, b
@@ -448,7 +448,7 @@ contains
     end if
 
     if (present(capacity)) then
-      new_capacity = capacity
+      new_capacity = max(1, capacity)
     else
       new_capacity = DEFAULT_CAPACITY
     end if
