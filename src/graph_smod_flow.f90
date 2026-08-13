@@ -42,6 +42,10 @@
       if (this%is_directed_graph) error stop &
           'graph_mincut - algorithm requires an undirected graph only'
 
+      ! Verify position_weight is not out of bounds
+      if (position_weight < 1 .or. position_weight > ESIZE_RPAR) error stop &
+          'graph_mincut - position_weight is out of bounds'
+
       ! For s_list and t_list optional arguments, either both or none must
       ! be provided
       if (present(s_list) .neqv. present(t_list)) error stop &
@@ -311,6 +315,18 @@
       ! Select algorithm - Edmond-Karp or Dinic
       algorithm0 = MAXFLOW_DINIC ! default value
       if (present(algorithm)) algorithm0 = algorithm
+
+      ! Verify position flags are not out of bounds
+      if (position_capacity < 1 .or. position_capacity > ESIZE_RPAR) &
+          error stop 'graph_maxflow - positoin_capacity out of bounds'
+      if (present(position_mincutlabel)) then
+        if (position_mincutlabel < 1 .or. position_mincutlabel > VSIZE_IPAR) &
+            error stop 'graph_maxflow - position_mincutlabel out of bounds'
+      end if
+      if (present(position_flow)) then
+        if (position_flow < 1 .or. position_flow > ESIZE_RPAR) error stop &
+            'graph_maxflow - position_flow out of bounds'
+      end if
 
       ! Set up working arrays
       allocate(forward_capacity(this%nedges), backward_capacity(this%nedges))
@@ -957,6 +973,8 @@
 
       ! Sum the capacity over all open edges to be used as the
       ! capacity of added edges connecting super nodes.
+      if (position_capacity < 1 .or. position_capacity > ESIZE_RPAR) &
+          error stop 'graph_maxflow_multiple - position_capacity out of bounds'
       total_capacity = &
           sum(this%edges(1:this%nedges)%rpar(position_capacity),mask=emask0)
 
@@ -1045,6 +1063,9 @@
 
       if (this%is_directed_graph) error stop &
           'graph_conductance - algorithm requires undirected graph'
+
+      if (position_conductance < 1 .or. position_conductance > ESIZE_RPAR) &
+          error stop 'graph_conductance - position_conductance out of bounds'
 
       if (size(bc_label) /= this%nvertices) error stop &
           'graph_conductance - size of bc_label is invalid'

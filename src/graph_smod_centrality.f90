@@ -3,7 +3,7 @@
 ! Betweenness centrality (Brandes algorithm)
 !
     implicit none (type, external)
-  
+
   contains
 
 ! -----------------------------------------------------------------------------
@@ -37,6 +37,20 @@
 
       ! Nothing to do if both "position_eb" and "position_vb" are ommitted
       if (.not. (present(position_eb) .or. present(position_vb))) return
+
+      ! Verify position flags are not out of range
+      if (present(position_cost)) then
+        if (position_cost < 1 .or. position_cost > ESIZE_RPAR) error stop &
+            'graph_betweenness - position_cost is out of bounds'
+      end if
+      if (present(position_vb)) then
+        if (position_vb < 1 .or. position_vb > VSIZE_RPAR) error stop &
+            'graph_betweenness - position_vb is out of bounds'
+      end if
+      if (present(position_eb)) then
+        if (position_eb < 1 .or. position_eb > ESIZE_RPAR) error stop &
+            'graph_betweenness - position_eb is out of bounds'
+      end if
 
       ! Mark selected edges and count selected_vertices
       call graph_build_selection_masks(this, vmask0, emask0, &
@@ -173,7 +187,7 @@ if (mod(id_s,5000)==0) print '("Source is ",i0," out of ",i0)', id_s, this%nvert
 
     end procedure graph_betweenness
 
-  
+
     subroutine betweenness_dijkstra(this, id_s, emask0, position_cost, sigma, stack, prev, pqueue, dist, visited, phas)
       class(graph_t), intent(in) :: this
       integer, intent(in) :: id_s, position_cost

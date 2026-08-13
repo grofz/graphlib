@@ -20,6 +20,12 @@
       logical, allocatable :: vmask0(:), emask0(:)
       type(adjlist_t), allocatable :: incomming_ngbs(:)
 
+      ! Verify position_label flag is not out of bounds
+      if (present(position_label)) then
+        if (position_label < 1 .or. position_label > VSIZE_IPAR) error stop &
+            'graph_connected_components - position_label out of bounds'
+      end if
+
       call graph_build_selection_masks(this, vmask0, emask0, &
           vselector=vselector, eselector=eselector, vmask_provided=vmask, &
           emask_provided=emask)
@@ -150,7 +156,13 @@
       integer, parameter :: UNASSIGNED=0, UNVISITED=0
 
       if (.not. this%is_directed_graph) error stop &
-          'graph_label_scc: algorithm requires a directed graph'
+          'graph_scc: algorithm requires a directed graph'
+
+      ! Verify position_label flag is not out of bounds
+      if (present(position_label)) then
+        if (position_label < 1 .or. position_label > VSIZE_IPAR) error stop &
+            'graph_scc - position_label out of bounds'
+      end if
 
       call graph_build_selection_masks(this, vmask0, emask0, &
           vselector=vselector, eselector=eselector, vmask_provided=vmask, &
@@ -245,7 +257,7 @@
       end do MAIN_LOOP
 
       if (.not. scc_stack%empty()) error stop &
-          'graph_label_scc - unprocessed vertices in stack (internal error)'
+          'graph_scc - unprocessed vertices in stack (internal error)'
 
       ! Write labels to vertex/ipar array
       if (present(position_label)) then

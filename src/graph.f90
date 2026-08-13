@@ -1286,6 +1286,12 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
       type(pqueue_handle_t), allocatable :: handles(:)
       type(iterator_t) :: iterator
 
+      ! Verify position flags are not out of bounds
+      if (position_distance < 1 .or. position_distance > VSIZE_RPAR) &
+          error stop 'graph_shortest_path - position_distance out of bounds'
+      if (position_cost < 1 .or. position_cost > ESIZE_RPAR) &
+          error stop 'graph_shortest_path - position_cost out of bounds'
+
       ! Find starting and target vertex positions in "vertices" array
       id_start = get_index_from_handle(this, start_vertex)
       if (id_start==MAP_NULL .or. start_vertex%handle_type/=VERTEX_HANDLE_TYPE) &
