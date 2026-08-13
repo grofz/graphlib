@@ -5,7 +5,7 @@
     ! Version 1 (__.03.2023)
     !
     use iso_fortran_env, only: IOSTAT_END
-    implicit none
+    implicit none (type, external)
     private
     public object_t, vtuio_tree_read
 

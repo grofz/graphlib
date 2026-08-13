@@ -2,35 +2,52 @@
     use iso_fortran_env, only : DP=>real64, output_unit, I1=>int8
     use vtuio_mod, only : vtuio_write, vtuio_read, vtuio_data_t
     use graph_mod, only : graph_t, handle_t, MAXFLOW_DINIC, MAXFLOW_EDMOND_KARP
-    use graph_user_mod, only : EPOS_WEIGHT, EPOS_FLOW, VPOS_TYPE, VTUIO_MASK
-    use graph_testutils_mod, only : testsample_t, parse_lines
+    use map_mod, only : EPOS_WEIGHT, EPOS_FLOW, VPOS_TYPE, VTUIO_MASK
+    use testutils_mod, only : testsample_t, parse_lines
     use parse_mod, only : string_t, read_strings
+    use utest_mod, only : utest_t
     implicit none (type, external)
 
     integer, parameter :: algorithm(*) = [MAXFLOW_EDMOND_KARP, MAXFLOW_DINIC]
     integer :: i, j, k, ia
-    real(dp) :: maxflow, mincut, flow_across_cut
+    real(dp) :: maxflow, mincut, flow_cut, flow_cg, flow_cut_cg
+    real(dp), allocatable :: edgeflow_cg(:)
     type(vtuio_data_t) :: vtudata
     type(testsample_t) :: ts
     type(string_t), allocatable :: lines(:)
     type(handle_t), allocatable :: s_list(:), t_list(:)
     character(len=2) :: numstr
     character(len=1) :: typestr
+    character(len=:), allocatable :: algorithm_str
+    type(utest_t) :: utest
 
     ! Min-cut tests
     print '("GLOBAL MIN-CUT UNIT TESTS")'
     ts%is_directed_graph = .false.
     lines = read_strings('assets/mincut_sample_graphs.txt')
+    k = 1
     i = 1
     do while (i <= size(lines))
+      write(numstr,'(i2.2)') k
       call parse_lines(lines, i, ts)
       call ts%g%mincut(EPOS_WEIGHT, mincut, s_list=s_list, t_list=t_list)
-      print '("MINCUT RESULT: ",g0," (expected ",g0,")")', mincut, ts%expected_mincut
-      print '("S-LIST ",*(i0,1x))', s_list(:)%get_index_to_map()
-      print '("S-LIST EXPECTED ",*(i0,1x))', ts%expected_s
-      print '("T-LIST ",*(i0,1x))', t_list(:)%get_index_to_map()
-      print '("T-LIST EXPECTED ",*(i0,1x))', ts%expected_t
+
+      ! Test 1 - mincut value match expected
+      call utest%assert(mincut, ts%expected_mincut, &
+          numstr//' mincut')
+
+      ! Test 2 - S and T lists are correct
+      call utest%assert( &
+          s_list(:)%get_index_to_map(ts%g), &
+          t_list(:)%get_index_to_map(ts%g), &
+          ts%expected_s, &
+          ts%expected_t, &
+          numstr//' ST-lists')
+
+      k = k + 1
+#ifdef DEBUG
       print *
+#endif
     end do
 
     ! Max flow tests
@@ -41,9 +58,11 @@
 
       select case(ia)
       case(1)
-        print '(/,/"EDMOND-KARP UNIT TESTS")'
+        print '("EDMOND-KARP UNIT TESTS")'
+        algorithm_str = 'Edm-Karp '
       case(2)
-        print '(/,/"DINIC UNIT TESTS")'
+        print '("DINIC UNIT TESTS")'
+        algorithm_str = 'Dinic '
       end select
       do j=1,2 ! directed and undirected
         select case(j)
@@ -57,42 +76,81 @@
         i = 1
         k = 1
         do while (i <= size(lines)) ! for all graphs in the file
+          write(numstr,'(i2.2)') k
           ! import graph
           call parse_lines(lines, i, ts)
-          ! calculate maxflow (Edmond-Carp)
+          ! calculate maxflow
           call ts%g%maxflow( &
               ts%g%vertices(ts%sources(1))%handle, &
               ts%g%vertices(ts%sinks(1))%handle, &
               EPOS_WEIGHT, maxflow, &
               position_mincutlabel=VPOS_TYPE, position_flow=EPOS_FLOW, &
               algorithm = algorithm(ia))
-          print '("MAXFLOW RESULT: ",g0," (expected ",g0,")")', maxflow, ts%expected_maxflow(j)
-          ! sum flow across min-cut plane
+
+          ! Test: maxflow equals expected value
+          call utest%assert(maxflow, ts%expected_maxflow(j), &
+            algorithm_str//' '//numstr//typestr//' maxflow')
+
+          ! Calculate conductivity (undirected graphs only)
+          if (.not. ts%g%is_directed() .and. ia==1) then
+            block
+              integer, allocatable :: bclabel(:)
+
+              allocate(bclabel(ts%g%nvertices), source=0)
+              bclabel(ts%sources(1)) = 2
+              bclabel(ts%sinks(1)) = 1
+              call ts%g%conductance(EPOS_WEIGHT, bclabel, 0.0_dp, 100.0_dp, &
+                  flow_cg, edge_flow=edgeflow_cg)
+            end block
+          else
+            if (allocated(edgeflow_cg)) deallocate(edgeflow_cg)
+          end if
+
+          ! Sum flows across min-cut plane
           block
             integer :: ie, iv(2)
-            flow_across_cut = 0.0_dp
+            flow_cut = 0.0_dp
+            flow_cut_cg = 0.0_dp
             do ie=1,ts%g%nedges
               iv = ts%g%edges(ie)%vertex_indices(ts%g)
               if (is_mincut_edge( &
                   ts%g%vertices(iv(1))%ipar(VPOS_TYPE), &
                   ts%g%vertices(iv(2))%ipar(VPOS_TYPE))) then
-                flow_across_cut = abs(ts%g%edges(ie)%rpar(EPOS_FLOW)) + flow_across_cut
+                flow_cut = abs(ts%g%edges(ie)%rpar(EPOS_FLOW)) + flow_cut
+                if (allocated(edgeflow_cg)) then
+                  flow_cut_cg = abs(edgeflow_cg(ie)) + flow_cut_cg
+                end if
               end if
             end do
-            print '("flow across cut ",g0)',flow_across_cut
-            print '("PASSED? ",l2)', flow_across_cut==maxflow .and. maxflow==ts%expected_maxflow(j) 
+
+            ! Test: flow across min-cut plane equals maxflow
+            call utest%assert(maxflow, flow_cut, &
+              algorithm_str//' '//numstr//typestr//' flow across cut')
+
+            ! Test: flow from CG equals the flow across min-cut plane
+            if (allocated(edgeflow_cg)) then
+              call utest%assert(flow_cg, flow_cut_cg, &
+                  'CG solver '//numstr//typestr)
+            end if
           end block
-          ! Write to file for Paraview inspection
-          write(numstr,'(i2.2)') k
+
+          ! write to file for Paraview inspection
           call vtuio_write( &
-              'maxflowsample'//numstr//typestr, ts%g, VTUIO_MASK, vtudata=vtudata)
+              'maxflowsample'//numstr//typestr, &
+              ts%g, VTUIO_MASK, vtudata=vtudata)
+
           k=k+1
+#ifdef DEBUG
           print *
+#endif
         end do ! next graph
       end do   ! next directed/undirected
     end do     ! next algorithm
 
+    call utest%summarize
+
   contains
+
     logical function is_mincut_edge(a, b)
       integer, intent(in) :: a, b
 
@@ -104,4 +162,3 @@
     end function
 
   end program maxflow_test
-

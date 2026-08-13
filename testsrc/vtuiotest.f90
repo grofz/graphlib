@@ -2,8 +2,9 @@
     use iso_fortran_env, only : DP=>real64, output_unit, I1=>int8
     use vtuio_mod, only : vtuio_write, vtuio_read, vtuio_data_t
     use graph_mod, only : graph_t, handle_t, edge_t
-    use graph_user_mod, only : VTUIO_MASK, ESIZE_RPAR, ESIZE_IPAR, VSIZE_IPAR, &
-        VSIZE_RPAR, VPOS_X, VPOS_VB, VPOS_RADIUS, VPOS_TYPE, EPOS_TYPE
+    use map_mod, only : VTUIO_MASK, VPOS_X, VPOS_VB, VPOS_RADIUS, VPOS_TYPE, &
+      EPOS_TYPE
+    use graph_user_mod, only : ESIZE_RPAR, ESIZE_IPAR, VSIZE_IPAR, VSIZE_RPAR
     implicit none (type, external)
 
     real(DP) :: time

@@ -1,7 +1,7 @@
 program test_connected_components
   use graph_mod, only : graph_t
-  use graph_user_mod
-  use graph_testutils_mod, only : graph_from_arrays
+  use map_mod
+  use testutils_mod, only : graph_from_arrays
   use vtuio_mod, only : vtuio_read, vtuio_write, vtuio_data_t
   use iso_fortran_env, only : output_unit
   implicit none (type, external)
@@ -15,8 +15,8 @@ program test_connected_components
   ! Test #1 a 2D plane
   ! ==================
   call vtuio_read('smallsample', g, VTUIO_MASK)
-  
-  g%vertices(1:g%nvertices)%ipar(VPOS_COMP) = -2 
+
+  g%vertices(1:g%nvertices)%ipar(VPOS_COMP) = -2
   call g%connected_components( &
      !position_label=VPOS_COMP, &
       labels=labels, &
@@ -35,7 +35,7 @@ program test_connected_components
   call vtuio_write('a', g, VTUIO_MASK, vtudata=vtudata)
 
   ! ==========================
-  ! Test #2 - undirected graph 
+  ! Test #2 - undirected graph
   ! ==========================
   200 block
     integer, allocatable :: cons(:,:)
