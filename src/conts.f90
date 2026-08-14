@@ -1,30 +1,44 @@
-! =============================================================================
+! Copyright (C) 2026 Zdenek Grof
+!
+! This file is part of Graph library.
+!
+! Graph library is free software: you can redistribute it and/or modify
+! it under the terms of the GNU Lesser General Public License as published
+! by the Free Software Foundation, either version 3 of the License, or
+! (at your option) any later version.
+!
+! Graph library is distributed in the hope that it will be useful,
+! but WITHOUT ANY WARRANTY; without even the implied warranty of
+! MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+! GNU Lesser General Public License for more details.
+!
+! You should have received a copy of the GNU Lesser General Public License
+! along with Graph library. If not, see <https://www.gnu.org/licenses/>.
+
+
+! -----------------------------------------------------------------------------
 ! Container data structures
 !
 ! General-purpose container data structures used by the library.
-! The containers store integer arrays internally, so arbitrary data can
-! be stored by using transfer() as a wrapper. The array size must be set
-! during initialization (see "chunksize" argument) and stays until container
-! is reinitialized.
 !
-! These containers are provided
+! The containers store integer arrays internally, so arbitrary data can be
+! stored by using transfer() as a wrapper. The array size must be set during
+! initialization (see "chunksize" argument) and stays until container is
+! reinitialized.
 !
-! - stack_t
-! LIFO stack with dynamically growing storage.
-!
-! - queue_t
-! FIFO queue with dynamically growing storage.
-!
-! - pqueue_t
-! Priority queue implemented as an indexed binary heap. Items are
-! identified by handles, allowing their priority to be queried, updated,
-! or removed in O(1) / O(log N) time as appropriate.
-!
-! The priority queue maintains a handle for each stored item. Handles remain
-! valid while the corresponding item is in the queue and become invalid after
-! the item is removed. This allows algorithms such as Dijkstra's shortest-path
-! search to update priorities without searching the queue for the item.
-! =============================================================================
+! These containers are provided:
+!   - stack_t
+!       LIFO stack with dynamically growing storage.
+!   - queue_t
+!       FIFO queue with dynamically growing storage.
+!   - pqueue_t
+!       Priority queue implemented as an indexed binary heap. 
+!       The priority queue maintains a handle for each stored item. Handles
+!       remain valid while the corresponding item is in the queue and become
+!       invalid after the item is removed.
+!       Handles allow to query if items are present, update their priority, or
+!       remove them in O(1) / O(log N) time as appropriate.
+! -----------------------------------------------------------------------------
 
 module conts_mod
   use, intrinsic :: iso_fortran_env, only : dp=>real64

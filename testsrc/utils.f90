@@ -50,11 +50,11 @@ contains
     type(testsample_t), intent(inout) :: ts
 !
 ! IN
-!   lines        - strings to be parsed
+!   lines        - strings read from file
 !
 ! IN/OUT
 !   current_line - points to the next line to be processed
-!   ts           - parse data to the structure
+!   ts           - output of parsed data
 !
 ! TODO Unpolished, hasted implementation
 !
@@ -66,13 +66,13 @@ contains
       current_line = current_line + 1
       call split_nonempty(lines(current_line-1)%str, ' ', words)
       if (size(words)==0 .and. ts%g%nvertices>0) then
-        ! empty line between different graphs
+        ! empty line between different graphs, exit
         exit
       else if (size(words)==0) then
-        ! empty line separating different sections
+        ! empty line, graph not complete
         cycle
       else if (words(1)%str(1:1)=='#') then
-        ! a comments
+        ! a comment, ignore it
 #ifdef DEBUG
         print '(a)', '<'//lines(current_line-1)%str//'>'
 #endif
@@ -130,10 +130,11 @@ contains
         ts%is_directed_graph = .true.
 
       case('VERTICES')
-        ! must be before 'EDGES'
+        ! must be called before 'EDGES'
         call parse_vertices(lines, current_line, ts)
 
       case ('EDGES')
+        ! must be called as last within a single graph
         call parse_edges(lines, current_line, ts)
 
       case default
@@ -151,7 +152,10 @@ contains
     type(string_t), intent(in) :: lines(:)
     integer, intent(inout) :: current_line
     type(testsample_t), intent(inout) :: ts
-
+!
+! Consumes all lines in the block. On return, current_line points at the
+! empty line just behind the block.
+!
     real(dp), allocatable :: xyz(:)
     integer :: k, ios(3)
     real(dp) :: x, y, z
@@ -190,30 +194,33 @@ contains
     integer, intent(inout) :: current_line
     type(testsample_t), intent(inout) :: ts
 
-    integer, allocatable :: ia(:), ib(:), v_ipars(:,:), e_ipars(:,:), cons(:,:)
-    real(dp), allocatable :: weights(:), v_rpars(:,:), e_rpars(:,:)
-    integer :: k, i1, i2, ios1, ios2, nv, ne, ios
-    real(dp) :: w1
     type(string_t), allocatable :: tokens(:)
+    integer, allocatable :: ia(:), ib(:)
+    real(dp), allocatable :: weights(:)
+    integer :: k, i1, i2, ios(3), nv, ne
+    real(dp) :: w1
+
     allocate(ia(0),ib(0),weights(0))
     k = 0
     do
       call split_nonempty(lines(current_line+k)%str, ' ', tokens)
       if (size(tokens)==0) then
         exit
+      else if (size(tokens)/=2 .and. size(tokens)/=3) then
+        print '(a)', lines(current_line+k)%str
+        error stop 'parse_edges: two or three numbers expected'
       end if
-      read(tokens(1)%str,*,iostat=ios) i1
-      if (ios /= 0) exit
-      read(tokens(2)%str,*,iostat=ios1) i2
-      if (size(tokens)>=3) then
-        read(tokens(3)%str,*,iostat=ios2) w1
+      read(tokens(1)%str,*,iostat=ios(1)) i1
+      read(tokens(2)%str,*,iostat=ios(2)) i2
+      if (size(tokens)==3) then
+        read(tokens(3)%str,*,iostat=ios(3)) w1
       else
-        ios2 = 0
+        ios(3) = 0
         w1 = 1.0_dp
       end if
-      if (ios1/=0 .or. ios2/=0) then
+      if (any(ios /= 0)) then
         print '(a)', lines(current_line+k)%str
-        error stop 'error reading numbers'
+        error stop 'parse_edges: error reading numbers'
       end if
       ia = [ia, i1]
       ib = [ib, i2]
@@ -228,23 +235,26 @@ contains
     if (allocated(ts%positions)) then
       nv = size(ts%positions,2)
     else
-      nv = maxval(ia)
-      nv = max(nv, maxval(ib))
+      nv = max(maxval(ia), maxval(ib))
     end if
     ne = size(ia)
-    allocate(v_ipars(VSIZE_IPAR, nv), v_rpars(VSIZE_RPAR, nv))
-    allocate(e_ipars(ESIZE_IPAR, ne), e_rpars(ESIZE_RPAR, ne))
-    e_rpars(EPOS_WEIGHT,:) = weights(:)
-    if (allocated(ts%positions))then
-      v_rpars(VPOS_X+0,:) = ts%positions(1,:)
-      v_rpars(VPOS_X+1,:) = ts%positions(2,:)
-      v_rpars(VPOS_X+2,:) = ts%positions(3,:)
-    end if
-    allocate(cons(2,ne))
-    cons(1,:) = ia
-    cons(2,:) = ib
-    call graph_from_arrays(ts%g, cons, erdata=e_rpars, vrdata=v_rpars, &
-        is_directed_graph=ts%is_directed_graph)
+    block
+      integer, allocatable :: v_ipars(:,:), e_ipars(:,:), cons(:,:)
+      real(dp), allocatable :: v_rpars(:,:), e_rpars(:,:)
+      allocate(v_ipars(VSIZE_IPAR, nv), e_ipars(ESIZE_IPAR, ne), source=0)
+      allocate(v_rpars(VSIZE_RPAR, nv), e_rpars(ESIZE_RPAR, ne), source=0.0_dp)
+      e_rpars(EPOS_WEIGHT,:) = weights(:)
+      if (allocated(ts%positions))then
+        v_rpars(VPOS_X+0,:) = ts%positions(1,:)
+        v_rpars(VPOS_X+1,:) = ts%positions(2,:)
+        v_rpars(VPOS_X+2,:) = ts%positions(3,:)
+      end if
+      allocate(cons(2,ne))
+      cons(1,:) = ia
+      cons(2,:) = ib
+      call graph_from_arrays(ts%g, cons, erdata=e_rpars, vrdata=v_rpars, &
+          is_directed_graph=ts%is_directed_graph)
+    end block
   end subroutine parse_edges
 
 
