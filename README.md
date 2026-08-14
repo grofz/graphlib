@@ -2,6 +2,10 @@
 
 A straightforward graph library written in modern Fortran.
 
+![The flow and potential visualization in a simple network](http://github.com/grofz/ds/assets/a.png)
+![The flow in a simple network](http://github.com/grofz/ds/assets/b.png)
+![Betweenness centrality of a simple network](http://github.com/grofz/ds/assets/c.png)
+
 ### Features
 
 - directed and undirected graphs
