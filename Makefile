@@ -46,6 +46,7 @@ MAIN3 = build_test/betweennesstest.o
 MAIN4 = build_test/concomtest.o
 MAIN5 = build_test/scctest.o
 MAIN6 = build_test/contstest.o
+MAIN_EXAMPLE = build_test/example.o
 
 # output library
 OUTLIB = libgraph.a
@@ -57,18 +58,20 @@ ifdef OS
 	EXE4 = test_concom.exe
 	EXE5 = test_scc.exe
 	EXE6 = test_conts.exe
+	EXE_EXAMPLE = example.exe
 else
-	EXE1 = $(BINDIR)/test_vtuio.x
-	EXE2 = $(BINDIR)/test_maxflow.x
-	EXE3 = $(BINDIR)/test_betweenness.x
-	EXE4 = $(BINDIR)/test_concom.x
-	EXE5 = $(BINDIR)/test_scc.x
-	EXE6 = $(BINDIR)/test_conts.x
+	EXE1 = $(BINDIR)/test_vtuio
+	EXE2 = $(BINDIR)/test_maxflow
+	EXE3 = $(BINDIR)/test_betweenness
+	EXE4 = $(BINDIR)/test_concom
+	EXE5 = $(BINDIR)/test_scc
+	EXE6 = $(BINDIR)/test_conts
+	EXE_EXAMPLE = $(BINDIR)/example
 endif
 
 # default goal and dependencies
 all: directories $(OUTLIB)
-test: directories $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(OUTLIB)
+test: directories $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(EXE_EXAMPLE) $(OUTLIB)
 
 # Ensure directories exist before compilation begins
 directories:
@@ -85,6 +88,8 @@ $(EXE4) : $(MODOBJECTS) $(TESTUTILS) $(MAIN4)
 $(EXE5) : $(MODOBJECTS) $(TESTUTILS) $(MAIN5)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
 $(EXE6) : $(MODOBJECTS) $(TESTUTILS) $(MAIN6)
+	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
+$(EXE_EXAMPLE) : $(MODOBJECTS) $(MAIN_EXAMPLE)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
 
 $(OUTLIB) : $(MODOBJECTS)
@@ -103,13 +108,13 @@ $(DIR)/conts_test.o : $(DIR)/utest.o
 
 #.f.o:
 build_test/%.o : testsrc/%.f90
-	$(FC) $(FFLAGS) -I$(JDIR) -Jbuild_test/ -c $< -o $@
+	$(FC) $(FFLAGS) -I$(JDIR) -Jbuild_test -c $< -o $@
 $(DIR)/%.o : src/%.f90
 	$(FC) $(FFLAGS) -J$(JDIR) -c $< -o $@
 
 # phony clean-up target
 clean :
-	-rm -f $(DIR)/*.o build_test/*.o build_test/*.mod build_test/*.smod $(JDIR)/*.mod $(JDIR)/*.smod $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(OUTLIB)
+	-rm -f $(DIR)/*.o build_test/*.o build_test/*.mod build_test/*.smod $(JDIR)/*.mod $(JDIR)/*.smod $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(EXE_EXAMPLE) $(OUTLIB)
 
 # Include the generated dependency files if they exist
 -include $(MODOBJECTS:.o=.d) $(TESTUTILS:.o=.d)
