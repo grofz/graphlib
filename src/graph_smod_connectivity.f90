@@ -58,7 +58,7 @@
         end do
         do iedge=1, this%nedges
           if (.not. emask0(iedge)) cycle
-          idst = get_index_from_handle(this, this%edges(iedge)%dst_handle)
+          idst = this%get_index_from_handle(this%edges(iedge)%dst_handle)
           if (idst==MAP_NULL) error stop 'graph_connected_component -&
               & graph contains edge with invalid destination point'
           call incomming_ngbs(idst)%add(iedge)
@@ -358,8 +358,8 @@
         integer :: src, dst
         do iedge=1, this%nedges
           if (.not. emask0(iedge)) cycle
-          src = get_index_from_handle(this, this%edges(iedge)%src_handle)
-          dst = get_index_from_handle(this, this%edges(iedge)%dst_handle)
+          src = this%get_index_from_handle(this%edges(iedge)%src_handle)
+          dst = this%get_index_from_handle(this%edges(iedge)%dst_handle)
           ! ignore internal edges within a component
           if (components0(src)==components0(dst)) cycle
           indegree_c(components0(dst)) = indegree_c(components0(dst))+1
@@ -462,8 +462,8 @@
 
       do iedge=1, this%nedges
         if (.not. emask0(iedge)) cycle
-        iu = get_index_from_handle(this, this%edges(iedge)%src_handle)
-        iv = get_index_from_handle(this, this%edges(iedge)%dst_handle)
+        iu = this%get_index_from_handle(this%edges(iedge)%src_handle)
+        iv = this%get_index_from_handle(this%edges(iedge)%dst_handle)
         if (present(components)) then
           if (components(iv)==components(iu)) then
             ! intra-component edge

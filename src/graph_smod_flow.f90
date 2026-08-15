@@ -50,6 +50,7 @@
     module procedure graph_mincut
       type(graph_t) :: g
       type(handle_t) :: handle
+      integer :: id_from_handle
       type(stack_t), allocatable :: contracted_vertices(:)
       type(stack_t) :: mincut_vertices
       integer, allocatable :: labels0(:)
@@ -89,7 +90,7 @@
         allocate(labels0(this%nvertices), source=MINCUT_NOT_SELECTED)
         i = 1
         do k=1, size(vertices0)
-          if (get_index_from_handle(g, vertices0(k))==MAP_NULL) cycle
+          if (g%get_index_from_handle(vertices0(k))==MAP_NULL) cycle
           ! The k-th vertex in the original graph was selected and now is the
           ! i-th vertex in the working graph. Push the handle from the original
           ! graph as the first item to the stack in the working graph
@@ -139,7 +140,8 @@
       ! Consume mincut_vertices to label vertices from the winning mincut
       do while (.not. mincut_vertices%empty())
         handle = transfer(mincut_vertices%pop(), handle)
-        associate(lab=>labels0(get_index_from_handle(this, handle)))
+        id_from_handle = this%get_index_from_handle(handle)
+        associate(lab=>labels0(id_from_handle))
           if (lab /= MINCUT_SET_S) error stop &
               'graph_mincut - label0 value unexpected (internal error)'
           lab = MINCUT_SET_T
@@ -215,7 +217,7 @@
       do while(scoreboard%size() > 1)
         s_handle = transfer(scoreboard%pop(), s_handle)
         s_imap = s_handle%index_to_map
-        s_id = get_index_from_handle(g, s_handle)
+        s_id = g%get_index_from_handle(s_handle)
 
         ! as S now becomes part of set A, increase connectivity
         ! of all vertices W that are neighbors of S and are outside of set A
@@ -256,8 +258,8 @@
       real(dp) :: e_rpar(ESIZE_RPAR)
 
       ! The actual position of respective vertices in graph arrays
-      t_id = get_index_from_handle(g, t_handle)
-      s_id = get_index_from_handle(g, s_handle)
+      t_id = g%get_index_from_handle(t_handle)
+      s_id = g%get_index_from_handle(s_handle)
 
       ! Transfer all original vertices associated with vertex T to vertex S.
       associate (T=>voriginal(t_handle%index_to_map), &
@@ -370,8 +372,8 @@
           if (emask0(i)) then
             ! these checks are being done in "build_selection_masks" and can be
             ! removed after testing TODO
-            ia = get_index_from_handle(this, this%edges(i)%src_handle)
-            ib = get_index_from_handle(this, this%edges(i)%dst_handle)
+            ia = this%get_index_from_handle(this%edges(i)%src_handle)
+            ib = this%get_index_from_handle(this%edges(i)%dst_handle)
             ! orphaned edge
             if (ia==MAP_NULL .or. ib==MAP_NULL) then
               error stop 'graph_maxflow - selected edge has missing end-point'
@@ -390,8 +392,8 @@
         end do
 
         ! Verify sink and source vertices exist and are open
-        source_id = get_index_from_handle(this, source)
-        sink_id = get_index_from_handle(this, sink)
+        source_id = this%get_index_from_handle(source)
+        sink_id = this%get_index_from_handle(sink)
         if (source_id==MAP_NULL .or. sink_id==MAP_NULL) then
           error stop 'graph_max_flow - source/sink not found in graph'
         else if (source%handle_type/=VERTEX_HANDLE_TYPE .or. sink%handle_type/=VERTEX_HANDLE_TYPE) then
@@ -441,7 +443,7 @@
             associate(e=>this%edges(i))
               edge = this%add_edge(e%dst_handle, e%src_handle, e%ipar, e%rpar)
             end associate
-            ireverse = get_index_from_handle(this, edge)
+            ireverse = this%get_index_from_handle(edge)
             call added_edges%push(transfer(edge,INTEGER_MOLD))
             pair_edge(i) = ireverse
             pair_edge(ireverse) = i
@@ -716,10 +718,10 @@
           ngb_id = other_vertex_id(this, iedge, current_id)
 
           ! Skip edges with zero capacity
-          if (ngb_id == get_index_from_handle(this,this%edges(iedge)%dst_handle)) then
+          if (ngb_id == this%get_index_from_handle(this%edges(iedge)%dst_handle)) then
             ! forward edge
             if (forward_capacity(iedge)<=0.0_dp) cycle
-          else if (ngb_id == get_index_from_handle(this,this%edges(iedge)%src_handle)) then
+          else if (ngb_id == this%get_index_from_handle(this%edges(iedge)%src_handle)) then
             ! backward edge
             ! no backward edge can appear in directed graph
             if (this%is_directed_graph) error stop &
@@ -785,10 +787,10 @@
           ! to make it a bit faster and avoid following assertion
           if (levels(ngb_id) > levels(current_id)) then
             ! Determine available capacity of the "current--neighbour" edge
-            if (ngb_id == get_index_from_handle(this,this%edges(iedge)%dst_handle)) then
+            if (ngb_id == this%get_index_from_handle(this%edges(iedge)%dst_handle)) then
               ! forward edge
               capacity = forward_capacity(iedge)
-            else if (ngb_id == get_index_from_handle(this,this%edges(iedge)%src_handle)) then
+            else if (ngb_id == this%get_index_from_handle(this%edges(iedge)%src_handle)) then
               ! backward edge
               ! no backward edge can appear in directed graph
               if (this%is_directed_graph) error stop &
@@ -871,10 +873,10 @@
       do while (prev_edge(current_id) /= MAP_NULL)
         next_id = other_vertex_id(this, prev_edge(current_id), current_id)
 
-        if (next_id == get_index_from_handle(this,this%edges(prev_edge(current_id))%src_handle)) then
+        if (next_id == this%get_index_from_handle(this%edges(prev_edge(current_id))%src_handle)) then
           is_forward_edge = .true.
           capacity = forward_capacity(prev_edge(current_id))
-        else if (next_id == get_index_from_handle(this,this%edges(prev_edge(current_id))%dst_handle)) then
+        else if (next_id == this%get_index_from_handle(this%edges(prev_edge(current_id))%dst_handle)) then
           ! backward edge
           ! no backward edge can appear in directed graph
           if (this%is_directed_graph) error stop &
@@ -965,13 +967,13 @@
 
         allocate(listed_count(this%nvertices), source=0)
         do i=1, size(sources)
-          iv = get_index_from_handle(this, sources(i))
+          iv = this%get_index_from_handle(sources(i))
           if (iv==MAP_NULL) error stop &
               'graph_maxflow_multiple - a source handle not found in graph'
           listed_count(iv) = listed_count(iv)+1
         end do
         do i=1, size(sinks)
-          iv = get_index_from_handle(this, sinks(i))
+          iv = this%get_index_from_handle(sinks(i))
           if (iv==MAP_NULL) error stop &
               'graph_maxflow_multiple - a sink handle not found in graph'
           listed_count(iv) = listed_count(iv)+1
@@ -1013,7 +1015,7 @@
         nopen_sources = 0
         do i=1, size(sources)
           ! if source is closed, do not add the connection
-          if (.not. vmask0(get_index_from_handle(this, sources(i)))) cycle
+          if (.not. vmask0(this%get_index_from_handle(sources(i)))) cycle
           edge = this%add_edge(super_source, sources(i), e_ipar, e_rpar)
           call added_edges%push(transfer(edge,INTEGER_MOLD))
           nopen_sources = nopen_sources+1
@@ -1021,7 +1023,7 @@
         nopen_sinks = 0
         do i=1, size(sinks)
           ! if sink is closed, do not add the connection
-          if (.not. vmask0(get_index_from_handle(this, sinks(i)))) cycle
+          if (.not. vmask0(this%get_index_from_handle(sinks(i)))) cycle
           edge = this%add_edge(sinks(i), super_sink, e_ipar, e_rpar)
           call added_edges%push(transfer(edge,INTEGER_MOLD))
           nopen_sinks = nopen_sinks+1
@@ -1344,7 +1346,7 @@
       ! tolerance is rtol_bounds * (x_high - x_low)
       block
         real(dp) :: min_bc, max_bc, x_tol, rtol_bounds_used
-        integer :: ioutrange, i, ioutrange_strict
+        integer :: ioutrange, ioutrange_strict
 
         min_bc = minval(x, mask=is_external)
         max_bc = maxval(x, mask=is_external)

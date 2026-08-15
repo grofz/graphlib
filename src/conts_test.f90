@@ -13,7 +13,7 @@
 ! Run unit tests for "stack_t" objects
 !
       type(stack_t) :: aa, bb
-      integer :: i, j
+      integer :: i
       integer, allocatable :: arr(:), out(:)
       logical :: isok
 
@@ -107,7 +107,6 @@
 ! Run unit tests for "queue" module
 !
       type(queue_t) :: aq, bq, cq
-      integer :: i
       logical :: isok
       integer, allocatable :: out(:)
 
