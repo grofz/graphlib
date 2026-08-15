@@ -43,6 +43,9 @@
     ! actual implementation are hardcoded in "graph_user.f90" and imported as
     ! *SIZE_*PAR constants.
 
+    ! Exported constants used by children classes
+    integer, parameter, public :: MAP_NULL = -1, NOT_INITIALIZED = -1
+
     ! Exported constants used by module procedures (graph_mincut)
     integer, parameter, public :: &
         MINCUT_NOT_SELECTED=0, MINCUT_SET_S=1, MINCUT_SET_T=2, &
@@ -50,7 +53,6 @@
 
     ! Named local constants
     integer, parameter :: DEFAULT_ECAPACITY = 10, DEFAULT_VCAPACITY = 5
-    integer, parameter :: MAP_NULL = -1, NOT_INITIALIZED = -1
     integer, parameter :: INTEGER_MOLD(0) = [integer ::]
 
     integer(I1B), parameter :: VERTEX_HANDLE_TYPE = 1_I1B, &
@@ -66,10 +68,15 @@
       integer :: version = 1
       integer(i1b) :: handle_type = INVALID_HANDLE_TYPE
     contains
-      procedure, private :: handle_eq
+      procedure, private, non_overridable :: handle_eq
       generic :: operator(==) => handle_eq
       procedure :: get_index_to_map => handle_get_index_to_map
+      procedure, non_overridable :: get_handle_type => handle_get_handle_type
+      procedure, non_overridable :: advance_version => handle_advance_version
     end type handle_t
+    interface handle_t
+      module procedure handle_new
+    end interface
 
     type, public :: vertex_t
       integer  :: ipar(VSIZE_IPAR)
@@ -99,30 +106,35 @@
       type(queue_t), private :: free_vhandles, free_ehandles
     contains
       procedure :: initialize => graph_initialize
-      procedure :: is_initialized => graph_is_initialized
-      procedure :: add_vertex => graph_add_vertex
-      procedure :: add_edge   => graph_add_edge
-      procedure :: remove_vertex => graph_remove_vertex
-      procedure :: remove_edge => graph_remove_edge
-      procedure :: remove_orphaned_edges => graph_remove_orphaned_edges
-      procedure :: copy => graph_copy
-      procedure :: find_edge_id => graph_find_edge_id
-      procedure :: print => graph_print
-      procedure :: connected_components => graph_connected_components
-      procedure :: strongly_connected_components => graph_strongly_connected_components
-      procedure :: topological_levels => graph_topological_levels
-      procedure :: verify_topological_levels => graph_verify_topological_levels
-      procedure :: shortest_path => graph_shortest_path
-      procedure :: maxflow => graph_maxflow
-      procedure :: maxflow_multiple => graph_maxflow_multiple
-      procedure :: conductance => graph_conductance
-      procedure :: betweenness => graph_betweenness
-      procedure :: mincut => graph_mincut
-      procedure :: build_selection_masks => graph_build_selection_masks
-      procedure :: select_vertices => graph_select_vertices
-      procedure :: select_edges => graph_select_edges
-      procedure :: is_directed => graph_is_directed
       procedure :: get_index_from_handle => graph_get_index_from_handle
+      procedure :: copy => graph_copy
+      procedure :: build_selection_masks => graph_build_selection_masks
+      procedure :: print => graph_print
+      procedure, non_overridable :: is_initialized => graph_is_initialized
+      procedure, non_overridable :: add_vertex => graph_add_vertex
+      procedure, non_overridable :: add_edge   => graph_add_edge
+      procedure, non_overridable :: remove_vertex => graph_remove_vertex
+      procedure, non_overridable :: remove_edge => graph_remove_edge
+      procedure, non_overridable :: &
+          remove_orphaned_edges => graph_remove_orphaned_edges
+      procedure, non_overridable :: find_edge_id => graph_find_edge_id
+      procedure, non_overridable :: &
+          connected_components => graph_connected_components
+      procedure, non_overridable :: &
+          strongly_connected_components => graph_strongly_connected_components
+      procedure, non_overridable :: &
+          topological_levels => graph_topological_levels
+      procedure, non_overridable :: &
+          verify_topological_levels => graph_verify_topological_levels
+      procedure, non_overridable :: shortest_path => graph_shortest_path
+      procedure, non_overridable :: maxflow => graph_maxflow
+      procedure, non_overridable :: maxflow_multiple => graph_maxflow_multiple
+      procedure, non_overridable :: conductance => graph_conductance
+      procedure, non_overridable :: betweenness => graph_betweenness
+      procedure, non_overridable :: mincut => graph_mincut
+      procedure, non_overridable :: select_vertices => graph_select_vertices
+      procedure, non_overridable :: select_edges => graph_select_edges
+      procedure, non_overridable :: is_directed => graph_is_directed
     end type graph_t
 
 
@@ -509,6 +521,17 @@
     ! ---------------------
     ! Handle implementation
     ! ---------------------
+    pure function handle_new(id, version, type) result(new)
+      integer, intent(in) :: id, version
+      integer(I1B), intent(in) :: type
+      type(handle_t) :: new
+
+      new%index_to_map = id
+      new%version = version
+      new%handle_type = type
+    end function handle_new
+
+
     pure function handle_eq(a, b) result(eq)
       class(handle_t), intent(in) :: a, b
       logical :: eq
@@ -545,7 +568,8 @@
       type(handle_t) :: reused_handle
 
       reused_handle = handle
-      reused_handle%version = reused_handle%version + 1
+      call reused_handle%advance_version()
+     !reused_handle%version = reused_handle%version + 1
       select case(reused_handle%handle_type)
       case(VERTEX_HANDLE_TYPE)
         call this%free_vhandles%enqueue(transfer(reused_handle,INTEGER_MOLD))
@@ -589,6 +613,12 @@
     end function graph_get_index_from_handle
 
 
+    elemental integer function handle_get_handle_type(this)
+      class(handle_t), intent(in) :: this
+      handle_get_handle_type = this%handle_type
+    end function handle_get_handle_type
+
+
     elemental integer function handle_get_index_to_map(this, graph) result(id)
       class(handle_t), intent(in) :: this
       class(graph_t), intent(in), optional :: graph
@@ -600,15 +630,34 @@
     end function
 
 
+    pure subroutine handle_advance_version(this)
+      class(handle_t), intent(inout) :: this
+      if (this%version==huge(this%version)) then
+        this%version = -huge(this%version)
+      else
+        this%version = this%version + 1
+      end if
+    end subroutine handle_advance_version
+
+
     ! ----------------------
     ! Graph basic operations
     ! ----------------------
-    subroutine graph_initialize(this, vcapacity, ecapacity, is_directed_graph)
+    subroutine graph_initialize(this, vcapacity, ecapacity, is_directed_graph, &
+        pcapacity, ccapacity, is_3d)
       class(graph_t), intent(inout) :: this
       integer, intent(in), optional :: vcapacity, ecapacity
       logical, intent(in), optional :: is_directed_graph
+      ! these parameters are here just to match child class interface
+      integer, intent(in), optional :: pcapacity, ccapacity
+      logical, intent(in), optional :: is_3d
 
-      ! directed or undirected gtaph?
+      ! just to avoid "unused variable" warning
+      if (present(pcapacity) .or. present(ccapacity) .or. present(is_3d)) then
+        continue
+      end if
+
+      ! directed or undirected graph?
       this%is_directed_graph = .false.
       if (present(is_directed_graph)) this%is_directed_graph = is_directed_graph
 
