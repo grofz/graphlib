@@ -539,53 +539,24 @@
       & 'vtuio_read - tag "Piece" not found'
 
       ! get "npoints" and "ncells"
-     !ios = -1
-     !val = piece%findval('NumberOfPoints', was_found)
-     !if (was_found) read(val,*,iostat=ios) npoints
-     !if (ios/=0) error stop 'vtuio_read - could not determine npoints'
-     !if (IDEBUG>0) print *, 'npoints=',npoints
       npoints = parse_value(piece, 'NumberOfPoints', 'npoints')
-     !ios = -1
-     !val = piece%findval('NumberOfCells', was_found)
       ncells = parse_value(piece, 'NumberOfCells', 'ncells')
-     !if (was_found) read(val,*,iostat=ios) ncells
-     !if (ios/=0) error stop 'vtuio_read - could not determine ncells'
-     !if (IDEBUG>0) print *, 'ncells=',ncells
 
       ! get offsets for points and connections
       opoints => piece%findtag('Points')
       if (.not. associated(opoints)) error stop &
       & 'vtuio_read - tag "Points" not found'
-     !ios = -1
-     !val = opoints%findval('offset', was_found)
       offset_points = parse_value(opoints, 'offset', 'offset_points')
-     !if (was_found) read(val,*,iostat=ios) offset_points
-     !if (ios/=0) error stop 'vtuio_read - could not determine offset_points'
-     !if (IDEBUG>0) print '("offset points ",i0)', offset_points
+
       ocells => piece%findtag('Cells')
       if (.not. associated(ocells)) error stop &
       & 'vtuio_read - tag "Cells" not found'
-     !ios = -1
-     !val = ocells%findval('Name','connectivity','offset', was_found)
       offset_cones = parse_value(ocells, &
           'Name', 'connectivity', 'offset', 'offset_cones')
-     !if (was_found) read(val,*,iostat=ios) offset_cones
-     !if (ios/=0) error stop 'vtuio_read - could not determine offset_cones'
-     !if (IDEBUG>0) print '("offset cones ",i0)', offset_cones
-     !ios = -1
-     !val = ocells%findval('Name','offsets','offset', was_found)
       offset_offsets = parse_value(ocells, &
           'Name', 'offsets', 'offset', 'offset_offsets')
-     !if (was_found) read(val,*,iostat=ios) offset_offsets
-     !if (ios/=0) error stop 'vtuio_read - could not determine offset_offsets'
-     !if (IDEBUG>0) print '("offset offsets ",i0)', offset_offsets
-     !ios = -1
-     !val = ocells%findval('Name','types','offset', was_found)
       offset_types = parse_value(ocells, &
           'Name', 'types', 'offset', 'offset_types')
-     !if (was_found) read(val,*,iostat=ios) offset_types
-     !if (ios/=0) error stop 'vtuio_read - could not determine offset_types'
-     !if (IDEBUG>0) print '("offset types ",i0)', offset_types
 
       ! is timevalue present?
       block
@@ -606,27 +577,18 @@
       offset_at = -1
       point_data => grid%findtag('PointData')
       if (associated(point_data)) then
-       !ios = -1
-       !val = point_data%findval('Name','radius','offset', was_found)
         offset_r = parse_value(point_data, &
            'Name', 'radius', 'offset', 'offset radius')
-       !if (was_found) read(val,*,iostat=ios) offset_r
-       !ios = -1
-       !val = point_data%findval('Name','type','offset', was_found)
         offset_at = parse_value(point_data, &
             'Name', 'type', 'offset', 'offset vertex type')
-       !if (was_found) read(val,*,iostat=ios) offset_at
       end if
 
       ! get offsets for cell data
       offset_ct = -1
       cell_data => grid%findtag('CellData')
       if (associated(cell_data)) then
-       !ios = -1
-       !val = cell_data%findval('Name','con t','offset', was_found)
         offset_ct = parse_value(cell_data, &
             'Name', 'con t', 'offset', 'offset cell type')
-       !if (was_found) read(val,*,iostat=ios) offset_ct
       end if
 #ifdef DEBUG
       print '("offset radii ",i0)', offset_r
