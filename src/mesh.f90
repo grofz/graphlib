@@ -20,20 +20,22 @@
     use iso_fortran_env, only : dp=>real64, I1B=>int8
     use graph_mod, only : graph_t, graph_handle_t=>handle_t, MAP_NULL, &
         NOT_INITIALIZED
-    use graph_adjlist_mod, only : adjlist_t
-    use conts_mod, only : queue_t
+    use graph_adjlist_mod, only : adjlist_t, iterator_t
+    use conts_mod, only : queue_t, stack_t, INTEGER_MOLD
     implicit none (type, external)
     private
+! temporary just for debugging
+public order_point_indices
 
     ! Named local constants
     integer, parameter :: DEFAULT_CCAPACITY = 10, DEFAULT_PCAPACITY = 5
-    integer, parameter :: INTEGER_MOLD(0) = [integer ::]
 
     ! type=1 for vertices and type=2 for edges in "src/graph.f90"
     integer(I1B), parameter :: POINT_HANDLE_TYPE = 3_I1B, &
         CELL_HANDLE_TYPE = 4_I1B, INVALID_HANDLE_TYPE= 0_I1B
 
 
+    ! Points and cells use "mesh_handle_t"
     type, extends(graph_handle_t), public :: mesh_handle_t
     contains
       procedure :: get_index_to_map => mhandle_get_index_to_map
@@ -66,17 +68,20 @@
     contains
       ! these procedures override procedures from graph_t class (note)
       procedure :: initialize => mesh_initialize
-      procedure :: get_index_from_handle => mesh_get_index_from_handle
+      procedure :: index_from_handle => mesh_index_from_handle
 ! TODO - override these or make them non-overridable in graph_t
      !procedure :: copy
      !procedure :: build_selection_masks
      !procedure :: print
+      procedure, non_overridable :: find_cell_id => mesh_find_cell_id
       procedure, non_overridable :: add_point => mesh_add_point
+      procedure, non_overridable :: add_cell => mesh_add_cell
+      procedure :: npoints_per_cell => mesh_npoints_per_cell
     end type mesh_t
 
   contains
 
-    pure function mesh_get_index_from_handle(this, handle) result(id)
+    pure function mesh_index_from_handle(this, handle) result(id)
       class(mesh_t), intent(in) :: this
       type(graph_handle_t), intent(in) :: handle
       integer id, index_to_map
@@ -106,9 +111,9 @@
         end if
       case default
         ! delegate to parent class
-        id = this%graph_t%get_index_from_handle(handle)
+        id = this%graph_t%index_from_handle(handle)
       end select
-    end function mesh_get_index_from_handle
+    end function mesh_index_from_handle
 
 
     elemental integer function mhandle_get_index_to_map(this, graph) result(id)
@@ -117,7 +122,7 @@
       if (present(graph)) then
         select type(graph)
         class is (mesh_t)
-          id = mesh_get_index_from_handle(graph, this%graph_handle_t)
+          id = graph%index_from_handle(this%graph_handle_t)
         class default
           error stop 'mhandle_get_index_to_map - mesh_handle_t object must be used with mesh_t object only'
         end select
@@ -170,6 +175,14 @@
     ! ----------------------
     ! Mesh basic operations
     ! ----------------------
+
+    pure integer function mesh_npoints_per_cell(this) result(n)
+      class(mesh_t), intent(in) :: this
+      n = 3
+      if (this%is_3d) n = 4
+    end function mesh_npoints_per_cell
+
+
     subroutine mesh_initialize(this, vcapacity, ecapacity, is_directed_graph, &
         pcapacity, ccapacity, is_3d)
       class(mesh_t), intent(inout) :: this
@@ -181,6 +194,10 @@
         if (is_directed_graph) error stop &
             'mesh_initialize - mesh_t object requires undirected graph'
       end if
+
+      ! initialize graph_t components
+      call this%graph_t%initialize(vcapacity=vcapacity, ecapacity=ecapacity, &
+          is_directed_graph=.false.)
 
       ! two-dimensional or three dimensional?
       this%is_3d = .false. ! 2d is a default at the moment
@@ -215,9 +232,6 @@
         call increase_cells_capacity(this, new_capacity)
       end block
 
-      ! initialize graph_t components
-      call this%graph_t%initialize(vcapacity=vcapacity, ecapacity=ecapacity, &
-          is_directed_graph=.false.)
     end subroutine mesh_initialize
 
 
@@ -237,7 +251,7 @@
       end if
 
       if (new_capacity0 <= old_capacity) error stop &
-          'increase_points_capacity - new_capaciry <= old_capacity '
+          'increase_points_capacity - new_capacity <= old_capacity '
 
       ! reallocate "points" and "pmap"
       allocate(tmp_points(new_capacity0))
@@ -275,9 +289,9 @@
       end if
 
       if (new_capacity0 <= old_capacity) error stop &
-          'increase_cells_capacity - new_capaciry <= old_capacity '
+          'increase_cells_capacity - new_capacity <= old_capacity '
 
-      ! reallocate "edges" and "vmap"
+      ! reallocate "cells" and "cmap"
       allocate(tmp_cells(new_capacity0))
       allocate(tmp_map(new_capacity0), source=MAP_NULL)
       tmp_cells(1:old_capacity) = this%cells
@@ -314,21 +328,273 @@
         new_point%handle = handle
       end associate
       this%pmap(handle%get_index_to_map()) = this%npoints
+print '("Point added. Handle is ",i0)', handle%get_index_to_map(this)
     end function mesh_add_point
 
 
-    ! -------------------
-    ! Cell TPB procedures
-    ! -------------------
+    function mesh_add_cell(this, point_handles) result(handle)
+      class(mesh_t), intent(inout) :: this
+      type(mesh_handle_t), intent(in) :: point_handles(4)
+      type(mesh_handle_t) :: handle
+!
+! Add mesh cell
+!
+      integer :: n, i, j, pids(4), ngb_pids(4)
+      integer, allocatable :: found_cids(:)
+
+      n = this%npoints_per_cell()
+
+      if (.not. this%is_initialized()) then
+        error stop 'mesh_add_cell - not initialized'
+      else if (any(point_handles(1:n)%get_handle_type() /= POINT_HANDLE_TYPE)) then
+        error stop 'mesh_add_cell - point type handles expected'
+      end if
+
+      ! All points must exist and be unique
+      block
+        integer :: pids0(4)
+        logical :: unique
+        pids0(1:n) = point_handles(1:n)%get_index_to_map(this)
+        if (any(pids(1:n)==MAP_NULL)) &
+            error stop 'mesh_add_cell - a point not present (invalid handle)'
+        unique = .true. ! innocent until found guilty
+        do i = 1, n-1
+          do j = i+1, n
+            if (pids0(i)==pids0(j)) unique = .false.
+          end do
+        end do
+        if (.not. unique) error stop 'mesh_add_cell - all points must be unique'
+      end block
+      
+      ! Order points
+      pids = order_point_indices(this, point_handles)
+
+      ! Check if cell already exists
+      found_cids = this%find_cell_id(pids(1:n))
+      select case(size(found_cids))
+      case(0)
+        continue ! all ok, can proceed
+      case(1)
+        error stop 'mesh_add_cell - cell already exists'
+      case default
+        error stop 'mesh_add_cell - too many cells (internal error)'
+      end select
+      deallocate(found_cids)
+
+      ! We verified there is no cell among points
+      ! Set components of added cell
+      call borrow_mesh_handle(this, CELL_HANDLE_TYPE, handle)
+      this%ncells = this%ncells + 1
+      associate (new_cell => this%cells(this%ncells))
+        new_cell%handle = handle
+
+        do i = 1, n
+          new_cell%points(i) = this%points(pids(i))%handle
+
+          ! Set connection with neighbouring cells
+          ! A neighbouring cell across point i must contain all points except
+          ! point i
+          found_cids = this%find_cell_id([pids(1:i-1), pids(i+1:n)])
+          select case (size(found_cids))
+          case(0)
+            ! no oposote cell accros point "i" / explicitly set to null
+            new_cell%ngbcells(i)%graph_handle_t = &
+              graph_handle_t(id=MAP_NULL, type=CELL_HANDLE_TYPE, version=1)
+print '("Point ",i0," - no ngb across")', new_cell%points(i)%get_index_to_map(this)
+          case(1)
+            ! set connection
+            associate(ngb_cell => this%cells(found_cids(1)))
+              new_cell%ngbcells(i) = ngb_cell%handle
+
+              ! which node in neigbouring cell is accross the added cell?
+              ngb_pids = ngb_cell%point_indices(this)
+              do j=1, n
+                if (all(pids(1:n)/=ngb_pids(j))) exit
+              end do
+              if (j==n+1) error stop &
+                  'mesh_add_cell - opposite point in ngb cell not found (internal error)'
+              ! verify that handle, we are about to set, points to null
+              if (ngb_cell%ngbcells(j)%get_index_to_map()/=MAP_NULL) &
+                  error stop 'mesh_add_cell - a connection exists (internal error)'
+              ! set the connection back
+              ngb_cell%ngbcells(j) = handle
+print '("Point ",i0," - across is cell ",i0)', new_cell%points(i)%get_index_to_map(this), ngb_cell%handle%get_index_to_map(this)
+            end associate
+          case default
+            error stop 'mesh_add_cell - more than one neighbouring cell found (internal error)'
+          end select
+          deallocate(found_cids)
+        end do
+
+        ! make sure handles at unused position are set to null in 2D-meshes
+        if (.not. this%is_3d) then
+          new_cell%points(4)%graph_handle_t = &
+              graph_handle_t(id=MAP_NULL, type=POINT_HANDLE_TYPE, version=1)
+          new_cell%ngbcells(4)%graph_handle_t = &
+              graph_handle_t(id=MAP_NULL, type=CELL_HANDLE_TYPE, version=1)
+        end if
+      end associate
+      this%cmap(handle%get_index_to_map()) = this%ncells
+
+      ! Add the new cell to the points's list...
+      do i = 1, n
+        call this%points(pids(i))%depending_cells%add(this%ncells)
+      end do
+print '("Cell added. Handle is ",i0)', handle%get_index_to_map(this)
+    end function mesh_add_cell
+
+
+!TODO when pure stack%pop is ready, make this function pure
+    function mesh_find_cell_id(this, pids) result(cids)
+      class(mesh_t), intent(in) :: this
+      integer, intent(in) :: pids(:)
+      integer, allocatable :: cids(:)
+!
+! Given a group of 1 to 3 (or 4) points, find all cells associated with these
+! points and return an array of cell indices. Return empty sized array if no
+! such cell exists.
+!
+      type(iterator_t) :: iterator
+      type(stack_t) :: found_cells
+      integer :: cid_current, pids_current(4), i, j
+      logical :: has_point(4)
+
+      ! Validate input
+      if (size(pids) > this%npoints_per_cell()) error stop &
+          'mesh_find_cell_id - too many points given'
+      if (any(pids<1 .or. pids>this%npoints)) error stop &
+          'mesh_find_cell_id - point indices out of bounds'
+      call found_cells%initialize(chunksize=size(transfer(1,INTEGER_MOLD)),capacity=5)
+
+      ! it should be enough to look in depcells list of a single point only
+      if (size(pids)>0) then
+        iterator = iterator_t()
+        do while (this%points(pids(1))%depending_cells%has_next(iterator))
+          call this%points(pids(1))%depending_cells%next(iterator, cid_current)
+          pids_current = this%cells(cid_current)%point_indices(this)
+
+          ! does current cell consists of all given points?
+          has_point = .false.
+          has_point(1) = .true.
+          do i = 2, size(pids)
+            do j=1, this%npoints_per_cell()
+              if (pids(i)==pids_current(j)) then
+                has_point(i) = .true.
+                exit
+              end if
+            end do
+            if (.not. has_point(i)) exit
+          end do
+          if (all(has_point(1:size(pids)))) &
+              call found_cells%push(transfer(cid_current,INTEGER_MOLD))
+        end do ! next cell from the list
+      end if
+
+      ! prepare output array
+      allocate(cids(found_cells%size()))
+      i = 0
+      do while(.not. found_cells%empty())
+        i = i + 1
+        cids(i) = transfer(found_cells%pop(), 1)
+      end do
+      if (i /= size(cids)) error stop &
+          'mesh_find_cell_id - stack consumation irregularity (internal error)'
+    end function mesh_find_cell_id
+
+
+   !pure function mesh_find_mirror_cell_id(this, cell, ploc) result(cid)
+   !  class(mesh_t), intent(in) :: this
+   !  type(cell_t), intent(in) :: cell
+   !end function mesh_find_mirror_cell_id
+
+
+    ! ------------
+    ! Cell methods
+    ! ------------
     pure function cell_point_indices(this, mesh) result(ids)
       class(cell_t), intent(in) :: this
       type(mesh_t), intent(in) :: mesh
       integer :: ids(4)
 
       integer :: i
-      do i=1,4
-        ids(i) = mesh%get_index_from_handle(this%ngbcells(i)%graph_handle_t)
+
+      if (.not. mesh%is_3d) ids(4) = MAP_NULL
+      do i=1, mesh%npoints_per_cell()
+        ids(i) = mesh%index_from_handle(this%points(i)%graph_handle_t)
       end do
     end function cell_point_indices
+
+
+    pure function order_point_indices(this, points) result(pids)
+      class(mesh_t), intent(in) :: this
+      type(mesh_handle_t), intent(in) :: points(4)
+      integer :: pids(4)
+!
+! Order points for positive orientation.
+! 
+      real(dp), parameter :: eps = 10 * epsilon(1.0_dp)
+      real(dp), parameter :: p_ref(3) = real([0.0, 0.0, 10.0], dp)
+      real(dp) :: d, tol
+      integer :: n, i, itmp
+      type(mesh_handle_t) :: points0(4), ptmp
+
+      n = this%npoints_per_cell()
+
+      ! The first two positions will be points with the lowest index_to_map.
+      points0 = points
+      associate (loc=>minloc(points0(1:n)%get_index_to_map(), dim=1))
+        ptmp = points0(1)
+        points0(1) = points0(loc)
+        points0(loc) = ptmp
+      end associate
+      associate (loc=>minloc(points0(2:n)%get_index_to_map(), dim=1))
+        ptmp = points0(2)
+        points0(2) = points0(loc)
+        points0(loc) = ptmp
+      end associate
+
+      ! Point indices in the actual mesh
+      pids = points0%get_index_to_map(this)
+      if (any(pids(1:n)<1 .or. any(pids(1:n)>this%npoints))) error stop &
+          'order_point_indices - point indices out of bounds (internal error)'
+
+      ! Orientation: det [(p2-p1); (p3-p1); (p4-p1)] > 0
+      ! For 2d mesh, an arbitrary reference point is used instead of p4
+      block
+        real(dp) :: a(3), b(3), axb(3), c(3)
+        associate( &
+          p1=>this%points(pids(1))%position, &
+          p2=>this%points(pids(2))%position, &
+          p3=>this%points(pids(3))%position, &
+          p4=>this%points(pids(4))%position)
+
+          a = p2 - p1
+          b = p3 - p1
+          if (this%is_3d) then
+            c = p4 - p1
+          else
+            c = p_ref - p1
+          end if
+        end associate
+        ! axb is a normal vector to the p1-p2-p3 plane
+        axb(1) = a(2)*b(3) - a(3)*b(2)
+        axb(2) = a(3)*b(1) - a(1)*b(3)
+        axb(3) = a(1)*b(2) - a(2)*b(1)
+        ! d determines the side of the plane on which p4/p_ref lies  
+        d = dot_product(axb, c)
+        ! tolerance for the signed volume calculation
+        tol = eps*max(1.0, maxval(abs(a))*maxval(abs(b))*maxval(abs(c)))
+      end block
+
+      if (abs(d)<tol) then
+        error stop 'order_point_indices - degenerate positions'
+      elseif (d < -tol) then
+        itmp = pids(2)
+        pids(2) = pids(3)
+        pids(3) = itmp
+      else
+        continue
+      end if
+    end function order_point_indices
 
   end module mesh_mod

@@ -45,9 +45,9 @@ module conts_mod
   implicit none (type, external)
   private
 
+  integer, parameter, public :: INTEGER_MOLD(0) = [integer ::]
   integer, parameter :: NOT_INITIALIZED = -1
   integer, parameter :: DEFAULT_CAPACITY = 10
-  integer, parameter :: INTEGER_MOLD(0) = [integer ::]
 
   type, abstract :: container_t
     integer :: n = NOT_INITIALIZED

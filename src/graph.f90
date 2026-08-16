@@ -30,7 +30,7 @@
     use iso_fortran_env, only : DP => real64, I1B => int8, I8B => int64, output_unit
     use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR
     use conts_mod, only : queue_t, stack_t, pqueue_t, pqueue_handle_t=>handle_t, &
-      PQUEUE_MIN, PQUEUE_MAX
+      PQUEUE_MIN, PQUEUE_MAX, INTEGER_MOLD
     use graph_adjlist_mod, only : adjlist_t, iterator_t
     implicit none (type, external)
     private
@@ -53,7 +53,6 @@
 
     ! Named local constants
     integer, parameter :: DEFAULT_ECAPACITY = 10, DEFAULT_VCAPACITY = 5
-    integer, parameter :: INTEGER_MOLD(0) = [integer ::]
 
     integer(I1B), parameter :: VERTEX_HANDLE_TYPE = 1_I1B, &
         EDGE_HANDLE_TYPE = 2_I1B, INVALID_HANDLE_TYPE= 0_I1B
@@ -106,7 +105,7 @@
       type(queue_t), private :: free_vhandles, free_ehandles
     contains
       procedure :: initialize => graph_initialize
-      procedure :: get_index_from_handle => graph_get_index_from_handle
+      procedure :: index_from_handle => graph_index_from_handle
       procedure :: copy => graph_copy
       procedure :: build_selection_masks => graph_build_selection_masks
       procedure :: print => graph_print
@@ -581,7 +580,7 @@
     end subroutine return_handle
 
 
-    pure function graph_get_index_from_handle(this, handle) result(id)
+    pure function graph_index_from_handle(this, handle) result(id)
       class(graph_t), intent(in) :: this
       type(handle_t), intent(in) :: handle
       integer id
@@ -608,9 +607,9 @@
           end if
         end if
       case default
-        error stop 'get_index_from_handle: unknown handle_type'
+        error stop 'index_from_handle: unknown handle_type'
       end select
-    end function graph_get_index_from_handle
+    end function graph_index_from_handle
 
 
     elemental integer function handle_get_handle_type(this)
@@ -622,8 +621,15 @@
     elemental integer function handle_get_index_to_map(this, graph) result(id)
       class(handle_t), intent(in) :: this
       class(graph_t), intent(in), optional :: graph
+!
+! If graph_t is provided - call "index_from_handle" to return the actual array
+! index in graph or MAP_NULL
+!
+! If graph_t is not provided - the function is just a getter to a private
+! component of the handle.
+!
       if (present(graph)) then
-        id = graph%get_index_from_handle(this)
+        id = graph%index_from_handle(this)
       else
         id = this%index_to_map
       end if
@@ -826,7 +832,7 @@
 
       if (handle%handle_type /= VERTEX_HANDLE_TYPE) &
           error stop 'graph_remove_vertex - invalid handle type'
-      ivertex = this%get_index_from_handle(handle)
+      ivertex = this%index_from_handle(handle)
       if (ivertex == MAP_NULL) &
           error stop 'graph_remove_vertex - vertex no longer present in graph'
 
@@ -869,7 +875,7 @@
 
       if (handle%handle_type /= VERTEX_HANDLE_TYPE) &
           error stop 'relocate_vertex - wrong handle type'
-      oldid = this%get_index_from_handle(handle)
+      oldid = this%index_from_handle(handle)
       if (oldid == MAP_NULL) &
           error stop 'relocate_vertex - vertex no more exists'
       if (newid < 1 .or. newid > this%nvertices) &
@@ -899,8 +905,8 @@
       block
         integer :: isrc, idst
 
-        isrc = this%get_index_from_handle(src)
-        idst = this%get_index_from_handle(dst)
+        isrc = this%index_from_handle(src)
+        idst = this%index_from_handle(dst)
         if (isrc==MAP_NULL .or. idst==MAP_NULL) then
           error stop 'graph_add_edge - vertex not present (invalid handle)'
         end if
@@ -945,15 +951,15 @@
 
       if (handle%handle_type /= EDGE_HANDLE_TYPE) &
           error stop 'graph_remove_edge - invalid handle type'
-      iedge = this%get_index_from_handle(handle)
+      iedge = this%index_from_handle(handle)
       if (iedge == MAP_NULL) &
           error stop 'graph_remove_edge - edge no longer exists'
 
       ! Remove edge refrence from adjacency list(s) of end points
       ! It is ok if the vertice no longer exist, but if it exists, the
       ! reference to the edge must be present.
-      isrc = this%get_index_from_handle(this%edges(iedge)%src_handle)
-      idst = this%get_index_from_handle(this%edges(iedge)%dst_handle)
+      isrc = this%index_from_handle(this%edges(iedge)%src_handle)
+      idst = this%index_from_handle(this%edges(iedge)%dst_handle)
       if (isrc /= MAP_NULL) call this%vertices(isrc)%ngbs%remove(iedge)
       if (.not. this%is_directed_graph) then
         if (idst /= MAP_NULL) call this%vertices(idst)%ngbs%remove(iedge)
@@ -980,7 +986,7 @@
 
       if (handle%handle_type /= EDGE_HANDLE_TYPE) &
           error stop 'relocate_edge - wrong handle type'
-      oldid = this%get_index_from_handle(handle)
+      oldid = this%index_from_handle(handle)
       if (oldid == MAP_NULL) &
           error stop 'relocate_edge - edge no more exists'
       if (newid < 1 .or. newid > this%nedges) &
@@ -991,11 +997,11 @@
       this%emap(handle%index_to_map) = newid
 
       ! update adjacent lists of respective vertices
-      isrc = this%get_index_from_handle(this%edges(newid)%src_handle)
+      isrc = this%index_from_handle(this%edges(newid)%src_handle)
       if (isrc/=MAP_NULL) call update_ngbs(this%vertices(isrc)%ngbs)
 
       if (.not. this%is_directed_graph) then
-        idst = this%get_index_from_handle(this%edges(newid)%dst_handle)
+        idst = this%index_from_handle(this%edges(newid)%dst_handle)
         if (idst/=MAP_NULL) call update_ngbs(this%vertices(idst)%ngbs)
       end if
 
@@ -1027,8 +1033,8 @@
 
       nedges_removed0 = 0
       do iedge=1, this%nedges
-        isrc = this%get_index_from_handle(this%edges(iedge)%src_handle)
-        idst = this%get_index_from_handle(this%edges(iedge)%dst_handle)
+        isrc = this%index_from_handle(this%edges(iedge)%src_handle)
+        idst = this%index_from_handle(this%edges(iedge)%dst_handle)
         if (isrc==MAP_NULL) error stop &
           'remove_orphaned_edges - non-existing source vertex is unexpected'
         if (idst==MAP_NULL) then
@@ -1087,8 +1093,8 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
         do e=1, this%nedges
           if (.not. emask0(e)) cycle
           associate(edge=>this%edges(e))
-            ia = this%get_index_from_handle(edge%src_handle)
-            ib = this%get_index_From_handle(edge%dst_handle)
+            ia = this%index_from_handle(edge%src_handle)
+            ib = this%index_From_handle(edge%dst_handle)
             new_edges0(e) = gnew%add_edge( &
                 new_vertices0(ia), new_vertices0(ib), edge%ipar, edge%rpar)
           end associate
@@ -1148,8 +1154,8 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
 
       ! information about edges
       do i=1, this%nedges
-        v1 = this%get_index_from_handle(this%edges(i)%src_handle)
-        v2 = this%get_index_from_handle(this%edges(i)%dst_handle)
+        v1 = this%index_from_handle(this%edges(i)%src_handle)
+        v2 = this%index_from_handle(this%edges(i)%dst_handle)
         if (v1==MAP_NULL) then
           v1=v1
         else
@@ -1195,7 +1201,7 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
         idst = other_vertex_id(this, iedge, isrc)
         ! for directed graphs verify, that destination vertex has been selected
         if (this%is_directed_graph) then
-          if (idst /= this%get_index_from_handle(this%edges(iedge)%dst_handle)) &
+          if (idst /= this%index_from_handle(this%edges(iedge)%dst_handle)) &
             error stop 'list_of_ngbs - wrong source in directed graph'
         end if
 
@@ -1250,8 +1256,8 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
       if (ia==MAP_NULL) &
           error stop 'other_vertex_id - "ia" must not be null'
 
-      i1 = this%get_index_from_handle(this%edges(iedge)%src_handle)
-      i2 = this%get_index_from_handle(this%edges(iedge)%dst_handle)
+      i1 = this%index_from_handle(this%edges(iedge)%src_handle)
+      i2 = this%index_from_handle(this%edges(iedge)%dst_handle)
       if (ia==i1) then
         ib = i2
       else if (ia==i2) then
@@ -1310,8 +1316,8 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
       type(graph_t), intent(in) :: graph
       integer ::ids(2)
 
-      ids(1) = graph%get_index_from_handle(this%src_handle)
-      ids(2) = graph%get_index_from_handle(this%dst_handle)
+      ids(1) = graph%index_from_handle(this%src_handle)
+      ids(2) = graph%index_from_handle(this%dst_handle)
     end function edge_vertex_indices
 
 
@@ -1361,11 +1367,11 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
           error stop 'graph_shortest_path - position_cost out of bounds'
 
       ! Find starting and target vertex positions in "vertices" array
-      id_start = this%get_index_from_handle(start_vertex)
+      id_start = this%index_from_handle(start_vertex)
       if (id_start==MAP_NULL .or. start_vertex%handle_type/=VERTEX_HANDLE_TYPE) &
           error stop 'graph_shortest_path - starting vertex not identified'
       if (present(target_vertex)) then
-        id_target = this%get_index_from_handle(target_vertex)
+        id_target = this%index_from_handle(target_vertex)
         if (id_target==MAP_NULL .or. target_vertex%handle_type/=VERTEX_HANDLE_TYPE) &
             error stop 'graph_shortest_path - target vertex not identified'
       else
@@ -1542,8 +1548,8 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
       do ie=1, this%nedges
         ! close edges with closed vertex as one of its ends
         if (.not. emask(ie)) cycle
-        ia = this%get_index_from_handle(this%edges(ie)%src_handle)
-        ib = this%get_index_from_handle(this%edges(ie)%dst_handle)
+        ia = this%index_from_handle(this%edges(ie)%src_handle)
+        ib = this%index_from_handle(this%edges(ie)%dst_handle)
         if (ia==MAP_NULL .or. ib==MAP_NULL) then
           ! dangling edge not selected
           emask(ie) = .false.
