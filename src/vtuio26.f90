@@ -68,6 +68,10 @@
       module procedure reallocate_real, reallocate_int
     end interface
 
+    interface parse_value
+      module procedure parse_value1, parse_value2
+    end interface
+
 ! -----------------------------------------------------------------------------
 ! TUNING THE BINARY FORMAT FOR vtuio_write
 !
@@ -111,8 +115,6 @@
 
     integer, parameter :: RADIUS_DATA_SIZE = 4
 
-    integer, parameter :: IDEBUG=0
-
     ! legend for items in "mask" array argument
     integer, parameter :: MASK_RADIUS=1, MASK_POSITION=2, MASK_POINT_TYPE=3, MASK_CELL_TYPE=4
 
@@ -137,7 +139,7 @@
       type(vtuio_data_t), optional :: vtudata
         !! data structure for additional data
 
-      character(len=MAX_BUFFER_LEN/2) :: ch1, ch2
+      character(len=MAX_BUFFER_LEN/2) :: text1, text2
       integer :: npoints, ncells, i, j, fid, offset
       real(DP), allocatable :: rdata(:,:)
       integer, allocatable :: idata(:,:)
@@ -158,12 +160,14 @@
 
       if (present(time)) call write_time_value(fid, time)
 
-      write(ch1,'(i0)') npoints
-      write(ch2,'(i0)') ncells
-      write(fid) '<Piece NumberOfPoints="', trim(ch1), &
-      &          '" NumberOfCells="', trim(ch2), '">', LF
+      write(text1,'(i0)') npoints
+      write(text2,'(i0)') ncells
+      write(fid) '<Piece NumberOfPoints="', trim(text1), &
+      &          '" NumberOfCells="', trim(text2), '">', LF
 
+      ! ===========================
       ! Point and Cell data headers
+      ! ===========================
       write(fid) '  <PointData>', LF
 
       allocate(rdata(1,npoints))
@@ -177,13 +181,9 @@
           do i=1,size(vtudata%meta)
             associate(m=>vtudata%meta(i))
               if (m%iclass==VTUIO_META_POINT+VTUIO_META_R) then
-               !if (allocated(rdata)) deallocate(rdata)
-               !allocate(rdata(m%ncomp,npoints))
                 call reallocate(rdata, [m%ncomp, npoints])
                 call write_data(fid, m%nbytes, trim(m%label), rdata=rdata, offset=offset)
               else if (m%iclass==VTUIO_META_POINT+VTUIO_META_I) then
-               !if (allocated(idata)) deallocate(idata)
-               !allocate(idata(m%ncomp,npoints))
                 call reallocate(idata, [m%ncomp, npoints])
                 call write_data(fid, m%nbytes, trim(m%label), idata=idata, offset=offset)
               end if
@@ -196,10 +196,7 @@
 
       write(fid) '  <CellData>', LF
 
-     !if (allocated(idata)) deallocate(idata)
-     !allocate(idata(1,ncells))
       call reallocate(idata, [1, ncells])
-
       call write_data(fid, 1, 'con t', idata=idata, offset=offset)
 
       if (present(vtudata)) then
@@ -207,13 +204,9 @@
           do i=1,size(vtudata%meta)
             associate(m=>vtudata%meta(i))
               if (m%iclass==VTUIO_META_CELL+VTUIO_META_R) then
-               !if (allocated(rdata)) deallocate(rdata)
-               !allocate(rdata(m%ncomp,ncells))
                 call reallocate(rdata, [m%ncomp, ncells])
                 call write_data(fid, m%nbytes, trim(m%label), rdata=rdata, offset=offset)
               else if (m%iclass==VTUIO_META_CELL+VTUIO_META_I) then
-               !if (allocated(idata)) deallocate(idata)
-               !allocate(idata(m%ncomp,ncells))
                 call reallocate(idata, [m%ncomp, ncells])
                 call write_data(fid, m%nbytes, trim(m%label), idata=idata, offset=offset)
               end if
@@ -224,29 +217,31 @@
 
       write(fid) '  </CellData>', LF
 
-      ! Points - header
+      ! =====================
+      ! Points/Cells - header
+      ! =====================
       write(fid) '  <Points>', LF
-      write(ch1,'(i0)') offset
+      write(text1,'(i0)') offset
       write(fid) '    <DataArray type=', POSITIONS_TEXT, &
-      & ' NumberOfComponents="3" format="appended" offset="', trim(ch1), &
+      & ' NumberOfComponents="3" format="appended" offset="', trim(text1), &
       & '" />', LF
       offset = offset + HEADERTYPE_SIZE + 3*npoints*POSITIONS_SIZE
       write(fid) '  </Points>', LF
 
       ! Cells (connections) - header
       write(fid) '  <Cells>', LF
-      write(ch1,'(i0)') offset
+      write(text1,'(i0)') offset
       write(fid) '    <DataArray type=', CONNECTIONS_TEXT, &
-      & ' Name="connectivity" format="appended" offset="', trim(ch1), &
+      & ' Name="connectivity" format="appended" offset="', trim(text1), &
       & '" />', LF
       offset = offset + HEADERTYPE_SIZE + 2*ncells*CONNECTIONS_SIZE
-      write(ch1,'(i0)') offset
+      write(text1,'(i0)') offset
       write(fid) '    <DataArray type=', CONNECTIONS_TEXT, &
-      & ' Name="offsets" format="appended" offset="', trim(ch1), '" />', LF
+      & ' Name="offsets" format="appended" offset="', trim(text1), '" />', LF
       offset = offset + HEADERTYPE_SIZE + ncells*CONNECTIONS_SIZE
-      write(ch1,'(i0)') offset
+      write(text1,'(i0)') offset
       write(fid) '    <DataArray type=', CELLTYPE_TEXT, &
-      & ' Name="types" format="appended" offset="', trim(ch1), '" />', LF
+      & ' Name="types" format="appended" offset="', trim(text1), '" />', LF
       offset = offset + HEADERTYPE_SIZE + ncells*CELLTYPE_SIZE
       write(fid) '  </Cells>', LF
 
@@ -256,15 +251,13 @@
       write(fid) '<AppendedData encoding="raw">', LF
       write(fid) '_' ! data block starts with underscore
 
+      ! ===========
       ! Binary data
-     !if (allocated(rdata)) deallocate(rdata)
-     !allocate(rdata(1,npoints))
+      ! ===========
       call reallocate(rdata, [1, npoints])
       rdata(1,:) = graph%vertices(1:npoints)%rpar(mask(MASK_RADIUS))
       call write_data(fid, RADIUS_DATA_SIZE, 'r', rdata=rdata)
 
-     !if (allocated(idata)) deallocate(idata)
-     !allocate(idata(1,npoints))
       call reallocate(idata, [1, npoints])
       idata(1,:) = graph%vertices(1:npoints)%ipar(mask(MASK_POINT_TYPE))
       call write_data(fid, 1, 'tp', idata=idata)
@@ -274,16 +267,12 @@
           do i=1,size(vtudata%meta)
             associate(m=>vtudata%meta(i))
               if (m%iclass==VTUIO_META_POINT+VTUIO_META_R) then
-               !if (allocated(rdata)) deallocate(rdata)
-               !allocate(rdata(m%ncomp,npoints))
                 call reallocate(rdata, [m%ncomp, npoints])
                 do j=1,npoints
                   rdata(:,j) = graph%vertices(j)%rpar(m%start:m%start+m%ncomp-1)
                 end do
                 call write_data(fid, m%nbytes, trim(m%label), rdata=rdata)
               else if (m%iclass==VTUIO_META_POINT+VTUIO_META_I) then
-               !if (allocated(idata)) deallocate(idata)
-               !allocate(idata(m%ncomp,npoints))
                 call reallocate(idata, [m%ncomp, npoints])
                 do j=1,npoints
                   idata(:,j) = graph%vertices(j)%ipar(m%start:m%start+m%ncomp-1)
@@ -299,8 +288,6 @@
 !     call write_data(fid, 4, 'v', &
 !         rdata=transpose(reshape([atoms(:)%v(1),atoms(:)%v(2),atoms(:)%v(3)],[npoints,3])))
 
-     !if (allocated(idata)) deallocate(idata)
-     !allocate(idata(1,ncells))
       call reallocate(idata, [1, ncells])
       idata(1,:) = graph%edges(1:ncells)%ipar(mask(MASK_CELL_TYPE))
       call write_data(fid, 1, 'con t', idata=idata)
@@ -310,16 +297,12 @@
           do i=1,size(vtudata%meta)
             associate(m=>vtudata%meta(i))
               if (m%iclass==VTUIO_META_CELL+VTUIO_META_R) then
-               !if (allocated(rdata)) deallocate(rdata)
-               !allocate(rdata(m%ncomp,ncells))
                 call reallocate(rdata, [m%ncomp, ncells])
                 do j=1,ncells
                   rdata(:,j) = graph%edges(j)%rpar(m%start:m%start+m%ncomp-1)
                 end do
                 call write_data(fid, m%nbytes, trim(m%label), rdata=rdata)
               else if (m%iclass==VTUIO_META_CELL+VTUIO_META_I) then
-               !if (allocated(idata)) deallocate(idata)
-               !allocate(idata(m%ncomp,ncells))
                 call reallocate(idata, [m%ncomp, ncells])
                 do j=1,ncells
                   idata(:,j) = graph%edges(j)%ipar(m%start:m%start+m%ncomp-1)
@@ -407,7 +390,7 @@
       integer :: ritype ! IS_REAL or IS_INT
       integer :: data_kind, data_size, ncomps, n
       character(len=10) :: data_text
-      character(len=MAX_BUFFER_LEN/2) :: ch1, ch2
+      character(len=MAX_BUFFER_LEN/2) :: text1, text2
 
       if (present(rdata) .and. .not. present(idata)) then
         ritype = IS_REAL
@@ -431,7 +414,7 @@
           data_size = 8
           data_text = '"Float64"'
         case default
-          error stop 'write_data - 32 or 64 bytes for real data'
+          error stop 'write_data - 4 or 8 bytes for real data'
         end select
       case(IS_INT)
         ncomps = size(idata, dim=1)
@@ -451,17 +434,17 @@
           data_size = 8
           data_text = '"Int64"'
         case default
-          error stop 'write_data - 8 32 64 bytes for int data'
+          error stop 'write_data - 1 4 8 bytes for int data'
         end select
       end select
 
       if (present(offset)) then
         ! Write Header
-        write(ch1,'(i0)') ncomps
-        write(ch2,'(i0)') offset
+        write(text1,'(i0)') ncomps
+        write(text2,'(i0)') offset
         write(fid) '    <DataArray Name="', trim(label), '"', &
-        &  ' type=', trim(data_text), ' NumberOfComponents="', trim(ch1), &
-        &  '" format="appended" offset="', trim(ch2), '" />', LF
+        &  ' type=', trim(data_text), ' NumberOfComponents="', trim(text1), &
+        &  '" format="appended" offset="', trim(text2), '" />', LF
         offset = offset + HEADERTYPE_SIZE + n*data_size*ncomps
 
       else
@@ -497,12 +480,12 @@
       integer, intent(in) :: fid
       real(DP), intent(in) :: time
 
-      character(len=20) ch1
+      character(len=20) text1
       write(fid) '<FieldData>'//LF
       write(fid) '  <DataArray type="Float32" Name="TimeValue"&
       & NumberOfTuples="1" format="ascii">'
-      write(ch1,*) real(time, kind=SP)
-      write(fid) '  '//trim(adjustl(ch1))//LF
+      write(text1,*) real(time, kind=SP)
+      write(fid) '  '//trim(adjustl(text1))//LF
       write(fid) '  </DataArray>'//LF
       write(fid) '</FieldData>'//LF
     end subroutine write_time_value
@@ -536,10 +519,8 @@
       real(POSITIONS_KIND) :: xloc(3)
       real(DP), allocatable :: rdata(:)
       type(object_t), target :: root
-      type(object_t), pointer :: obj1, obj2, obj3
+      type(object_t), pointer :: grid, piece, opoints, ocells, point_data, cell_data
       character(len=1) :: ch
-      character(len=:), allocatable :: val
-      logical :: was_found
       type(handle_t), allocatable :: points(:)
       type(handle_t) :: cone
 
@@ -549,95 +530,118 @@
       ! read and analyze the vtk-tree
       call vtuio_tree_read(file//SUFFIX, root)
 
-      obj1 => root%findtag('UnstructuredGrid')
-      if (.not. associated(obj1)) error stop &
+      grid => root%findtag('UnstructuredGrid')
+      if (.not. associated(grid)) error stop &
       & 'vtuio_read - tag "UnstructuredGrid" not found'
 
-      obj2 => obj1%findtag('Piece')
-      if (.not. associated(obj2)) error stop &
+      piece => grid%findtag('Piece')
+      if (.not. associated(piece)) error stop &
       & 'vtuio_read - tag "Piece" not found'
 
       ! get "npoints" and "ncells"
-      ios = -1
-      val = obj2%findval('NumberOfPoints', was_found)
-      if (was_found) read(val,*,iostat=ios) npoints
-      if (ios/=0) error stop 'vtuio_read - could not determine npoints'
-      if (IDEBUG>0) print *, 'npoints=',npoints
-      ios = -1
-      val = obj2%findval('NumberOfCells', was_found)
-      if (was_found) read(val,*,iostat=ios) ncells
-      if (ios/=0) error stop 'vtuio_read - could not determine ncells'
-      if (IDEBUG>0) print *, 'ncells=',ncells
+     !ios = -1
+     !val = piece%findval('NumberOfPoints', was_found)
+     !if (was_found) read(val,*,iostat=ios) npoints
+     !if (ios/=0) error stop 'vtuio_read - could not determine npoints'
+     !if (IDEBUG>0) print *, 'npoints=',npoints
+      npoints = parse_value(piece, 'NumberOfPoints', 'npoints')
+     !ios = -1
+     !val = piece%findval('NumberOfCells', was_found)
+      ncells = parse_value(piece, 'NumberOfCells', 'ncells')
+     !if (was_found) read(val,*,iostat=ios) ncells
+     !if (ios/=0) error stop 'vtuio_read - could not determine ncells'
+     !if (IDEBUG>0) print *, 'ncells=',ncells
 
       ! get offsets for points and connections
-      obj3 => obj2%findtag('Points')
-      if (.not. associated(obj3)) error stop &
+      opoints => piece%findtag('Points')
+      if (.not. associated(opoints)) error stop &
       & 'vtuio_read - tag "Points" not found'
-      ios = -1
-      val = obj3%findval('offset', was_found)
-      if (was_found) read(val,*,iostat=ios) offset_points
-      if (ios/=0) error stop 'vtuio_read - could not determine offset_points'
-      if (IDEBUG>0) print '("offset points ",i0)', offset_points
-      obj3 => obj2%findtag('Cells')
-      if (.not. associated(obj3)) error stop &
+     !ios = -1
+     !val = opoints%findval('offset', was_found)
+      offset_points = parse_value(opoints, 'offset', 'offset_points')
+     !if (was_found) read(val,*,iostat=ios) offset_points
+     !if (ios/=0) error stop 'vtuio_read - could not determine offset_points'
+     !if (IDEBUG>0) print '("offset points ",i0)', offset_points
+      ocells => piece%findtag('Cells')
+      if (.not. associated(ocells)) error stop &
       & 'vtuio_read - tag "Cells" not found'
-      ios = -1
-      val = obj3%findval('Name','connectivity','offset', was_found)
-      if (was_found) read(val,*,iostat=ios) offset_cones
-      if (ios/=0) error stop 'vtuio_read - could not determine offset_cones'
-      if (IDEBUG>0) print '("offset cones ",i0)', offset_cones
-      ios = -1
-      val = obj3%findval('Name','offsets','offset', was_found)
-      if (was_found) read(val,*,iostat=ios) offset_offsets
-      if (ios/=0) error stop 'vtuio_read - could not determine offset_offsets'
-      if (IDEBUG>0) print '("offset offsets ",i0)', offset_offsets
-      ios = -1
-      val = obj3%findval('Name','types','offset', was_found)
-      if (was_found) read(val,*,iostat=ios) offset_types
-      if (ios/=0) error stop 'vtuio_read - could not determine offset_types'
-      if (IDEBUG>0) print '("offset types ",i0)', offset_types
+     !ios = -1
+     !val = ocells%findval('Name','connectivity','offset', was_found)
+      offset_cones = parse_value(ocells, &
+          'Name', 'connectivity', 'offset', 'offset_cones')
+     !if (was_found) read(val,*,iostat=ios) offset_cones
+     !if (ios/=0) error stop 'vtuio_read - could not determine offset_cones'
+     !if (IDEBUG>0) print '("offset cones ",i0)', offset_cones
+     !ios = -1
+     !val = ocells%findval('Name','offsets','offset', was_found)
+      offset_offsets = parse_value(ocells, &
+          'Name', 'offsets', 'offset', 'offset_offsets')
+     !if (was_found) read(val,*,iostat=ios) offset_offsets
+     !if (ios/=0) error stop 'vtuio_read - could not determine offset_offsets'
+     !if (IDEBUG>0) print '("offset offsets ",i0)', offset_offsets
+     !ios = -1
+     !val = ocells%findval('Name','types','offset', was_found)
+      offset_types = parse_value(ocells, &
+          'Name', 'types', 'offset', 'offset_types')
+     !if (was_found) read(val,*,iostat=ios) offset_types
+     !if (ios/=0) error stop 'vtuio_read - could not determine offset_types'
+     !if (IDEBUG>0) print '("offset types ",i0)', offset_types
 
       ! is timevalue present?
-      time_pos = 0
-      val = obj1%findval('Name','TimeValue','format', was_found)
-      if (was_found) then
-        time_pos = obj1%findraw()
-      end if
-      if (IDEBUG>0) print '("time pos ",i0,1x,i0)', time_pos
+      block
+        character(len=:), allocatable :: text
+        logical :: was_found
+        time_pos = 0
+        text = grid%findval('Name','TimeValue','format', was_found)
+        if (was_found) then
+          time_pos = grid%findraw()
+        end if
+#ifdef DEBUG
+        print '("time_pos ",i0,1x,i0)', time_pos
+#endif
+      end block
 
       ! get offsets for point data
       offset_r = -1
       offset_at = -1
-      obj2 => obj1%findtag('PointData')
-      if (associated(obj2)) then
-        ios = -1
-        val = obj2%findval('Name','radius','offset', was_found)
-        if (was_found) read(val,*,iostat=ios) offset_r
-        ios = -1
-        val = obj2%findval('Name','type','offset', was_found)
-        if (was_found) read(val,*,iostat=ios) offset_at
+      point_data => grid%findtag('PointData')
+      if (associated(point_data)) then
+       !ios = -1
+       !val = point_data%findval('Name','radius','offset', was_found)
+        offset_r = parse_value(point_data, &
+           'Name', 'radius', 'offset', 'offset radius')
+       !if (was_found) read(val,*,iostat=ios) offset_r
+       !ios = -1
+       !val = point_data%findval('Name','type','offset', was_found)
+        offset_at = parse_value(point_data, &
+            'Name', 'type', 'offset', 'offset vertex type')
+       !if (was_found) read(val,*,iostat=ios) offset_at
       end if
 
       ! get offsets for cell data
       offset_ct = -1
-      obj2 => obj1%findtag('CellData')
-      if (associated(obj2)) then
-        ios = -1
-        val = obj2%findval('Name','con t','offset', was_found)
-        if (was_found) read(val,*,iostat=ios) offset_ct
+      cell_data => grid%findtag('CellData')
+      if (associated(cell_data)) then
+       !ios = -1
+       !val = cell_data%findval('Name','con t','offset', was_found)
+        offset_ct = parse_value(cell_data, &
+            'Name', 'con t', 'offset', 'offset cell type')
+       !if (was_found) read(val,*,iostat=ios) offset_ct
       end if
-      if (IDEBUG>0) then
-        print '("offset radii ",i0)', offset_r
-        print '("offset atom type ",i0)', offset_at
-        print '("offset cell type ",i0)', offset_ct
-      end if
+#ifdef DEBUG
+      print '("offset radii ",i0)', offset_r
+      print '("offset vertex type ",i0)', offset_at
+      print '("offset cell type ",i0)', offset_ct
+#endif
 
       ! where binary data start?
-      obj1 => root%findtag('AppendedData')
-      if (.not. associated(obj1)) error stop &
+      grid => root%findtag('AppendedData')
+      if (.not. associated(grid)) error stop &
       & 'vtuio_read - tag "AppendedData" not found'
-      data_pos = obj1%findraw()
-      if (IDEBUG>0) print '("data pos ",i0,1x,i0)', data_pos
+      data_pos = grid%findraw()
+#ifdef DEBUG
+      print '("data_pos ",i0,1x,i0)', data_pos
+#endif
 
 
       ! PART TWO
@@ -663,7 +667,9 @@
       ! TODO better validation???
       read(fid, pos=data_pos(1)+1+offset_points) nblock
       associate(item=>int(nblock)/(3*npoints), check=>mod(int(nblock),3*npoints))
-        if (IDEBUG>0) print '("-points = ",i0,1x,i0,1x,i0)', nblock, item, check
+#ifdef DEBUG
+        print '("-points = ",i0,1x,i0,1x,i0)', nblock, item, check
+#endif
         if (check/=0) error stop &
         & 'vtuio_read - validation fails, header size 32/64 mismatch?'
         if (item/=POSITIONS_SIZE) error stop &
@@ -672,7 +678,9 @@
 
       read(fid, pos=data_pos(1)+1+offset_cones) nblock
       associate(item=>int(nblock)/(2*ncells), check=>mod(int(nblock),2*ncells))
-        if (IDEBUG>0) print '("-cones = ",i0,1x,i0,1x,i0)', nblock, item, check
+#ifdef DEBUG
+        print '("-cones = ",i0,1x,i0,1x,i0)', nblock, item, check
+#endif
         if (check/=0) error stop &
         & 'vtuio_read - validation fails, header size 32/64 mismatch?'
         if (item/=CONNECTIONS_SIZE) error stop &
@@ -680,10 +688,14 @@
       end associate
 
       read(fid, pos=data_pos(1)+1+offset_offsets) nblock
-      if (IDEBUG>0) print '("-offsets = ",i0,1x,i0,1x,i0)', nblock, int(nblock)/(ncells), mod(int(nblock),ncells)
+#ifdef DEBUG
+      print '("-offsets = ",i0,1x,i0,1x,i0)', nblock, int(nblock)/(ncells), mod(int(nblock),ncells)
+#endif
 
       read(fid, pos=data_pos(1)+1+offset_types) nblock
-      if (IDEBUG>0) print '("-types = ",i0,1x,i0,1x,i0)', nblock, int(nblock)/(ncells), mod(int(nblock),ncells)
+#ifdef DEBUG
+      print '("-types = ",i0,1x,i0,1x,i0)', nblock, int(nblock)/(ncells), mod(int(nblock),ncells)
+#endif
 
 
       ! PART THREE
@@ -746,13 +758,16 @@
 
       ! PART FIVE
       ! Read time component
-      if (all(time_pos>0)) then
-        if (allocated(val)) deallocate(val)
-        allocate(character(len=time_pos(2)-time_pos(1)) :: val)
-        read(fid, pos=time_pos(1)) val
-        read(val,*,iostat=ios) time0
-        if (ios/=0) error stop 'vtuio_read - error reading time value'
-      end if
+      block
+        character(len=:), allocatable :: val
+        if (all(time_pos>0)) then
+          if (allocated(val)) deallocate(val)
+          allocate(character(len=time_pos(2)-time_pos(1)) :: val)
+          read(fid, pos=time_pos(1)) val
+          read(val,*,iostat=ios) time0
+          if (ios/=0) error stop 'vtuio_read - error reading time value'
+        end if
+      end block
 
       ! THE END
       print '("VTU file read: points=",i0," cells=",i0)', npoints, ncells
@@ -796,8 +811,10 @@
 
       read(fid, pos=pos_start) nblock
       nbytes = int(nblock)/nvals
-      if (IDEBUG>0) print '("read_data - ",i0," blocks, ",i0," bytes")', &
+#ifdef DEBUG
+      print '("read_data - ",i0," blocks, ",i0," bytes")', &
           nblock, nbytes, mod(int(nblock),nvals)
+#endif
       if (mod(int(nblock),nvals)/=0) error stop &
       & 'read_data - validation fails (input data incosistent)'
 
@@ -834,6 +851,46 @@
         end select
       end select
     end subroutine read_data
+
+
+!
+! Parse numerical value from the object
+!
+    function parse_value1(obj, name, msg) result(ivalue)
+      type(object_t), intent(in) :: obj
+      character(len=*), intent(in) :: name, msg
+      integer :: ivalue
+      integer :: ios
+      logical :: was_found
+      character(len=:), allocatable :: text
+
+      ios = -1
+      text = obj%findval(name, was_found)
+      if (was_found) read(text,*,iostat=ios) ivalue
+      if (ios/=0) error stop 'parse_value - could not determine '//msg
+#ifdef DEBUG
+      print '(a," = ",i0)', msg, ivalue
+#endif
+    end function parse_value1
+
+
+    function parse_value2(obj, name1, value1, name2, msg) result(ivalue)
+      type(object_t), intent(in) :: obj
+      character(len=*), intent(in) :: name1, value1, name2, msg
+      integer :: ivalue
+
+      integer :: ios
+      logical :: was_found
+      character(len=:), allocatable :: text
+
+      ios = -1
+      text = obj%findval(name1, value1, name2, was_found)
+      if (was_found) read(text,*,iostat=ios) ivalue
+      if (ios/=0) error stop 'parse_value - could not determine '//msg
+#ifdef DEBUG
+      print '(a," = ",i0)', msg, ivalue
+#endif
+    end function parse_value2
 
 
     subroutine reallocate_real(arr, required_shape)
