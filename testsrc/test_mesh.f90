@@ -8,6 +8,7 @@ program test_mesh
   type(mesh_handle_t), allocatable :: parr(:), carr(:)
   integer :: i
 
+
   call grid%initialize(is_3d=.false.)
 
   allocate(parr(11))
@@ -46,12 +47,18 @@ program test_mesh
   parr(2)= grid3d%add_point([0.0_DP,1.0_DP,0.0_DP])
   parr(3)= grid3d%add_point([1.0_DP,1.0_DP,0.0_DP])
   parr(4)= grid3d%add_point([0.5_DP,0.5_DP,0.9_DP])
+  parr(5)= grid3d%add_point([-0.5_DP,-0.5_DP,-0.5_DP])
 
   allocate(carr(4))
   carr(1) = grid3d%add_cell([parr(1),parr(2),parr(3),parr(4)])
+  carr(1) = grid3d%add_cell([parr(1),parr(2),parr(3),parr(5)])
+  carr(3) = grid3d%add_cell([parr(1),parr(2),parr(4),parr(5)])
   call grid3d%print(output_unit)
   call vtuio_write('mesh3d', grid3d, [0,0,0,0])
 
+  print *, grid%npoints_per_cell(), 'expecting 3'
+  print *, grid3d%npoints_per_cell(), 'expecting 4'
+  print *, grid3d%graph_t%npoints_per_cell(), 'expecting 2'
 
 
 end program

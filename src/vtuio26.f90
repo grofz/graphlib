@@ -247,13 +247,8 @@ end select
       write(fid) '    <DataArray type=', CONNECTIONS_TEXT, &
       & ' Name="connectivity" format="appended" offset="', trim(text1), &
       & '" />', LF
-select type(graph)
-class is (mesh_t)
       offset = offset + HEADERTYPE_SIZE + &
           graph%npoints_per_cell()*ncells*CONNECTIONS_SIZE
-class default
-      offset = offset + HEADERTYPE_SIZE + 2*ncells*CONNECTIONS_SIZE
-end select
       write(text1,'(i0)') offset
       write(fid) '    <DataArray type=', CONNECTIONS_TEXT, &
       & ' Name="offsets" format="appended" offset="', trim(text1), '" />', LF
@@ -346,24 +341,18 @@ end select
       call write_points(fid, graph, mask(MASK_POSITION))
       call write_connectivity(fid, graph)
       write(fid) int(ncells*CONNECTIONS_SIZE, kind=HEADERTYPE_KIND)
-select type (graph)
-class is (mesh_t)
       write(fid) (int(i*graph%npoints_per_cell(), kind=CONNECTIONS_KIND), i=1,ncells)
-class default
-      write(fid) (int(i*2, kind=CONNECTIONS_KIND), i=1,ncells)
-end select
       write(fid) int(ncells*CELLTYPE_SIZE, kind=HEADERTYPE_KIND)
-select type (graph)
-class is (mesh_t)
       select case (graph%npoints_per_cell())
       case(3)
         write(fid) (int(VTK_TRIANGLE, kind=CELLTYPE_KIND), i=1,ncells)
       case(4)
         write(fid) (int(VTK_TETRA, kind=CELLTYPE_KIND), i=1,ncells)
+      case(2)
+        write(fid) (int(VTK_LINE, kind=CELLTYPE_KIND), i=1,ncells)
+      case default
+        error stop 'vtuio_write - npoints_per_cell invalud (internal error'
       end select
-class default
-      write(fid) (int(VTK_LINE, kind=CELLTYPE_KIND), i=1,ncells)
-end select
 
       write(fid) ' ', LF
       write(fid) '</AppendedData>', LF

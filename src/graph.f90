@@ -109,6 +109,7 @@
       procedure :: copy => graph_copy
       procedure :: build_selection_masks => graph_build_selection_masks
       procedure :: print => graph_print
+      procedure :: npoints_per_cell => graph_npoints_per_cell
       procedure, non_overridable :: is_initialized => graph_is_initialized
       procedure, non_overridable :: add_vertex => graph_add_vertex
       procedure, non_overridable :: add_edge   => graph_add_edge
@@ -716,6 +717,12 @@
         error stop 'graph_is_directed - graph not initialized'
       end if
     end function graph_is_directed
+
+
+    pure integer function graph_npoints_per_cell(this) result (n)
+      class(graph_t), intent(in) :: this
+      n = 2
+    end function graph_npoints_per_cell
 
 
     subroutine increase_vertices_capacity(this, new_capacity)
