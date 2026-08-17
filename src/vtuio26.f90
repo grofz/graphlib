@@ -25,6 +25,7 @@
 
   module vtuio_mod
     use graph_mod, only : graph_t, handle_t, edge_t, vertex_t
+    use graph_user_mod, only : VSIZE_RPAR
     use mesh_mod, only : mesh_t, point_t, cell_t
     use vtuio_tree_mod, only : object_t, vtuio_tree_read
     use iso_fortran_env, only : &
@@ -234,29 +235,12 @@ end select
       ! Points/Cells - header
       ! =====================
       write(fid) '  <Points>', LF
-      write(text1,'(i0)') offset
-      write(fid) '    <DataArray type=', POSITIONS_TEXT, &
-      & ' NumberOfComponents="3" format="appended" offset="', trim(text1), &
-      & '" />', LF
-      offset = offset + HEADERTYPE_SIZE + 3*npoints*POSITIONS_SIZE
+      call write_points(fid, graph, npoints, mask(MASK_POSITION), offset)
       write(fid) '  </Points>', LF
 
       ! Cells (connections) - header
       write(fid) '  <Cells>', LF
-      write(text1,'(i0)') offset
-      write(fid) '    <DataArray type=', CONNECTIONS_TEXT, &
-      & ' Name="connectivity" format="appended" offset="', trim(text1), &
-      & '" />', LF
-      offset = offset + HEADERTYPE_SIZE + &
-          graph%npoints_per_cell()*ncells*CONNECTIONS_SIZE
-      write(text1,'(i0)') offset
-      write(fid) '    <DataArray type=', CONNECTIONS_TEXT, &
-      & ' Name="offsets" format="appended" offset="', trim(text1), '" />', LF
-      offset = offset + HEADERTYPE_SIZE + ncells*CONNECTIONS_SIZE
-      write(text1,'(i0)') offset
-      write(fid) '    <DataArray type=', CELLTYPE_TEXT, &
-      & ' Name="types" format="appended" offset="', trim(text1), '" />', LF
-      offset = offset + HEADERTYPE_SIZE + ncells*CELLTYPE_SIZE
+      call write_connectivity(fid, graph, ncells, offset)
       write(fid) '  </Cells>', LF
 
       ! Footer
@@ -338,21 +322,8 @@ end select
         end if
       end if
 
-      call write_points(fid, graph, mask(MASK_POSITION))
-      call write_connectivity(fid, graph)
-      write(fid) int(ncells*CONNECTIONS_SIZE, kind=HEADERTYPE_KIND)
-      write(fid) (int(i*graph%npoints_per_cell(), kind=CONNECTIONS_KIND), i=1,ncells)
-      write(fid) int(ncells*CELLTYPE_SIZE, kind=HEADERTYPE_KIND)
-      select case (graph%npoints_per_cell())
-      case(3)
-        write(fid) (int(VTK_TRIANGLE, kind=CELLTYPE_KIND), i=1,ncells)
-      case(4)
-        write(fid) (int(VTK_TETRA, kind=CELLTYPE_KIND), i=1,ncells)
-      case(2)
-        write(fid) (int(VTK_LINE, kind=CELLTYPE_KIND), i=1,ncells)
-      case default
-        error stop 'vtuio_write - npoints_per_cell invalud (internal error'
-      end select
+      call write_points(fid, graph, npoints, mask(MASK_POSITION))
+      call write_connectivity(fid, graph, ncells)
 
       write(fid) ' ', LF
       write(fid) '</AppendedData>', LF
@@ -364,83 +335,137 @@ end select
     end subroutine vtuio_write
 
 
-    subroutine write_points(fid, graph, positions_id)
-      integer, intent(in) :: fid, positions_id
+    subroutine write_points(fid, graph, npoints, positions_id, offset)
+      integer, intent(in) :: fid, npoints, positions_id
       class(graph_t), intent(in) :: graph
+      integer, intent(inout), optional :: offset
+!
+! To be called twice:
+! - offset present: write XML header
+! - offset not present: write the data
+!
+      integer :: i
+      character(len=MAX_BUFFER_LEN/2) :: text1
 
-      integer :: i, npoints
+      if (present(offset)) then
+        write(text1,'(i0)') offset
+        write(fid) '    <DataArray type=', POSITIONS_TEXT, &
+        & ' NumberOfComponents="3" format="appended" offset="', trim(text1), &
+        & '" />', LF
+        offset = offset + HEADERTYPE_SIZE + 3*npoints*POSITIONS_SIZE
 
-select type (graph)
-class is (mesh_t)
-      npoints = graph%npoints
-class default
-      npoints = graph%nvertices
-end select
+      else
+        write(fid) int(3*npoints*POSITIONS_SIZE, kind=HEADERTYPE_KIND)
 
-      write(fid) int(3*npoints*POSITIONS_SIZE, kind=HEADERTYPE_KIND)
-
-select type (graph)
-class is (mesh_t)
-      do i=1, npoints
-        write(fid) real(graph%points(i)%position, kind=POSITIONS_KIND)
-      end do
-class default
-      do i=1, npoints
-        write(fid) real(graph%vertices(i)%rpar(positions_id:positions_id+2), kind=POSITIONS_KIND)
-      end do
-end select
+        select type (graph)
+        class is (mesh_t)
+          do i=1, npoints
+            write(fid) real(graph%points(i)%position, kind=POSITIONS_KIND)
+          end do
+        class default
+          if (positions_id < 1 .or. positions_id+2 > VSIZE_RPAR) error stop &
+              'vtuio_write - position_id is invalid'
+          do i=1, npoints
+            write(fid) real(graph%vertices(i)%rpar(positions_id:positions_id+2), &
+                kind=POSITIONS_KIND)
+          end do
+        end select
+      end if
     end subroutine write_points
 
 
-    subroutine write_connectivity(fid, graph)
-      integer, intent(in) :: fid
+    subroutine write_connectivity(fid, graph, ncells, offset)
+      integer, intent(in) :: fid, ncells
       class(graph_t), intent(in) :: graph
+      integer, intent(inout), optional :: offset
+!
+! To be called twice:
+! - with offset present - write XML header
+! - without offset - write data
+!
+      integer :: i, n, pids(4), id_ubound
+      character(len=MAX_BUFFER_LEN/2) :: text1
 
-      integer :: i, n, ncells, vids(2), pids(4)
-
-select type (graph)
-class is (mesh_t)
-      ncells = graph%ncells
-      write(fid) int(graph%npoints_per_cell()*ncells*CONNECTIONS_SIZE, &
-          kind=HEADERTYPE_KIND)
-class default
-      ncells = graph%nedges
-      write(fid) int(2*ncells*CONNECTIONS_SIZE, kind=HEADERTYPE_KIND)
-end select
-
-select type (graph)
-class is (mesh_t)
       n = graph%npoints_per_cell()
-      do i=1, ncells
-        pids = graph%cells(i)%point_indices(graph)
-        if (any(pids(1:n)<1) .or. any(pids(1:n)>graph%npoints)) &
-        &    error stop 'write_connectivity - a connection to unknown point'
-        ! for Paraview, index starts at zero (not at one)
-        select case(n)
-        case(3)
-          write(fid) &
-               int(pids(1)-1, kind=CONNECTIONS_KIND), &
-               int(pids(2)-1, kind=CONNECTIONS_KIND), &
-               int(pids(3)-1, kind=CONNECTIONS_KIND)
-        case(4)
-          write(fid) &
-               int(pids(1)-1, kind=CONNECTIONS_KIND), &
-               int(pids(2)-1, kind=CONNECTIONS_KIND), &
-               int(pids(3)-1, kind=CONNECTIONS_KIND), &
-               int(pids(4)-1, kind=CONNECTIONS_KIND)
+
+      if (present(offset)) then
+        ! connectivity
+        write(text1,'(i0)') offset
+        write(fid) '    <DataArray type=', CONNECTIONS_TEXT, &
+        & ' Name="connectivity" format="appended" offset="', trim(text1), &
+        & '" />', LF
+        offset = offset + HEADERTYPE_SIZE + n*ncells*CONNECTIONS_SIZE
+
+        ! offsets
+        write(text1,'(i0)') offset
+        write(fid) '    <DataArray type=', CONNECTIONS_TEXT, &
+        & ' Name="offsets" format="appended" offset="', trim(text1), '" />', LF
+        offset = offset + HEADERTYPE_SIZE + ncells*CONNECTIONS_SIZE
+
+        ! types
+        write(text1,'(i0)') offset
+        write(fid) '    <DataArray type=', CELLTYPE_TEXT, &
+        & ' Name="types" format="appended" offset="', trim(text1), '" />', LF
+        offset = offset + HEADERTYPE_SIZE + ncells*CELLTYPE_SIZE
+
+      else
+        select type(graph)
+        class is (mesh_t)
+          id_ubound = graph%npoints
+        class default
+          id_ubound = graph%nvertices
         end select
-      end do
-class default
-      do i=1, ncells
-        vids = graph%edges(i)%vertex_indices(graph)
-        if (any(vids<1) .or. any(vids>graph%nvertices)) &
-        &    error stop 'write_connectivity - a connection to unknown vertex'
-        ! for Paraview, index starts at zero (not at one)
-        write(fid) &
-             int(vids(1)-1, kind=CONNECTIONS_KIND), &
-             int(vids(2)-1, kind=CONNECTIONS_KIND)
-      end do
-end select
+
+        ! connectivity
+        write(fid) int(n*ncells*CONNECTIONS_SIZE, kind=HEADERTYPE_KIND)
+
+        do i=1, ncells
+          select type (graph)
+          class is (mesh_t)
+            pids = graph%cells(i)%point_indices(graph)
+          class default
+            pids(1:n) = graph%edges(i)%vertex_indices(graph)
+          end select
+          if (any(pids(1:n)<1) .or. any(pids(1:n)>id_ubound)) &
+            &    error stop 'write_connectivity - cell references an unknown vertex/point'
+
+          ! for Paraview, index starts at zero (not at one)
+          select case(n)
+          case(3) ! 2D-mesh (triangles)
+            write(fid) &
+                int(pids(1)-1, kind=CONNECTIONS_KIND), &
+                int(pids(2)-1, kind=CONNECTIONS_KIND), &
+                int(pids(3)-1, kind=CONNECTIONS_KIND)
+          case(4) ! 3D-mesh (tetrahedra)
+            write(fid) &
+                int(pids(1)-1, kind=CONNECTIONS_KIND), &
+                int(pids(2)-1, kind=CONNECTIONS_KIND), &
+                int(pids(3)-1, kind=CONNECTIONS_KIND), &
+                int(pids(4)-1, kind=CONNECTIONS_KIND)
+          case(2) ! vertices/edges (lines)
+            write(fid) &
+                int(pids(1)-1, kind=CONNECTIONS_KIND), &
+                int(pids(2)-1, kind=CONNECTIONS_KIND)
+          case default
+            error stop 'vtuio_write - npoints_per_cell invalid (internal error'
+          end select
+        end do
+
+        ! offsets
+        write(fid) int(ncells*CONNECTIONS_SIZE, kind=HEADERTYPE_KIND)
+        write(fid) (int(i*n, kind=CONNECTIONS_KIND), i=1,ncells)
+
+        ! types
+        write(fid) int(ncells*CELLTYPE_SIZE, kind=HEADERTYPE_KIND)
+        select case (n)
+        case(3)
+          write(fid) (int(VTK_TRIANGLE, kind=CELLTYPE_KIND), i=1,ncells)
+        case(4)
+          write(fid) (int(VTK_TETRA, kind=CELLTYPE_KIND), i=1,ncells)
+        case(2)
+          write(fid) (int(VTK_LINE, kind=CELLTYPE_KIND), i=1,ncells)
+        end select
+      end if
     end subroutine write_connectivity
 
 
@@ -853,7 +878,7 @@ end select
           nblock, nbytes, mod(int(nblock),nvals)
 #endif
       if (mod(int(nblock),nvals)/=0) error stop &
-      & 'read_data - validation fails (input data incosistent)'
+      & 'read_data - validation fails (input data inconsistent)'
 
       select case(ritype)
       case(IS_REAL)
