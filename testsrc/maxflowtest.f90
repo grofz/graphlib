@@ -148,6 +148,7 @@
     end do     ! next algorithm
 
     call utest%summarize
+    if (.not. utest%all_passed()) stop 1
 
   contains
 

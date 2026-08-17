@@ -18,6 +18,7 @@
           assert_equals_dp, &
           assert_equals_integer_arr, assert_equals_integer_4arr
       procedure :: summarize
+      procedure :: all_passed
       final :: utest_finalize
       procedure, private :: assert_equals_integer, assert_equals_logical, &
           assert_equals_dp, &
@@ -278,6 +279,12 @@
       end if
       call add_assertline(this, line)
     end subroutine assert_equals_dp
+
+
+    pure logical function all_passed(this)
+      class(utest_t), intent(in) :: this
+      all_passed =  this % n == this % npass
+    end function all_passed
 
 
     subroutine summarize(this)

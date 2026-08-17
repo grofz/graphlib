@@ -36,6 +36,11 @@
       call test_stack % summarize()
       print '(/,"Queue results")'
       call test_queue % summarize()
+
+      print '(/,"SUMMARY CONTS.F90 TESTS")'
+      print '("  stack_t   passed? ",l2)', test_stack%all_passed()
+      print '("  queue_t   passed? ",l2)', test_queue%all_passed()
+      if (.not. all([test_stack%all_passed(), test_queue%all_passed()])) stop 1
     end subroutine sub
 
   end program main

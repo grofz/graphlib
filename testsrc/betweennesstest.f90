@@ -63,6 +63,7 @@ program betweeness
     print *
   end do
   call utest%summarize()
+  if (.not. utest%all_passed()) stop 1
 
 end program
 

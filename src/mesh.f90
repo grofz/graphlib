@@ -30,12 +30,18 @@ public order_point_indices
     ! Named local constants
     integer, parameter :: DEFAULT_CCAPACITY = 10, DEFAULT_PCAPACITY = 5
 
+    ! Used for a 2D-grid only to define the positive orientation points order,
+    ! all points should lie bellow the reference point.
+    real(dp), parameter :: &
+        ORIENTATION_2D_REFPOINT(3) = real([0.0, 0.0, 10.0], dp)
+
     ! type=1 for vertices and type=2 for edges in "src/graph.f90"
     integer(I1B), parameter :: POINT_HANDLE_TYPE = 3_I1B, &
         CELL_HANDLE_TYPE = 4_I1B, INVALID_HANDLE_TYPE= 0_I1B
 
 
-    ! Points and cells use "mesh_handle_t"
+    ! Points and cells use "mesh_handle_t". This is just to have distinct
+    ! type, no additional components are needed.
     type, extends(graph_handle_t), public :: mesh_handle_t
     contains
       procedure :: get_index_to_map => mhandle_get_index_to_map
@@ -320,6 +326,12 @@ public order_point_indices
         error stop 'mesh_add_point - not initialized'
       end if
 
+      ! For a 2-D mesh, reject positions above the reference point
+      if (.not. this%is_3d) then
+        if (position(3) >= ORIENTATION_2D_REFPOINT(3)) error stop &
+            'mesh_add_point - expecting z-coordinate bellow reference point'
+      end if
+
       call borrow_mesh_handle(this, POINT_HANDLE_TYPE, handle)
       this%npoints = this%npoints + 1
       associate (new_point => this%points(this%npoints))
@@ -533,9 +545,9 @@ print '("Cell added. Handle is ",i0)', handle%get_index_to_map(this)
 ! Order points for positive orientation.
 ! 
       real(dp), parameter :: eps = 10 * epsilon(1.0_dp)
-      real(dp), parameter :: p_ref(3) = real([0.0, 0.0, 10.0], dp)
+      real(dp), parameter :: p_ref(3) = ORIENTATION_2D_REFPOINT
       real(dp) :: d, tol
-      integer :: n, i, itmp
+      integer :: n, itmp
       type(mesh_handle_t) :: points0(4), ptmp
 
       n = this%npoints_per_cell()
@@ -543,14 +555,18 @@ print '("Cell added. Handle is ",i0)', handle%get_index_to_map(this)
       ! The first two positions will be points with the lowest index_to_map.
       points0 = points
       associate (loc=>minloc(points0(1:n)%get_index_to_map(), dim=1))
-        ptmp = points0(1)
-        points0(1) = points0(loc)
-        points0(loc) = ptmp
+        if (loc /= 1) then
+          ptmp = points0(1)
+          points0(1) = points0(loc)
+          points0(loc) = ptmp
+        end if
       end associate
       associate (loc=>minloc(points0(2:n)%get_index_to_map(), dim=1))
-        ptmp = points0(2)
-        points0(2) = points0(loc)
-        points0(loc) = ptmp
+        if (loc /= 1) then
+          ptmp = points0(2)
+          points0(2) = points0(loc+1)
+          points0(loc+1) = ptmp
+        end if
       end associate
 
       ! Point indices in the actual mesh
