@@ -21,6 +21,7 @@
     use graph_mod, only : graph_t, graph_handle_t=>handle_t, MAP_NULL, &
         NOT_INITIALIZED
     use graph_adjlist_mod, only : adjlist_t, iterator_t
+    use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR
     use conts_mod, only : queue_t, stack_t, INTEGER_MOLD
     implicit none (type, external)
     private
@@ -53,9 +54,13 @@ public order_point_indices
       real(dp) :: position(3) = 0.0_dp
     end type point_t
 
-    type :: cell_t
+    type, public :: cell_t
       type(mesh_handle_t) :: points(4)
+        ! ordered array of point handles
       type(mesh_handle_t) :: ngbcells(4)
+        ! array of cell handles to neighbouring cells
+      type(graph_handle_t) :: dual_vertex
+        ! handle to vertex in graph_t parent object
       type(mesh_handle_t) :: handle
     contains
       procedure :: point_indices => cell_point_indices
@@ -78,7 +83,7 @@ public order_point_indices
 ! TODO - override these or make them non-overridable in graph_t
      !procedure :: copy
      !procedure :: build_selection_masks
-     !procedure :: print
+      procedure :: print => mesh_print
       procedure, non_overridable :: find_cell_id => mesh_find_cell_id
       procedure, non_overridable :: add_point => mesh_add_point
       procedure, non_overridable :: add_cell => mesh_add_cell
@@ -349,7 +354,7 @@ print '("Point added. Handle is ",i0)', handle%get_index_to_map(this)
       type(mesh_handle_t), intent(in) :: point_handles(4)
       type(mesh_handle_t) :: handle
 !
-! Add mesh cell
+! Add mesh cell. Also add a dual vertex and edges between neighbouring vertices.
 !
       integer :: n, i, j, pids(4), ngb_pids(4)
       integer, allocatable :: found_cids(:)
@@ -367,7 +372,7 @@ print '("Point added. Handle is ",i0)', handle%get_index_to_map(this)
         integer :: pids0(4)
         logical :: unique
         pids0(1:n) = point_handles(1:n)%get_index_to_map(this)
-        if (any(pids(1:n)==MAP_NULL)) &
+        if (any(pids0(1:n)==MAP_NULL)) &
             error stop 'mesh_add_cell - a point not present (invalid handle)'
         unique = .true. ! innocent until found guilty
         do i = 1, n-1
@@ -377,7 +382,7 @@ print '("Point added. Handle is ",i0)', handle%get_index_to_map(this)
         end do
         if (.not. unique) error stop 'mesh_add_cell - all points must be unique'
       end block
-      
+
       ! Order points
       pids = order_point_indices(this, point_handles)
 
@@ -438,13 +443,30 @@ print '("Point ",i0," - across is cell ",i0)', new_cell%points(i)%get_index_to_m
           deallocate(found_cids)
         end do
 
-        ! make sure handles at unused position are set to null in 2D-meshes
+        ! Make sure handles at unused position are set to null in 2D-meshes
         if (.not. this%is_3d) then
           new_cell%points(4)%graph_handle_t = &
               graph_handle_t(id=MAP_NULL, type=POINT_HANDLE_TYPE, version=1)
           new_cell%ngbcells(4)%graph_handle_t = &
               graph_handle_t(id=MAP_NULL, type=CELL_HANDLE_TYPE, version=1)
         end if
+
+        ! Add a dual vertex and, if appropriate, also edges representing
+        ! connection between neighboring cells
+        block
+          type(graph_handle_t) :: edge
+          integer :: ngb_id, v_ipar(VSIZE_IPAR), e_ipar(ESIZE_IPAR)
+          real(dp) :: v_rpar(VSIZE_RPAR), e_rpar(ESIZE_RPAR)
+
+          new_cell%dual_vertex = this%add_vertex(v_ipar, v_rpar)
+          do i=1, n
+            ngb_id = new_cell%ngbcells(i)%get_index_to_map(this)
+            if (ngb_id==MAP_NULL) cycle
+            edge = this%add_edge(new_cell%dual_vertex, &
+                this%cells(ngb_id)%dual_vertex, e_ipar, e_rpar)
+          end do
+        end block
+
       end associate
       this%cmap(handle%get_index_to_map()) = this%ncells
 
@@ -453,7 +475,78 @@ print '("Point ",i0," - across is cell ",i0)', new_cell%points(i)%get_index_to_m
         call this%points(pids(i))%depending_cells%add(this%ncells)
       end do
 print '("Cell added. Handle is ",i0)', handle%get_index_to_map(this)
+
     end function mesh_add_cell
+
+
+    subroutine mesh_print(this, fid)
+      class(mesh_t), intent(in) :: this
+      integer, intent(in) :: fid
+!
+! Print all mesh data for debugging
+!
+      character(len=:), allocatable :: text_meshdim
+      integer :: i, j, cid
+      type(iterator_t) :: iterator
+
+      if (.not. this%is_initialized()) then
+        write(fid,'("Mesh not initialized (WARNING)")')
+        return
+      end if
+
+      if (this%is_3d) then
+        text_meshdim = '3D mesh'
+      else
+        text_meshdim = '2D mesh'
+      end if
+      write(fid,'("--- mesh dump ---")')
+      write(fid, '(a," with ",i0," points and ",i0," cells")') &
+          text_meshdim, this%npoints, this%ncells
+
+      ! information about points
+      do i=1, this%npoints
+        write(fid, '("P-",i0," position",3(1x,g0))') &
+          this%points(i)%handle%get_index_to_map(), this%points(i)%position
+      end do
+      write(fid, *)
+      do i=1, this%npoints
+        write(fid, '("P-",i0," incident cells")',advance='no') &
+            this%points(i)%handle%get_index_to_map()
+        iterator = iterator_t()
+        do while (this%points(i)%depending_cells%has_next(iterator))
+          call this%points(i)%depending_cells%next(iterator, cid)
+          write(fid, '(1x,i0)', advance='no') &
+            this%cells(cid)%handle%get_index_to_map()
+        end do
+        write(fid,*)
+      end do
+
+      ! information about cells
+      do i=1, this%ncells
+        write(fid,'(/,"C-",i0,/,"--from")',advance='no') &
+          this%cells(i)%handle%get_index_to_map()
+        do j=1, this%npoints_per_cell()
+          write(fid,'(1x,"P-",i0)',advance='no') &
+            this%cells(i)%points(j)%get_index_to_map()
+        end do
+        write(fid,'(/,"--connected with cells")',advance='no')
+        do j=1, this%npoints_per_cell()
+          write(fid,'(1x,i0)',advance='no') &
+            this%cells(i)%ngbcells(j)%get_index_to_map()
+        end do
+        write(fid,'(/,"--dual with V-",i0)') &
+          this%cells(i)%dual_vertex%get_index_to_map()
+      end do
+
+      call this%graph_t%print(fid)
+      write(fid,'("--- end of mesh dump ---",/)')
+
+    end subroutine mesh_print
+
+
+    ! ---------------------
+    ! Mesh helper functions
+    ! ---------------------
 
 
 !TODO when pure stack%pop is ready, make this function pure

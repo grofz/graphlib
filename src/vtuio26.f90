@@ -25,6 +25,7 @@
 
   module vtuio_mod
     use graph_mod, only : graph_t, handle_t, edge_t, vertex_t
+    use mesh_mod, only : mesh_t, point_t, cell_t
     use vtuio_tree_mod, only : object_t, vtuio_tree_read
     use iso_fortran_env, only : &
     &   SP=>real32, DP=>real64, I4B=>int32, I8B=>int64, I1B=>int8, &
@@ -105,7 +106,7 @@
 ! TYPE OF CELLS (all cells are VTK_LINE "3")
     integer, parameter :: CELLTYPE_KIND=I1B, CELLTYPE_SIZE=1
     character(len=*), parameter :: CELLTYPE_TEXT='"UInt8"'
-    integer, parameter :: VTK_LINE = 3
+    integer, parameter :: VTK_LINE = 3, VTK_TRIANGLE = 5, VTK_TETRA = 10
 ! -----------------------------------------------------------------------------
 
     integer, parameter :: MAX_BUFFER_LEN=400
@@ -128,7 +129,7 @@
       !* Write Unstructured Grid - vertices and edges
       character(len=*), intent(in) :: file
         !! file name without .vtu suffix
-      type(graph_t), intent(in) :: graph
+      class(graph_t), intent(in) :: graph
         !! contains vertices a.k.a. points and edges a.k.a. cells
       integer, intent(in) :: mask(4)
         !! mask(1) - index pointing to "radius" in "vertex%rpar" array
@@ -147,8 +148,16 @@
       if (.not. graph%is_initialized()) error stop &
           'vtuio_write - graph is not initialized'
 
-      npoints = graph%nvertices
-      ncells = graph%nedges
+      select type(graph)
+      class is (mesh_t)
+        npoints = graph%npoints
+        ncells = graph%ncells
+        if (graph%ncells /= graph%nvertices) error stop &
+            'vtuio_write - npoints == nvertices required'
+      class default
+        npoints = graph%nvertices
+        ncells = graph%nedges
+      end select
 
       offset = 0
       open(newunit=fid, file=trim(file)//SUFFIX, status='replace', &
@@ -170,11 +179,15 @@
       ! ===========================
       write(fid) '  <PointData>', LF
 
+select type (graph)
+class is (mesh_t)
+class default
       allocate(rdata(1,npoints))
       call write_data(fid, RADIUS_DATA_SIZE, 'radius', rdata=rdata, offset=offset)
 
       allocate(idata(1,npoints))
       call write_data(fid, 1, 'type', idata=idata, offset=offset)
+end select
 
       if (present(vtudata)) then
         if (allocated(vtudata%meta)) then
@@ -234,7 +247,13 @@
       write(fid) '    <DataArray type=', CONNECTIONS_TEXT, &
       & ' Name="connectivity" format="appended" offset="', trim(text1), &
       & '" />', LF
+select type(graph)
+class is (mesh_t)
+      offset = offset + HEADERTYPE_SIZE + &
+          graph%npoints_per_cell()*ncells*CONNECTIONS_SIZE
+class default
       offset = offset + HEADERTYPE_SIZE + 2*ncells*CONNECTIONS_SIZE
+end select
       write(text1,'(i0)') offset
       write(fid) '    <DataArray type=', CONNECTIONS_TEXT, &
       & ' Name="offsets" format="appended" offset="', trim(text1), '" />', LF
@@ -254,6 +273,9 @@
       ! ===========
       ! Binary data
       ! ===========
+select type (graph)
+class is (mesh_t)
+class default
       call reallocate(rdata, [1, npoints])
       rdata(1,:) = graph%vertices(1:npoints)%rpar(mask(MASK_RADIUS))
       call write_data(fid, RADIUS_DATA_SIZE, 'r', rdata=rdata)
@@ -261,6 +283,7 @@
       call reallocate(idata, [1, npoints])
       idata(1,:) = graph%vertices(1:npoints)%ipar(mask(MASK_POINT_TYPE))
       call write_data(fid, 1, 'tp', idata=idata)
+end select
 
       if (present(vtudata)) then
         if (allocated(vtudata%meta)) then
@@ -288,8 +311,14 @@
 !     call write_data(fid, 4, 'v', &
 !         rdata=transpose(reshape([atoms(:)%v(1),atoms(:)%v(2),atoms(:)%v(3)],[npoints,3])))
 
+
       call reallocate(idata, [1, ncells])
+select type(graph)
+class is (mesh_t)
+      idata(1,:) = [integer :: (i, i=1,ncells)]
+class default
       idata(1,:) = graph%edges(1:ncells)%ipar(mask(MASK_CELL_TYPE))
+end select
       call write_data(fid, 1, 'con t', idata=idata)
 
       if (present(vtudata)) then
@@ -317,9 +346,24 @@
       call write_points(fid, graph, mask(MASK_POSITION))
       call write_connectivity(fid, graph)
       write(fid) int(ncells*CONNECTIONS_SIZE, kind=HEADERTYPE_KIND)
+select type (graph)
+class is (mesh_t)
+      write(fid) (int(i*graph%npoints_per_cell(), kind=CONNECTIONS_KIND), i=1,ncells)
+class default
       write(fid) (int(i*2, kind=CONNECTIONS_KIND), i=1,ncells)
+end select
       write(fid) int(ncells*CELLTYPE_SIZE, kind=HEADERTYPE_KIND)
+select type (graph)
+class is (mesh_t)
+      select case (graph%npoints_per_cell())
+      case(3)
+        write(fid) (int(VTK_TRIANGLE, kind=CELLTYPE_KIND), i=1,ncells)
+      case(4)
+        write(fid) (int(VTK_TETRA, kind=CELLTYPE_KIND), i=1,ncells)
+      end select
+class default
       write(fid) (int(VTK_LINE, kind=CELLTYPE_KIND), i=1,ncells)
+end select
 
       write(fid) ' ', LF
       write(fid) '</AppendedData>', LF
@@ -333,39 +377,81 @@
 
     subroutine write_points(fid, graph, positions_id)
       integer, intent(in) :: fid, positions_id
-      type(graph_t), intent(in) :: graph
+      class(graph_t), intent(in) :: graph
 
       integer :: i, npoints
 
+select type (graph)
+class is (mesh_t)
+      npoints = graph%npoints
+class default
       npoints = graph%nvertices
+end select
 
       write(fid) int(3*npoints*POSITIONS_SIZE, kind=HEADERTYPE_KIND)
 
+select type (graph)
+class is (mesh_t)
+      do i=1, npoints
+        write(fid) real(graph%points(i)%position, kind=POSITIONS_KIND)
+      end do
+class default
       do i=1, npoints
         write(fid) real(graph%vertices(i)%rpar(positions_id:positions_id+2), kind=POSITIONS_KIND)
       end do
+end select
     end subroutine write_points
 
 
     subroutine write_connectivity(fid, graph)
       integer, intent(in) :: fid
-      type(graph_t), intent(in) :: graph
+      class(graph_t), intent(in) :: graph
 
-      integer :: i, ncells, vids(2)
+      integer :: i, n, ncells, vids(2), pids(4)
 
+select type (graph)
+class is (mesh_t)
+      ncells = graph%ncells
+      write(fid) int(graph%npoints_per_cell()*ncells*CONNECTIONS_SIZE, &
+          kind=HEADERTYPE_KIND)
+class default
       ncells = graph%nedges
-
       write(fid) int(2*ncells*CONNECTIONS_SIZE, kind=HEADERTYPE_KIND)
+end select
 
+select type (graph)
+class is (mesh_t)
+      n = graph%npoints_per_cell()
+      do i=1, ncells
+        pids = graph%cells(i)%point_indices(graph)
+        if (any(pids(1:n)<1) .or. any(pids(1:n)>graph%npoints)) &
+        &    error stop 'write_connectivity - a connection to unknown point'
+        ! for Paraview, index starts at zero (not at one)
+        select case(n)
+        case(3)
+          write(fid) &
+               int(pids(1)-1, kind=CONNECTIONS_KIND), &
+               int(pids(2)-1, kind=CONNECTIONS_KIND), &
+               int(pids(3)-1, kind=CONNECTIONS_KIND)
+        case(4)
+          write(fid) &
+               int(pids(1)-1, kind=CONNECTIONS_KIND), &
+               int(pids(2)-1, kind=CONNECTIONS_KIND), &
+               int(pids(3)-1, kind=CONNECTIONS_KIND), &
+               int(pids(4)-1, kind=CONNECTIONS_KIND)
+        end select
+      end do
+class default
       do i=1, ncells
         vids = graph%edges(i)%vertex_indices(graph)
         if (any(vids<1) .or. any(vids>graph%nvertices)) &
-        &    error stop 'write_connectivity - a connection to unknown atom'
+        &    error stop 'write_connectivity - a connection to unknown vertex'
         ! for Paraview, index starts at zero (not at one)
         write(fid) &
              int(vids(1)-1, kind=CONNECTIONS_KIND), &
              int(vids(2)-1, kind=CONNECTIONS_KIND)
       end do
+end select
     end subroutine write_connectivity
 
 
