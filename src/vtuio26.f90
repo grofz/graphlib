@@ -190,6 +190,11 @@ integer, parameter :: MASK_RADIUS=1, MASK_POSITION=2, MASK_POINT_TYPE=3, MASK_CE
         ncells = graph%ncells
         if (graph%ncells /= graph%nvertices) error stop &
             'vtuio_write - npoints == nvertices required'
+        ! TODO (implementation progress note)
+        ! Required at this moment.
+        ! In future version also the presence of "non-mesh" vertices
+        ! will be supported (e.g. ghost cells). 
+        ! The requirement will be graph%ncells <= graph%nvertices
       class default
         npoints = graph%nvertices
         ncells = graph%nedges
@@ -227,6 +232,7 @@ subroutine vtuio_write2(file, graph, mask, time, vtudata)
   end if
 end subroutine
 
+!TODO to be renamed to vtuio_write
     subroutine vtuio_write1(file, graph, position_id, time, vtudata)
       !* Write Unstructured Grid - vertices and edges
       character(len=*), intent(in) :: file
@@ -241,9 +247,7 @@ end subroutine
 ! TODO Documentation Block
 !
       character(len=MAX_BUFFER_LEN/2) :: text1, text2
-      integer :: npoints, ncells, i, j, fid, offset
-      real(DP), allocatable :: rdata(:,:)
-      integer, allocatable :: idata(:,:)
+      integer :: npoints, ncells, fid, offset
 
       if (.not. graph%is_initialized()) error stop &
           'vtuio_write - graph is not initialized'
@@ -319,9 +323,10 @@ end subroutine
       class(graph_t), intent(in) :: graph
       integer, intent(inout), optional :: offset
 !
-! To be called twice:
-! - offset present: write XML header
-! - offset not present: write the data
+! Called twice:
+!   1. with offset present: write XML header and update offset
+!   2. witout offset: write binary data 
+! Calls must be co-ordinated with calls to write_data and write_connectivity.
 !
       integer :: i
       character(len=MAX_BUFFER_LEN/2) :: text1
@@ -360,9 +365,10 @@ end subroutine
       class(graph_t), intent(in) :: graph
       integer, intent(inout), optional :: offset
 !
-! To be called twice:
-! - with offset present - write XML header
-! - without offset - write data
+! Called twice:
+!   1. with offset present: write XML header and update offset
+!   2. witout offset: write binary data 
+! The calls must be co-ordinated with calls to write_data and write_points.
 !
       integer :: i, n, pids(4), id_ubound
       character(len=MAX_BUFFER_LEN/2) :: text1
@@ -370,6 +376,7 @@ end subroutine
       n = graph%npoints_per_cell()
 
       if (present(offset)) then
+        ! Write XML header
         ! connectivity
         write(text1,'(i0)') offset
         write(fid) '    <DataArray type=', CONNECTIONS_TEXT, &
@@ -390,6 +397,7 @@ end subroutine
         offset = offset + HEADERTYPE_SIZE + ncells*CELLTYPE_SIZE
 
       else
+        ! Write binary data
         select type(graph)
         class is (mesh_t)
           id_ubound = graph%npoints
@@ -432,11 +440,11 @@ end subroutine
           end select
         end do
 
-        ! offsets
+        ! offsets (all cells consist of the same number of points)
         write(fid) int(ncells*CONNECTIONS_SIZE, kind=HEADERTYPE_KIND)
         write(fid) (int(i*n, kind=CONNECTIONS_KIND), i=1,ncells)
 
-        ! types
+        ! types (all cells are of the same type)
         write(fid) int(ncells*CELLTYPE_SIZE, kind=HEADERTYPE_KIND)
         select case (n)
         case(3)
@@ -458,38 +466,42 @@ end subroutine
       integer, intent(in), optional :: idata(:,:)
       integer, intent(inout), optional :: offset
 !
-! This subroutine must be called twice with same arguments and in a correct
-! order. In first run (with offset present), the header is written. In second
-! run, called within "AppendedData" section, data is written.
+! Called twice for each DataArray:
+!   1. with offset present: write XML header and update offset
+!   2. witout offset: write binary data 
+! The calls must occur in exactly same order and co-ordinated with calls
+! to write_connectivity and write_points.
 !
 ! Array "rdata" or "idata" must be present (not both)
 ! - dimension 1 is component (scalars or vectors)
 ! - dimension 2 is point / connection
 ! If "offset" is present then write the header, otherwise write data
 !
-      integer :: ritype ! IS_REAL or IS_INT
+      integer :: real_or_int ! IS_REAL or IS_INT
       integer :: data_kind, data_size, ncomps, n
       character(len=10) :: data_text
       character(len=MAX_BUFFER_LEN/2) :: text1, text2
 
       if (present(rdata) .and. .not. present(idata)) then
-        ritype = META_IS_REAL
+        real_or_int = META_IS_REAL
       else if (.not. present(rdata) .and. present(idata)) then
-        ritype = META_IS_INT
+        real_or_int = META_IS_INT
       else
         error stop 'write_data - rdata/idata must be present, but not both'
       end if
 
-      call data_descriptors(nbytes, ritype, data_kind, data_text)
+      call data_descriptors(nbytes, real_or_int, data_kind, data_text)
       data_size = nbytes
 
-      select case(ritype)
+      select case(real_or_int)
       case(META_IS_REAL)
         ncomps = size(rdata, dim=1)
         n = size(rdata, dim=2)
       case(META_IS_INT)
         ncomps = size(idata, dim=1)
         n = size(idata, dim=2)
+      case default
+        error stop 'write_data - internal error'
       end select
 
       if (present(offset)) then
@@ -504,7 +516,7 @@ end subroutine
       else
         ! Write Data
         write(fid) int(n*data_size*ncomps, kind=HEADERTYPE_KIND)
-        select case(ritype)
+        select case(real_or_int)
         case(META_IS_REAL)
           select case(data_kind) ! real(...) kind must be known at compile time
           case(SP)
@@ -538,11 +550,11 @@ end subroutine
       integer, intent(inout), optional :: offset
 !
 ! Copy data to rdata/idata arrays and call write_data
-! Must be called pairwise - see write_data for details
+! Must be called twice - see write_data for details
 !
       integer, allocatable :: idata(:,:)
       real(dp), allocatable :: rdata(:,:)
-      integer :: nitems, i, j, choice_data
+      integer :: nitems, i, j, choice_import
 
       block
         integer :: npoints, ncells
@@ -556,34 +568,32 @@ end subroutine
             return
           class default
             ! data marked as point data exported from vertices to point data section
-            choice_data = META_IS_POINT
+            choice_import = META_IS_POINT
           end select
         case(META_IS_CELL)
           nitems = ncells
           select type(graph)
           class is (mesh_t)
-            ! data marked as point data exported from vertices to cell data section
-            choice_data = META_IS_POINT
-            return
+            ! data marked as point data imported from vertices to cell data section
+            choice_import = META_IS_POINT
           class default
-            ! data marked as cell data exported from edges to cell data section
-            choice_data = META_IS_CELL
+            ! data marked as cell data imported from edges to cell data section
+            choice_import = META_IS_CELL
           end select
         case default
           error stop 'extract and write data - invalid data_export'
         end select
       end block
-
       if (present(vtudata)) then
         if (allocated(vtudata%meta)) then
           do i=1,size(vtudata%meta)
             associate(m=>vtudata%meta(i))
-              if (m%iclass==choice_data+META_IS_REAL) then
+              if (m%iclass==choice_import+META_IS_REAL) then
                 ! real data exported within current context
                 call reallocate(rdata, [m%ncomp, nitems])
 
                 if (.not. present(offset)) then
-                  select case(choice_data)
+                  select case(choice_import)
                   case(META_IS_POINT)
                     do j=1,nitems
                       rdata(:,j) = graph%vertices(j)%rpar(m%start:m%start+m%ncomp-1)
@@ -596,12 +606,12 @@ end subroutine
                 end if
                 call write_data(fid, m%nbytes, trim(m%label), rdata=rdata, offset=offset)
 
-              else if (m%iclass==choice_data+META_IS_INT) then
+              else if (m%iclass==choice_import+META_IS_INT) then
                 ! integer data exported within current context
                 call reallocate(idata, [m%ncomp, nitems])
 
                 if (.not. present(offset)) then
-                  select case(choice_data)
+                  select case(choice_import)
                   case(META_IS_POINT)
                     do j=1,nitems
                       idata(:,j) = graph%vertices(j)%ipar(m%start:m%start+m%ncomp-1)
@@ -665,7 +675,8 @@ end subroutine
       real(POSITIONS_KIND) :: xloc(3)
       real(DP), allocatable :: rdata(:)
       type(object_t), target :: root
-      type(object_t), pointer :: grid, piece, opoints, ocells, point_data, cell_data
+      type(object_t), pointer :: grid, piece, opoints, ocells, point_data, &
+          cell_data, data_root
       character(len=1) :: ch
       type(handle_t), allocatable :: points(:)
       type(handle_t) :: cone
@@ -678,11 +689,11 @@ end subroutine
 
       grid => root%findtag('UnstructuredGrid')
       if (.not. associated(grid)) error stop &
-      & 'vtuio_read - tag "UnstructuredGrid" not found'
+          'vtuio_read - tag "UnstructuredGrid" not found'
 
       piece => grid%findtag('Piece')
       if (.not. associated(piece)) error stop &
-      & 'vtuio_read - tag "Piece" not found'
+          'vtuio_read - tag "Piece" not found'
 
       ! get "npoints" and "ncells"
       npoints = parse_value(piece, 'NumberOfPoints', 'npoints')
@@ -691,12 +702,12 @@ end subroutine
       ! get offsets for points and connections
       opoints => piece%findtag('Points')
       if (.not. associated(opoints)) error stop &
-      & 'vtuio_read - tag "Points" not found'
+          'vtuio_read - tag "Points" not found'
       offset_points = parse_value(opoints, 'offset', 'offset_points')
 
       ocells => piece%findtag('Cells')
       if (.not. associated(ocells)) error stop &
-      & 'vtuio_read - tag "Cells" not found'
+          'vtuio_read - tag "Cells" not found'
       offset_cones = parse_value(ocells, &
           'Name', 'connectivity', 'offset', 'offset_cones')
       offset_offsets = parse_value(ocells, &
@@ -743,10 +754,10 @@ end subroutine
 #endif
 
       ! where binary data start?
-      grid => root%findtag('AppendedData')
+      data_root => root%findtag('AppendedData')
       if (.not. associated(grid)) error stop &
       & 'vtuio_read - tag "AppendedData" not found'
-      data_pos = grid%findraw()
+      data_pos = data_root%findraw()
 #ifdef DEBUG
       print '("data_pos ",i0,1x,i0)', data_pos
 #endif
@@ -779,9 +790,9 @@ end subroutine
         print '("-points = ",i0,1x,i0,1x,i0)', nblock, item, check
 #endif
         if (check/=0) error stop &
-        & 'vtuio_read - validation fails, header size 32/64 mismatch?'
+            'vtuio_read - validation fails, header size 32/64 mismatch?'
         if (item/=POSITIONS_SIZE) error stop &
-        & 'vtuio_read - validation fails, position kind mismatch'
+            'vtuio_read - validation fails, position kind mismatch'
       end associate
 
       read(fid, pos=data_pos(1)+1+offset_cones) nblock
@@ -790,9 +801,9 @@ end subroutine
         print '("-cones = ",i0,1x,i0,1x,i0)', nblock, item, check
 #endif
         if (check/=0) error stop &
-        & 'vtuio_read - validation fails, header size 32/64 mismatch?'
+            'vtuio_read - validation fails, header size 32/64 mismatch?'
         if (item/=CONNECTIONS_SIZE) error stop &
-        & 'vtuio_read - validation fails, connections kind mismatch'
+            'vtuio_read - validation fails, connections kind mismatch'
       end associate
 
       read(fid, pos=data_pos(1)+1+offset_offsets) nblock
@@ -1060,6 +1071,8 @@ end subroutine
           ubound = VSIZE_IPAR
         case(META_IS_INT + META_IS_CELL)
           ubound = ESIZE_IPAR
+        case default
+          error stop 'meta_add_item - internal error'
         end select
         if (start < 1 .or. start+ncomp-1 > ubound) error stop &
             'meta_add_item - start / iclass combination out of bounds'

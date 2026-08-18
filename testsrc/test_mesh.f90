@@ -1,15 +1,18 @@
 program test_mesh
   use iso_fortran_env, only : dp=>real64, output_unit
   use mesh_mod, only : mesh_t, mesh_handle_t
-  use vtuio_mod, only : vtuio_write
+  use vtuio_mod, only : vtuio_write, vtuio_data_t
+  use map_mod, only : VPOS_TYPE
   implicit none (type, external)
 
+  type(vtuio_data_t) :: vtuio
   type(mesh_t) :: grid, grid3d
   type(mesh_handle_t), allocatable :: parr(:), carr(:)
   integer :: i
 
 
   call grid%initialize(is_3d=.false.)
+  call vtuio%add_item('type', VPOS_TYPE, 0, 1, 4)
 
   allocate(parr(11))
   parr(1) =grid%add_point(real([1.0, 0.0, 0.0],dp))
@@ -36,9 +39,11 @@ program test_mesh
   carr(9)=grid%add_cell([parr(10),parr(11),parr(7), parr(1)])
   carr(10)=grid%add_cell([parr(4),parr(11),parr(7), parr(1)])
 
+  do i=1, grid%nvertices
+    grid%vertices(i)%ipar(VPOS_TYPE) = i
+  end do
   call grid%print(output_unit)
-
-  call vtuio_write('mesh', grid, [0,0,0,0])
+  call vtuio_write('mesh', grid, vtudata=vtuio)
 
   deallocate(parr, carr)
   call grid3d%initialize(is_3d=.true.)
@@ -53,12 +58,9 @@ program test_mesh
   carr(1) = grid3d%add_cell([parr(1),parr(2),parr(3),parr(4)])
   carr(1) = grid3d%add_cell([parr(1),parr(2),parr(3),parr(5)])
   carr(3) = grid3d%add_cell([parr(1),parr(2),parr(4),parr(5)])
+  do i=1, grid%nvertices
+    grid3d%vertices(i)%ipar(VPOS_TYPE) = i
+  end do
   call grid3d%print(output_unit)
-  call vtuio_write('mesh3d', grid3d, [0,0,0,0])
-
-  print *, grid%npoints_per_cell(), 'expecting 3'
-  print *, grid3d%npoints_per_cell(), 'expecting 4'
-  print *, grid3d%graph_t%npoints_per_cell(), 'expecting 2'
-
-
+  call vtuio_write('mesh3d', grid3d, vtudata=vtuio)
 end program
