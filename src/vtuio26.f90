@@ -25,7 +25,7 @@
 
   module vtuio_mod
     use graph_mod, only : graph_t, handle_t, edge_t, vertex_t
-    use graph_user_mod, only : VSIZE_RPAR
+    use graph_user_mod, only : VSIZE_RPAR, VSIZE_IPAR, ESIZE_RPAR, ESIZE_IPAR
     use mesh_mod, only : mesh_t, point_t, cell_t
     use vtuio_tree_mod, only : object_t, vtuio_tree_read
     use iso_fortran_env, only : &
@@ -53,8 +53,10 @@
         !  -----------------------------
     end type vtuio_meta_t
 
-    integer(I1B), parameter, public :: VTUIO_META_I=0, VTUIO_META_R=2,&
-        VTUIO_META_POINT=0, VTUIO_META_CELL=1
+    integer(I1B), parameter, public :: &
+        META_IS_INT   = 0, META_IS_REAL  = 2, & ! 00_binary or 10_binary
+        META_IS_POINT = 0, META_IS_CELL  = 1    ! 00_binary or 01_binary
+      ! sum of INT/REAL and POINT/CELL options gives 0,1,2,3
 
     type, public :: vtuio_data_t
       !! 1. Call `add_item` to add additional data fields
@@ -104,7 +106,7 @@
     !   integer, parameter :: connections_kind=8, connections_size=8
     !   character(len=*), parameter :: connections_text='"Int64"'
     !
-! TYPE OF CELLS (all cells are VTK_LINE "3")
+! TYPE OF CELLS (all cells have the same type)
     integer, parameter :: CELLTYPE_KIND=I1B, CELLTYPE_SIZE=1
     character(len=*), parameter :: CELLTYPE_TEXT='"UInt8"'
     integer, parameter :: VTK_LINE = 3, VTK_TRIANGLE = 5, VTK_TETRA = 10
@@ -115,12 +117,80 @@
 
     character(len=*), parameter :: SUFFIX = '.vtu'
 
-    integer, parameter :: RADIUS_DATA_SIZE = 4
+integer, parameter :: RADIUS_DATA_SIZE = 4
 
     ! legend for items in "mask" array argument
-    integer, parameter :: MASK_RADIUS=1, MASK_POSITION=2, MASK_POINT_TYPE=3, MASK_CELL_TYPE=4
+integer, parameter :: MASK_RADIUS=1, MASK_POSITION=2, MASK_POINT_TYPE=3, MASK_CELL_TYPE=4
 
   contains
+
+    ! ----------------------
+    ! Helper data descriptor
+    ! ----------------------
+
+    pure subroutine data_descriptors(data_size, int_or_real, data_kind, data_text)
+      integer, intent(in) :: int_or_real  ! IS_INT or IS_REAL
+      integer, intent(in) :: data_size    ! 1/4/8 for integers, 4/8 for reals
+      integer, intent(out) :: data_kind
+      character(len=10), intent(out) :: data_text
+
+      select case(int_or_real)
+      case(META_IS_REAL)
+        select case(data_size)
+        case(4)
+          data_kind = SP
+          data_text = '"Float32"'
+        case(8)
+          data_kind = DP
+          data_text = '"Float64"'
+        case default
+          error stop 'data_descriptors - 4 or 8 bytes for real data'
+        end select
+      case(META_IS_INT)
+        select case(data_size)
+        case(1)
+          data_kind = I1B
+          data_text = '"UInt8"' ! unsigned integer!
+        case(4)
+          data_kind = I4B
+          data_text = '"Int32"'
+        case(8)
+          ! Note: as our int arrays are only 4B, this is not necessary
+          data_kind = I8B
+          data_text = '"Int64"'
+        case default
+          error stop 'write_data - 1 4 8 bytes for int data'
+        end select
+      end select
+    end subroutine data_descriptors
+
+
+    pure subroutine get_counts(graph, npoints, ncells)
+      class(graph_t), intent(in) :: graph
+      integer, intent(out) :: npoints, ncells
+!
+! Mesh - points are points
+!      - cells are cells (triangles or tetrahedra)      
+!      - vertex data become cell data
+!      - edge data is ignored
+!
+! Graph - vertices are points
+!       - edges are cells (lines)
+!       - vertex data become point data
+!       - edge data become cell data
+!
+      select type(graph)
+      class is (mesh_t)
+        npoints = graph%npoints
+        ncells = graph%ncells
+        if (graph%ncells /= graph%nvertices) error stop &
+            'vtuio_write - npoints == nvertices required'
+      class default
+        npoints = graph%nvertices
+        ncells = graph%nedges
+      end select
+    end subroutine get_counts
+
 
     ! -----------------------------
     ! Writing the Unstructured Grid
@@ -131,7 +201,7 @@
       character(len=*), intent(in) :: file
         !! file name without .vtu suffix
       class(graph_t), intent(in) :: graph
-        !! contains vertices a.k.a. points and edges a.k.a. cells
+        !! contains vertices/points and edges/cells
       integer, intent(in) :: mask(4)
         !! mask(1) - index pointing to "radius" in "vertex%rpar" array
         !! mask(2) - index pointing to the first "position" component in "vertex%rpar" array
@@ -149,16 +219,7 @@
       if (.not. graph%is_initialized()) error stop &
           'vtuio_write - graph is not initialized'
 
-      select type(graph)
-      class is (mesh_t)
-        npoints = graph%npoints
-        ncells = graph%ncells
-        if (graph%ncells /= graph%nvertices) error stop &
-            'vtuio_write - npoints == nvertices required'
-      class default
-        npoints = graph%nvertices
-        ncells = graph%nedges
-      end select
+      call get_counts(graph, npoints, ncells)
 
       offset = 0
       open(newunit=fid, file=trim(file)//SUFFIX, status='replace', &
@@ -175,9 +236,6 @@
       write(fid) '<Piece NumberOfPoints="', trim(text1), &
       &          '" NumberOfCells="', trim(text2), '">', LF
 
-      ! ===========================
-      ! Point and Cell data headers
-      ! ===========================
       write(fid) '  <PointData>', LF
 
 select type (graph)
@@ -190,21 +248,9 @@ class default
       call write_data(fid, 1, 'type', idata=idata, offset=offset)
 end select
 
-      if (present(vtudata)) then
-        if (allocated(vtudata%meta)) then
-          do i=1,size(vtudata%meta)
-            associate(m=>vtudata%meta(i))
-              if (m%iclass==VTUIO_META_POINT+VTUIO_META_R) then
-                call reallocate(rdata, [m%ncomp, npoints])
-                call write_data(fid, m%nbytes, trim(m%label), rdata=rdata, offset=offset)
-              else if (m%iclass==VTUIO_META_POINT+VTUIO_META_I) then
-                call reallocate(idata, [m%ncomp, npoints])
-                call write_data(fid, m%nbytes, trim(m%label), idata=idata, offset=offset)
-              end if
-            end associate
-          end do
-        end if
-      end if
+      ! point data header
+      call extract_and_write_data(META_IS_POINT, &
+          graph, fid, vtudata=vtudata, offset=offset)
 
       write(fid) '  </PointData>', LF
 
@@ -213,32 +259,18 @@ end select
       call reallocate(idata, [1, ncells])
       call write_data(fid, 1, 'con t', idata=idata, offset=offset)
 
-      if (present(vtudata)) then
-        if (allocated(vtudata%meta)) then
-          do i=1,size(vtudata%meta)
-            associate(m=>vtudata%meta(i))
-              if (m%iclass==VTUIO_META_CELL+VTUIO_META_R) then
-                call reallocate(rdata, [m%ncomp, ncells])
-                call write_data(fid, m%nbytes, trim(m%label), rdata=rdata, offset=offset)
-              else if (m%iclass==VTUIO_META_CELL+VTUIO_META_I) then
-                call reallocate(idata, [m%ncomp, ncells])
-                call write_data(fid, m%nbytes, trim(m%label), idata=idata, offset=offset)
-              end if
-            end associate
-          end do
-        end if
-      end if
+      ! cell data header
+      call extract_and_write_data(META_IS_CELL, &
+          graph, fid, vtudata=vtudata, offset=offset)
 
       write(fid) '  </CellData>', LF
 
-      ! =====================
-      ! Points/Cells - header
-      ! =====================
+      ! Points - header
       write(fid) '  <Points>', LF
       call write_points(fid, graph, npoints, mask(MASK_POSITION), offset)
       write(fid) '  </Points>', LF
 
-      ! Cells (connections) - header
+      ! Cells - header
       write(fid) '  <Cells>', LF
       call write_connectivity(fid, graph, ncells, offset)
       write(fid) '  </Cells>', LF
@@ -249,9 +281,7 @@ end select
       write(fid) '<AppendedData encoding="raw">', LF
       write(fid) '_' ! data block starts with underscore
 
-      ! ===========
       ! Binary data
-      ! ===========
 select type (graph)
 class is (mesh_t)
 class default
@@ -264,33 +294,10 @@ class default
       call write_data(fid, 1, 'tp', idata=idata)
 end select
 
-      if (present(vtudata)) then
-        if (allocated(vtudata%meta)) then
-          do i=1,size(vtudata%meta)
-            associate(m=>vtudata%meta(i))
-              if (m%iclass==VTUIO_META_POINT+VTUIO_META_R) then
-                call reallocate(rdata, [m%ncomp, npoints])
-                do j=1,npoints
-                  rdata(:,j) = graph%vertices(j)%rpar(m%start:m%start+m%ncomp-1)
-                end do
-                call write_data(fid, m%nbytes, trim(m%label), rdata=rdata)
-              else if (m%iclass==VTUIO_META_POINT+VTUIO_META_I) then
-                call reallocate(idata, [m%ncomp, npoints])
-                do j=1,npoints
-                  idata(:,j) = graph%vertices(j)%ipar(m%start:m%start+m%ncomp-1)
-                end do
-                call write_data(fid, m%nbytes, trim(m%label), idata=idata)
-              end if
-            end associate
-          end do
-        end if
-      end if
+      ! point data binary
+      call extract_and_write_data(META_IS_POINT, graph, fid, vtudata=vtudata)
 
-!vector data example
-!     call write_data(fid, 4, 'v', &
-!         rdata=transpose(reshape([atoms(:)%v(1),atoms(:)%v(2),atoms(:)%v(3)],[npoints,3])))
-
-
+      ! cell data binary
       call reallocate(idata, [1, ncells])
 select type(graph)
 class is (mesh_t)
@@ -300,31 +307,13 @@ class default
 end select
       call write_data(fid, 1, 'con t', idata=idata)
 
-      if (present(vtudata)) then
-        if (allocated(vtudata%meta)) then
-          do i=1,size(vtudata%meta)
-            associate(m=>vtudata%meta(i))
-              if (m%iclass==VTUIO_META_CELL+VTUIO_META_R) then
-                call reallocate(rdata, [m%ncomp, ncells])
-                do j=1,ncells
-                  rdata(:,j) = graph%edges(j)%rpar(m%start:m%start+m%ncomp-1)
-                end do
-                call write_data(fid, m%nbytes, trim(m%label), rdata=rdata)
-              else if (m%iclass==VTUIO_META_CELL+VTUIO_META_I) then
-                call reallocate(idata, [m%ncomp, ncells])
-                do j=1,ncells
-                  idata(:,j) = graph%edges(j)%ipar(m%start:m%start+m%ncomp-1)
-                end do
-                call write_data(fid, m%nbytes, trim(m%label), idata=idata)
-              end if
-            end associate
-          end do
-        end if
-      end if
+      call extract_and_write_data(META_IS_CELL, graph, fid, vtudata=vtudata)
 
+      ! points and cells binary
       call write_points(fid, graph, npoints, mask(MASK_POSITION))
       call write_connectivity(fid, graph, ncells)
 
+      ! closing tags
       write(fid) ' ', LF
       write(fid) '</AppendedData>', LF
       write(fid) '</VTKFile>'
@@ -486,56 +475,29 @@ end select
 ! - dimension 2 is point / connection
 ! If "offset" is present then write the header, otherwise write data
 !
-      integer, parameter :: IS_REAL=1, IS_INT=2
       integer :: ritype ! IS_REAL or IS_INT
       integer :: data_kind, data_size, ncomps, n
       character(len=10) :: data_text
       character(len=MAX_BUFFER_LEN/2) :: text1, text2
 
       if (present(rdata) .and. .not. present(idata)) then
-        ritype = IS_REAL
+        ritype = META_IS_REAL
       else if (.not. present(rdata) .and. present(idata)) then
-        ritype = IS_INT
+        ritype = META_IS_INT
       else
         error stop 'write_data - rdata/idata must be present, but not both'
       end if
 
+      call data_descriptors(nbytes, ritype, data_kind, data_text)
+      data_size = nbytes
+
       select case(ritype)
-      case(IS_REAL)
+      case(META_IS_REAL)
         ncomps = size(rdata, dim=1)
         n = size(rdata, dim=2)
-        select case(nbytes)
-        case(4)
-          data_kind = SP
-          data_size = 4
-          data_text = '"Float32"'
-        case(8)
-          data_kind = DP
-          data_size = 8
-          data_text = '"Float64"'
-        case default
-          error stop 'write_data - 4 or 8 bytes for real data'
-        end select
-      case(IS_INT)
+      case(META_IS_INT)
         ncomps = size(idata, dim=1)
         n = size(idata, dim=2)
-        select case(nbytes)
-        case(1)
-          data_kind = I1B
-          data_size = 1
-          data_text = '"UInt8"' ! unsigned integer!
-        case(4)
-          data_kind = I4B
-          data_size = 4
-          data_text = '"Int32"'
-        case(8)
-          ! Note: as "idata" is only 4B, this is not necessary (TODO)
-          data_kind = I8B
-          data_size = 8
-          data_text = '"Int64"'
-        case default
-          error stop 'write_data - 1 4 8 bytes for int data'
-        end select
       end select
 
       if (present(offset)) then
@@ -551,7 +513,7 @@ end select
         ! Write Data
         write(fid) int(n*data_size*ncomps, kind=HEADERTYPE_KIND)
         select case(ritype)
-        case(IS_REAL)
+        case(META_IS_REAL)
           select case(data_kind) ! real(...) kind must be known at compile time
           case(SP)
             write(fid) real(rdata, kind=SP)
@@ -560,7 +522,7 @@ end select
           case default
             error stop 'write_data - invalid branch 1'
           end select
-        case(IS_INT)
+        case(META_IS_INT)
           select case(data_kind) ! int(...) kind must be known at compile time
           case(I1B)
             write(fid) int(idata, kind=I1B)
@@ -576,6 +538,96 @@ end select
     end subroutine write_data
 
 
+    subroutine extract_and_write_data(choice_export, graph, fid, vtudata, offset)
+      integer(I1B), intent(in) :: choice_export
+      class(graph_t), intent(in) :: graph
+      integer, intent(in) :: fid
+      type(vtuio_data_t), intent(in), optional :: vtudata
+      integer, intent(inout), optional :: offset
+!
+! Copy data to rdata/idata arrays and call write_data
+!
+      integer, allocatable :: idata(:,:)
+      real(dp), allocatable :: rdata(:,:)
+      integer :: npoints, ncells, nitems, i, j, choice_data
+
+      call get_counts(graph, npoints, ncells)
+
+      select case(choice_export)
+      case(META_IS_POINT)
+        nitems = npoints
+        select type(graph)
+        class is (mesh_t)
+          ! no data written to point data section
+          return
+        class default
+          ! data marked as point data exported from vertices to point data section
+          choice_data = META_IS_POINT
+        end select
+      case(META_IS_CELL)
+        nitems = ncells
+        select type(graph)
+        class is (mesh_t)
+          ! data marked as point data exported from vertices to cell data section
+          choice_data = META_IS_POINT
+          return
+        class default
+          ! data marked as cell data exported from edges to cell data section
+          choice_data = META_IS_CELL
+        end select
+      case default
+        error stop 'extract and write data - invalid data_export'
+      end select
+
+      if (present(vtudata)) then
+        if (allocated(vtudata%meta)) then
+          do i=1,size(vtudata%meta)
+            associate(m=>vtudata%meta(i))
+              if (m%iclass==choice_data+META_IS_REAL) then
+                ! real data exported within current context
+                call reallocate(rdata, [m%ncomp, nitems])
+
+                if (.not. present(offset)) then
+                  select case(choice_data)
+                  case(META_IS_POINT)
+                    do j=1,nitems
+                      rdata(:,j) = graph%vertices(j)%rpar(m%start:m%start+m%ncomp-1)
+                    end do
+                  case(META_IS_CELL)
+                    do j=1,nitems
+                      rdata(:,j) = graph%edges(j)%rpar(m%start:m%start+m%ncomp-1)
+                    end do
+                  end select
+                end if
+                call write_data(fid, m%nbytes, trim(m%label), rdata=rdata, offset=offset)
+
+              else if (m%iclass==choice_data+META_IS_INT) then
+                ! integer data exported within current context
+                call reallocate(idata, [m%ncomp, npoints])
+
+                if (.not. present(offset)) then
+                  select case(choice_data)
+                  case(META_IS_POINT)
+                    do j=1,nitems
+                      idata(:,j) = graph%vertices(j)%ipar(m%start:m%start+m%ncomp-1)
+                    end do
+                  case(META_IS_CELL)
+                    do j=1,nitems
+                      idata(:,j) = graph%edges(j)%ipar(m%start:m%start+m%ncomp-1)
+                    end do
+                  end select
+                end if
+                call write_data(fid, m%nbytes, trim(m%label), idata=idata, offset=offset)
+
+              end if
+            end associate
+          end do
+        end if
+      end if
+
+    end subroutine extract_and_write_data
+
+
     subroutine write_time_value(fid, time)
       integer, intent(in) :: fid
       real(DP), intent(in) :: time
@@ -589,7 +641,6 @@ end select
       write(fid) '  </DataArray>'//LF
       write(fid) '</FieldData>'//LF
     end subroutine write_time_value
-
 
 
     ! -----------------------------
@@ -994,10 +1045,29 @@ end select
 
       if (.not. allocated(this%meta)) allocate(this%meta(0))
 
+      ! validate input
       if (iclass < 0 .or. iclass > 3) &
           error stop 'meta_add_item - invalid iclass'
       if (ncomp /= 1 .and. ncomp /=3) &
           print '("WARNING: expected scalar or 3d-vector")'
+      block
+        character(len=10) :: data_text
+        integer :: data_kind, ubound
+        ! error stops if nbytes/iclass combination is invalid
+        call data_descriptors(nbytes, 2*(iclass/2), data_kind, data_text)
+        select case(iclass)
+        case(META_IS_REAL + META_IS_POINT)
+          ubound = VSIZE_RPAR
+        case(META_IS_REAL + META_IS_CELL)
+          ubound = ESIZE_RPAR
+        case(META_IS_INT + META_IS_POINT)
+          ubound = VSIZE_IPAR
+        case(META_IS_INT + META_IS_CELL)
+          ubound = ESIZE_IPAR
+        end select
+        if (start < 1 .or. start+ncomp-1 > ubound) error stop &
+            'meta_add_item - start / iclass combination out of bounds'
+      end block
 
       this%meta = [this%meta, &
           vtuio_meta_t(start,ncomp,nbytes,label,int(iclass,I1B))]
