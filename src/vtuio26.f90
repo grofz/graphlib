@@ -80,6 +80,9 @@
 interface vtuio_write
   module procedure vtuio_write1, vtuio_write2
 end interface
+interface vtuio_read
+  module procedure vtuio_read1, vtuio_read2
+end interface
 
 ! -----------------------------------------------------------------------------
 ! TUNING THE BINARY FORMAT FOR vtuio_write
@@ -119,11 +122,9 @@ end interface
 
     integer, parameter :: MAX_BUFFER_LEN=400
     character(len=1), parameter :: LF=char(10) ! end-of-line
-
     character(len=*), parameter :: SUFFIX = '.vtu'
 
-integer, parameter :: RADIUS_DATA_SIZE = 4
-
+!TODO to be removedd
     ! legend for items in "mask" array argument
 integer, parameter :: MASK_RADIUS=1, MASK_POSITION=2, MASK_POINT_TYPE=3, MASK_CELL_TYPE=4
 
@@ -133,15 +134,15 @@ integer, parameter :: MASK_RADIUS=1, MASK_POSITION=2, MASK_POINT_TYPE=3, MASK_CE
     ! Helper data descriptor
     ! ----------------------
 
-    pure subroutine data_descriptors(data_size, int_or_real, data_kind, data_text)
+    pure subroutine data_descriptors(int_or_real, nbytes, data_kind, data_text)
       integer, intent(in) :: int_or_real  ! IS_INT or IS_REAL
-      integer, intent(in) :: data_size    ! 1/4/8 for integers, 4/8 for reals
+      integer, intent(in) :: nbytes       ! 1/4/8 for integers, 4/8 for reals
       integer, intent(out) :: data_kind
       character(len=10), intent(out) :: data_text
 
       select case(int_or_real)
       case(META_IS_REAL)
-        select case(data_size)
+        select case(nbytes)
         case(4)
           data_kind = SP
           data_text = '"Float32"'
@@ -152,7 +153,7 @@ integer, parameter :: MASK_RADIUS=1, MASK_POSITION=2, MASK_POINT_TYPE=3, MASK_CE
           error stop 'data_descriptors - 4 or 8 bytes for real data'
         end select
       case(META_IS_INT)
-        select case(data_size)
+        select case(nbytes)
         case(1)
           data_kind = I1B
           data_text = '"UInt8"' ! unsigned integer!
@@ -478,7 +479,7 @@ end subroutine
 ! If "offset" is present then write the header, otherwise write data
 !
       integer :: real_or_int ! IS_REAL or IS_INT
-      integer :: data_kind, data_size, ncomps, n
+      integer :: data_kind, ncomps, n
       character(len=10) :: data_text
       character(len=MAX_BUFFER_LEN/2) :: text1, text2
 
@@ -490,8 +491,7 @@ end subroutine
         error stop 'write_data - rdata/idata must be present, but not both'
       end if
 
-      call data_descriptors(nbytes, real_or_int, data_kind, data_text)
-      data_size = nbytes
+      call data_descriptors(real_or_int, nbytes, data_kind, data_text)
 
       select case(real_or_int)
       case(META_IS_REAL)
@@ -511,11 +511,11 @@ end subroutine
         write(fid) '    <DataArray Name="', trim(label), '"', &
         &  ' type=', trim(data_text), ' NumberOfComponents="', trim(text1), &
         &  '" format="appended" offset="', trim(text2), '" />', LF
-        offset = offset + HEADERTYPE_SIZE + n*data_size*ncomps
+        offset = offset + HEADERTYPE_SIZE + n*nbytes*ncomps
 
       else
         ! Write Data
-        write(fid) int(n*data_size*ncomps, kind=HEADERTYPE_KIND)
+        write(fid) int(n*nbytes*ncomps, kind=HEADERTYPE_KIND)
         select case(real_or_int)
         case(META_IS_REAL)
           select case(data_kind) ! real(...) kind must be known at compile time
@@ -651,22 +651,44 @@ end subroutine
     ! -----------------------------
     ! Reading the Unstructured Grid
     ! -----------------------------
+subroutine vtuio_read2(file, graph, mask, time, vtudata)
+  character(len=*), intent(in) :: file
+  class(graph_t), intent(inout) :: graph
+  integer, intent(in) :: mask(4)
+    !! mask(1) - index pointing to "radius" in "vertex%rpar" array
+    !! mask(2) - index pointing to the first "position" component in "vertex%rpar" array
+    !! mask(3) - index pointing to "type" in "vertex%ipar" array
+    !! mask(4) - index pointing to "type" in "edge%ipar" array
+  real(DP), intent(out), optional :: time
+  type(vtuio_data_t), optional :: vtudata
+  type(vtuio_data_t) :: vtudata0
 
-    subroutine vtuio_read(file, graph, mask, time)
+  print *, 'WARNING - using obsolete vtuio_read interface'
+  if (present(vtudata)) then
+    call vtudata%add_item('radius', mask(MASK_RADIUS), int(META_IS_REAL+META_IS_POINT), 1, 4)
+    call vtudata%add_item('type', mask(MASK_POINT_TYPE), int(META_IS_INT+META_IS_POINT), 1, 1)
+    call vtudata%add_item('con t', mask(MASK_CELL_TYPE), int(META_IS_INT+META_IS_CELL), 1, 1)
+    call vtuio_read1(file, graph, mask(MASK_POSITION), time, vtudata)
+  else
+    call vtudata0%add_item('radius', mask(MASK_RADIUS), int(META_IS_REAL+META_IS_POINT), 1, 4)
+    call vtudata0%add_item('type', mask(MASK_POINT_TYPE), int(META_IS_INT+META_IS_POINT), 1, 1)
+    call vtudata0%add_item('con t', mask(MASK_CELL_TYPE), int(META_IS_INT+META_IS_CELL), 1, 1)
+    call vtuio_read1(file, graph, mask(MASK_POSITION), time, vtudata0)
+  end if
+end subroutine
+
+    subroutine vtuio_read1(file, graph, position_id, time, vtudata)
       character(len=*), intent(in) :: file
       type(graph_t), intent(inout) :: graph
-      integer, intent(in) :: mask(4)
-        !! mask(1) - index pointing to "radius" in "vertex%rpar" array
-        !! mask(2) - index pointing to the first "position" component in "vertex%rpar" array
-        !! mask(3) - index pointing to "type" in "vertex%ipar" array
-        !! mask(4) - index pointing to "type" in "edge%ipar" array
+      integer, intent(in), optional :: position_id
+      type(vtuio_data_t), intent(in), optional :: vtudata
       real(DP), intent(out), optional :: time
 !
 ! Read from VTU file
 !
-      integer :: fid, npoints, ncells, ios, i
+      integer :: fid, npoints, ncells, ios, i, n_meta
       integer :: offset_points, offset_cones, offset_offsets, offset_types
-      integer :: offset_r, offset_at, offset_ct
+      integer, allocatable :: offset_meta(:)
       integer :: time_pos(2), data_pos(2)
       integer(HEADERTYPE_KIND) :: nblock   ! change KIND if error (!)
       integer(CONNECTIONS_KIND) :: vids(2)
@@ -680,8 +702,15 @@ end subroutine
       character(len=1) :: ch
       type(handle_t), allocatable :: points(:)
       type(handle_t) :: cone
+      integer, parameter :: DATAARRAY_NOT_FOUND=-1
 
       time0 = 0.0
+
+      n_meta = 0
+      if (present(vtudata)) then
+        if (allocated(vtudata%meta)) n_meta = size(vtudata%meta)
+      end if
+      allocate(offset_meta(n_meta), source=DATAARRAY_NOT_FOUND)
 
       ! PART ONE
       ! read and analyze the vtk-tree
@@ -730,28 +759,47 @@ end subroutine
       end block
 
       ! get offsets for point data
-      offset_r = -1
-      offset_at = -1
+!     offset_r = -1
+!     offset_at = -1
       point_data => grid%findtag('PointData')
-      if (associated(point_data)) then
-        offset_r = parse_value(point_data, &
-           'Name', 'radius', 'offset', 'offset radius')
-        offset_at = parse_value(point_data, &
-            'Name', 'type', 'offset', 'offset vertex type')
-      end if
+!     if (associated(point_data)) then
+!       offset_r = parse_value(point_data, &
+!          'Name', 'radius', 'offset', 'offset radius')
+!       offset_at = parse_value(point_data, &
+!           'Name', 'type', 'offset', 'offset vertex type')
+!     end if
 
       ! get offsets for cell data
-      offset_ct = -1
+!     offset_ct = -1
       cell_data => grid%findtag('CellData')
-      if (associated(cell_data)) then
-        offset_ct = parse_value(cell_data, &
-            'Name', 'con t', 'offset', 'offset cell type')
-      end if
-#ifdef DEBUG
-      print '("offset radii ",i0)', offset_r
-      print '("offset vertex type ",i0)', offset_at
-      print '("offset cell type ",i0)', offset_ct
-#endif
+!     if (associated(cell_data)) then
+!       offset_ct = parse_value(cell_data, &
+!           'Name', 'con t', 'offset', 'offset cell type')
+!     end if
+
+      ! get offsets from vtudata
+      block
+        do i=1, size(offset_meta)
+          associate(m=>vtudata%meta(i))
+            select case (mod(m%iclass,2))
+            case(META_IS_CELL)
+              if(associated(cell_data)) then
+                offset_meta(i) = parse_value(cell_data, &
+                    'Name', trim(m%label), 'offset', 'cell_data '//trim(m%label)//": offset")
+              end if
+            case(META_IS_POINT)
+              if (associated(point_data)) then
+                offset_meta(i) = parse_value(point_data, &
+                    'Name', trim(m%label), 'offset', 'point_data '//trim(m%label)//": offset")
+              end if
+            case default
+              error stop 'vtuio_read - invalid branch'
+            end select
+            if (offset_meta(i)==DATAARRAY_NOT_FOUND) &
+                print '("WARNING vtuio_read - ",a," not found in file")', trim(m%label)
+          end associate
+        end do
+      end block
 
       ! where binary data start?
       data_root => root%findtag('AppendedData')
@@ -830,24 +878,24 @@ end subroutine
         rpar = 0.11e-20_dp ! arbitrary values
         do i=1, npoints
           read(fid) xloc
-          rpar(mask(MASK_POSITION):mask(MASK_POSITION)+2) = real(xloc, kind=DP)
+          rpar(position_id:position_id+2) = real(xloc, kind=DP)
           points(i) = graph%add_vertex(ipar, rpar)
         end do
       end block
 
-      if (offset_r >= 0) then
-        call read_data(fid, data_pos(1)+1+offset_r, npoints, rdata=rdata)
-        graph%vertices(1:npoints)%rpar(mask(MASK_RADIUS)) = rdata
-      else
-        print '("VTU file Warning: radius component is not present")'
-      end if
+!     if (offset_r >= 0) then
+!       call read_data(fid, data_pos(1)+1+offset_r, npoints, rdata=rdata)
+!       graph%vertices(1:npoints)%rpar(mask(MASK_RADIUS)) = rdata
+!     else
+!       print '("VTU file Warning: radius component is not present")'
+!     end if
 
-      if (offset_at >= 0) then
-        call read_data(fid, data_pos(1)+1+offset_at, npoints, idata=idata)
-        graph%vertices(1:npoints)%ipar(mask(MASK_POINT_TYPE)) = idata
-      else
-        print '("VTU file Warning: point type component is not present")'
-      end if
+!     if (offset_at >= 0) then
+!       call read_data(fid, data_pos(1)+1+offset_at, npoints, idata=idata)
+!       graph%vertices(1:npoints)%ipar(mask(MASK_POINT_TYPE)) = idata
+!     else
+!       print '("VTU file Warning: point type component is not present")'
+!     end if
 
 
       ! PART FOUR
@@ -868,12 +916,12 @@ end subroutine
         end do
       end block
 
-      if (offset_ct >= 0) then
-        call read_data(fid, data_pos(1)+1+offset_ct, ncells, idata=idata)
-        graph%edges(1:ncells)%ipar(mask(MASK_CELL_TYPE)) = idata
-      else
-        print '("VTU file Warning: cell type component is not present")'
-      end if
+!     if (offset_ct >= 0) then
+!       call read_data(fid, data_pos(1)+1+offset_ct, ncells, idata=idata)
+!       graph%edges(1:ncells)%ipar(mask(MASK_CELL_TYPE)) = idata
+!     else
+!       print '("VTU file Warning: cell type component is not present")'
+!     end if
 
       ! PART FIVE
       ! Read time component
@@ -896,7 +944,7 @@ end subroutine
         time = time0
         print '("VTU file read: time=",f8.2)', time
       end if
-    end subroutine vtuio_read
+    end subroutine vtuio_read1
 
 
     subroutine read_data(fid, pos_start, nvals, rdata, idata)
@@ -931,7 +979,7 @@ end subroutine
       read(fid, pos=pos_start) nblock
       nbytes = int(nblock)/nvals
 #ifdef DEBUG
-      print '("read_data - ",i0," blocks, ",i0," bytes")', &
+      print '("read_data - ",i0," blocks, ",i0," bytes. Zero check ",i0)', &
           nblock, nbytes, mod(int(nblock),nvals)
 #endif
       if (mod(int(nblock),nvals)/=0) error stop &
@@ -1060,7 +1108,7 @@ end subroutine
         character(len=10) :: data_text
         integer :: data_kind, ubound
         ! error stops if nbytes/iclass combination is invalid
-        call data_descriptors(nbytes, 2*(iclass/2), data_kind, data_text)
+        call data_descriptors(2*(iclass/2), nbytes, data_kind, data_text)
         ! validate start
         select case(iclass)
         case(META_IS_REAL + META_IS_POINT)
