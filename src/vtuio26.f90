@@ -120,6 +120,7 @@ end interface
     integer, parameter :: VTK_LINE = 3, VTK_TRIANGLE = 5, VTK_TETRA = 10
 ! -----------------------------------------------------------------------------
 
+    integer, parameter :: DATAARRAY_NOT_FOUND=-1
     integer, parameter :: MAX_BUFFER_LEN=400
     character(len=1), parameter :: LF=char(10) ! end-of-line
     character(len=*), parameter :: SUFFIX = '.vtu'
@@ -702,7 +703,6 @@ end subroutine
       character(len=1) :: ch
       type(handle_t), allocatable :: points(:)
       type(handle_t) :: cone
-      integer, parameter :: DATAARRAY_NOT_FOUND=-1
 
       time0 = 0.0
 
@@ -758,39 +758,28 @@ end subroutine
 #endif
       end block
 
-      ! get offsets for point data
-!     offset_r = -1
-!     offset_at = -1
+      ! get offsets for PointData / CellData in vtudata
       point_data => grid%findtag('PointData')
-!     if (associated(point_data)) then
-!       offset_r = parse_value(point_data, &
-!          'Name', 'radius', 'offset', 'offset radius')
-!       offset_at = parse_value(point_data, &
-!           'Name', 'type', 'offset', 'offset vertex type')
-!     end if
-
-      ! get offsets for cell data
-!     offset_ct = -1
       cell_data => grid%findtag('CellData')
-!     if (associated(cell_data)) then
-!       offset_ct = parse_value(cell_data, &
-!           'Name', 'con t', 'offset', 'offset cell type')
-!     end if
 
-      ! get offsets from vtudata
       block
+character(len=:), allocatable :: type
+integer :: ncomp
+
         do i=1, size(offset_meta)
           associate(m=>vtudata%meta(i))
             select case (mod(m%iclass,2))
             case(META_IS_CELL)
               if(associated(cell_data)) then
-                offset_meta(i) = parse_value(cell_data, &
-                    'Name', trim(m%label), 'offset', 'cell_data '//trim(m%label)//": offset")
+                call parse_dataarray(cell_data, trim(m%label), type, ncomp, &
+                    offset_meta(i))
+print *, trim(m%label), ncomp, type, offset_meta(i)
               end if
             case(META_IS_POINT)
               if (associated(point_data)) then
-                offset_meta(i) = parse_value(point_data, &
-                    'Name', trim(m%label), 'offset', 'point_data '//trim(m%label)//": offset")
+                call parse_dataarray(point_data, trim(m%label), type, ncomp, &
+                    offset_meta(i))
+print *, trim(m%label), ncomp, type, offset_meta(i)
               end if
             case default
               error stop 'vtuio_read - invalid branch'
@@ -947,6 +936,71 @@ end subroutine
     end subroutine vtuio_read1
 
 
+    subroutine parse_dataarray(obj, name, type, ncomp, offset)
+      type(object_t), intent(in), target :: obj
+      character(len=*), intent(in) :: name
+      character(len=:), allocatable, intent(out) :: type
+      integer, intent(out) :: ncomp, offset
+!
+! If DataArray could not be found - return offset with -1
+! If DataArray was found, but
+!   - type attribute not found
+!     -> warn and return type as a zero length character
+!   - NumberOfComponents attribute not found
+!     -> warn and return ncomp with 1
+!   - offset attribute not found - data attachment method not supported
+!     -> error
+!
+      character(len=MAX_BUFFER_LEN) :: text
+      type(object_t), pointer :: dataarray
+      logical :: was_found
+      integer :: ios
+
+      if (trim(name)=='') then
+        dataarray => obj%findtag('DataArray')
+      else
+        text = obj%findval('Name', trim(name), 'type', was_found, dataarray)
+!TODO may report non-existing DataArray if type not present. This may be misleading
+! TODO need more convenient function, not interessed in type/text here
+      end if
+
+      if (.not. associated(dataarray)) then
+        allocate(character(len=0)::type)
+        ncomp = 1
+        offset = DATAARRAY_NOT_FOUND
+        print '("WARNING - DataArray ",a," not found")', name
+        return
+      end if
+
+      text = dataarray%findval('type', was_found)
+      if (was_found) then
+        allocate(character(len=len_trim(text)) :: type)
+        type = trim(text)
+      else
+        allocate(character(len=0) :: type)
+        print '("WARNING - type attribute not found in DataArray ",a)', name
+      end if
+
+      text = dataarray%findval('NumberOfComponents', was_found)
+      if (was_found) then
+        read(text,*,iostat=ios) ncomp
+        if (ios/=0) error stop &
+            'parse_dataarray - invalid number in NumberOfComponents attribute'
+      else
+        print '("WARNING - NumberOfComponents not present in ",a,&
+            & ". Assuming 1")', name
+        ncomp = 1
+      end if
+
+      text = dataarray%findval('offset', was_found)
+      ios = 0
+      if (was_found) read(text,*,iostat=ios) offset
+      if (ios/=0 .or. .not. was_found) &
+        error stop &
+          'parse_dataarray - a compulsory offset could not be find/read'
+    end subroutine parse_dataarray
+
+
     subroutine read_data(fid, pos_start, nvals, rdata, idata)
       integer, intent(in) :: fid, pos_start, nvals
       real(DP), intent(out), allocatable, optional :: rdata(:)
@@ -1023,6 +1077,7 @@ end subroutine
 !
 ! Parse numerical value from the object
 !
+!TODO move to vtuio_tree?
     function parse_value1(obj, name, msg) result(ivalue)
       type(object_t), intent(in) :: obj
       character(len=*), intent(in) :: name, msg

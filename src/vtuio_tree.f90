@@ -473,10 +473,12 @@ print *, 'No Xml header'
     end function find_tag
 
 
-    recursive function find_val1(this, nam1, val1, nam2, was_found) result(val2)
-      class(object_t), intent(in) :: this
+    recursive function find_val1(this, nam1, val1, nam2, was_found, &
+          obj_found) result(val2)
+      class(object_t), intent(in), target :: this
       character(len=*), intent(in) :: nam1, nam2, val1
       logical, intent(out) :: was_found
+      type(object_t), pointer, intent(out), optional :: obj_found
       character(len=:), allocatable :: val2
 !
 ! Return value of attribute named "nam2" for a first object that has
@@ -487,6 +489,7 @@ print *, 'No Xml header'
       character(len=:), allocatable :: val2_a, val2_b
 
       was_found = .false.
+      if (present(obj_found)) obj_found => null()
       val1_match = .false.
       nam2_found = .false.
       if (this%tp /= TP_OBJ) return
@@ -499,7 +502,7 @@ print *, 'No Xml header'
               nam2_found = .true.
             end if
           else if (chl%tp==TP_OBJ) then
-            val2_b = find_val1(chl, nam1, val1, nam2, was_found)
+            val2_b = find_val1(chl, nam1, val1, nam2, was_found, obj_found)
             if (was_found) val2 = val2_b
           end if
           if (was_found) exit
@@ -509,6 +512,7 @@ print *, 'No Xml header'
         if (val1_match .and. nam2_found) then
           val2 = val2_a
           was_found = .true.
+          if (present(obj_found)) obj_found => this
         end if
       end if
     end function find_val1
