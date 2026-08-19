@@ -132,50 +132,109 @@ integer, parameter :: MASK_RADIUS=1, MASK_POSITION=2, MASK_POINT_TYPE=3, MASK_CE
   contains
 
     ! ----------------------
-    ! Helper data descriptor
+    ! Helpers for read/write
     ! ----------------------
 
-    pure subroutine data_descriptors(int_or_real, nbytes, data_kind, data_text)
-      integer, intent(in) :: int_or_real  ! IS_INT or IS_REAL
-      integer, intent(in) :: nbytes       ! 1/4/8 for integers, 4/8 for reals
-      integer, intent(out) :: data_kind
-      character(len=10), intent(out) :: data_text
+    pure subroutine reallocate_real(arr, required_shape)
+      real(DP), intent(inout), allocatable :: arr(:,:)
+      integer, intent(in) :: required_shape(2)
 
+      if (allocated(arr)) then
+        if (any(shape(arr) /= required_shape)) deallocate(arr)
+      end if
+      if (.not. allocated(arr)) &
+          allocate(arr(required_shape(1), required_shape(2)))
+    end subroutine reallocate_real
+
+
+    pure subroutine reallocate_int(arr, required_shape)
+      integer, intent(inout), allocatable :: arr(:,:)
+      integer, intent(in) :: required_shape(2)
+
+      if (allocated(arr)) then
+        if (any(shape(arr) /= required_shape)) deallocate(arr)
+      end if
+      if (.not. allocated(arr)) &
+          allocate(arr(required_shape(1), required_shape(2)))
+    end subroutine reallocate_int
+
+
+    pure function get_data_kind(int_or_real, nbytes) result(data_kind)
+      integer, intent(in) :: int_or_real  ! type of data
+      integer, intent(in) :: nbytes       ! number of bytes per value
+      integer :: data_kind
+!
+! Return SP / DP for reals, and I1B / I4B / I8B for integers.
+!
       select case(int_or_real)
       case(META_IS_REAL)
         select case(nbytes)
         case(4)
           data_kind = SP
-          data_text = '"Float32"'
         case(8)
           data_kind = DP
-          data_text = '"Float64"'
         case default
-          error stop 'data_descriptors - 4 or 8 bytes for real data'
+          error stop 'get_data_kind - 4 or 8 bytes for real data'
         end select
       case(META_IS_INT)
         select case(nbytes)
         case(1)
           data_kind = I1B
-          data_text = '"UInt8"' ! unsigned integer!
         case(4)
           data_kind = I4B
-          data_text = '"Int32"'
         case(8)
           ! Note: as our int arrays are only 4B, this is not necessary
           data_kind = I8B
-          data_text = '"Int64"'
         case default
-          error stop 'write_data - 1 4 8 bytes for int data'
+          error stop 'get_data_kind - 1 4 8 bytes for int data'
         end select
       end select
-    end subroutine data_descriptors
+    end function get_data_kind
+
+
+    pure function get_data_text(int_or_real, nbytes) result (data_text)
+      integer, intent(in) :: int_or_real  ! IS_INT or IS_REAL
+      integer, intent(in) :: nbytes       ! 1/4/8 for integers, 4/8 for reals
+      character(len=:), allocatable :: data_text
+!
+!  Return label used in XML headers as type attribute,
+!  eg. Float32, Float64, Int32, Int64, etc.
+!
+      character(len=10) :: data_text0
+
+      select case(int_or_real)
+      case(META_IS_REAL)
+        select case(nbytes)
+        case(4)
+          data_text0 = '"Float32"'
+        case(8)
+          data_text0 = '"Float64"'
+        case default
+          error stop 'get_data_text - 4 or 8 bytes for real data required'
+        end select
+      case(META_IS_INT)
+        select case(nbytes)
+        case(1)
+          data_text0 = '"UInt8"' ! unsigned integer! TODO document it
+        case(4)
+          data_text0 = '"Int32"'
+        case(8)
+          ! Note: as our int arrays are only 4B, this is not necessary
+          data_text0 = '"Int64"'
+        case default
+          error stop 'get_data_text - 1, 4 or 8 bytes for int data required'
+        end select
+      end select
+      allocate(character(len=len_trim(data_text0))::data_text)
+      data_text = trim(data_text0)
+    end function get_data_text
 
 
     pure subroutine get_counts(graph, npoints, ncells)
       class(graph_t), intent(in) :: graph
       integer, intent(out) :: npoints, ncells
 !
+! TODO this information should be moved to module level
 ! Mesh - points are points
 !      - cells are cells (triangles or tetrahedra)      
 !      - vertex data become cell data
@@ -272,13 +331,13 @@ end subroutine
 
       ! Point data - header
       write(fid) '  <PointData>', LF
-      call extract_and_write_data(META_IS_POINT, &
+      call export_and_write_data(META_IS_POINT, &
           graph, fid, vtudata=vtudata, offset=offset)
       write(fid) '  </PointData>', LF
 
       ! Cell data - header
       write(fid) '  <CellData>', LF
-      call extract_and_write_data(META_IS_CELL, &
+      call export_and_write_data(META_IS_CELL, &
           graph, fid, vtudata=vtudata, offset=offset)
       write(fid) '  </CellData>', LF
 
@@ -299,10 +358,10 @@ end subroutine
       write(fid) '_' ! data block starts with underscore
 
       ! Point data - binary
-      call extract_and_write_data(META_IS_POINT, graph, fid, vtudata=vtudata)
+      call export_and_write_data(META_IS_POINT, graph, fid, vtudata=vtudata)
 
       ! Cell data - binary
-      call extract_and_write_data(META_IS_CELL, graph, fid, vtudata=vtudata)
+      call export_and_write_data(META_IS_CELL, graph, fid, vtudata=vtudata)
 
       ! Points and cells - binary
       call write_points(fid, graph, npoints, position_id)
@@ -460,6 +519,114 @@ end subroutine
     end subroutine write_connectivity
 
 
+    subroutine export_and_write_data(mode_write, graph, fid, vtudata, offset)
+      integer(I1B), intent(in) :: mode_write
+      class(graph_t), intent(in) :: graph
+      integer, intent(in) :: fid
+      type(vtuio_data_t), intent(in), optional :: vtudata
+      integer, intent(inout), optional :: offset
+!
+! Copy data to rdata/idata arrays and call write_data
+! Must be called twice - see write_data for details
+!
+! IN
+!   mode_write - determines VTU file context, i.e. PointData or CellData block
+!   graph      - mesh_t or graph_t object 
+!   fid        - opened output file unit
+!   vtudata    - descriptor of additional data to be written (optional)
+!
+! IN/OUT
+!   offset     - if present: write header and update offset
+!              - if not present: write data
+!
+      integer :: mode_export
+        ! Determines how data are classified in vtudata descriptor, and if are
+        ! taken from vertices (IS_POINT) or edges (IS_CELL) rpar/ipar arrays
+      integer :: nitems
+        ! npoints / ncells - depending on the exported data source
+      integer, allocatable :: idata(:,:)
+      real(dp), allocatable :: rdata(:,:)
+      integer :: i, j
+
+      if (.not. present(vtudata)) return
+      if (.not. allocated(vtudata%meta)) return
+
+      block
+        integer :: npoints, ncells
+        call get_counts(graph, npoints, ncells)
+        select case(mode_write)
+        case(META_IS_POINT)
+          nitems = npoints
+          select type(graph)
+          class is (mesh_t)
+            ! no data written to PointData block
+            return
+          class default
+            ! data marked as point data exported from vertices to PointData block
+            mode_export = META_IS_POINT
+          end select
+        case(META_IS_CELL)
+          nitems = ncells
+          select type(graph)
+          class is (mesh_t)
+            ! data marked as point data exported from vertices to CellData block
+            mode_export = META_IS_POINT
+          class default
+            ! data marked as cell data exported from edges to CellData block 
+            mode_export = META_IS_CELL
+          end select
+        case default
+          error stop 'export and write data - invalid data_export'
+        end select
+      end block
+
+      do i=1,size(vtudata%meta)
+        associate(m=>vtudata%meta(i))
+          if (m%iclass == mode_export + META_IS_REAL) then
+            ! real data exported within current context
+            call reallocate(rdata, [m%ncomp, nitems])
+
+            if (.not. present(offset)) then
+              select case(mode_export)
+              case(META_IS_POINT)
+                do j=1,nitems
+                  rdata(:,j) = graph%vertices(j)%rpar(m%start:m%start+m%ncomp-1)
+                end do
+              case(META_IS_CELL)
+                do j=1,nitems
+                  rdata(:,j) = graph%edges(j)%rpar(m%start:m%start+m%ncomp-1)
+                end do
+              end select
+            end if
+
+            call write_data(fid, m%nbytes, trim(m%label), rdata=rdata, offset=offset)
+
+          else if (m%iclass == mode_export + META_IS_INT) then
+            ! integer data exported within current context
+            call reallocate(idata, [m%ncomp, nitems])
+
+            if (.not. present(offset)) then
+              select case(mode_export)
+              case(META_IS_POINT)
+                do j=1,nitems
+                  idata(:,j) = graph%vertices(j)%ipar(m%start:m%start+m%ncomp-1)
+                end do
+              case(META_IS_CELL)
+                do j=1,nitems
+                  idata(:,j) = graph%edges(j)%ipar(m%start:m%start+m%ncomp-1)
+                end do
+              end select
+            end if
+
+            call write_data(fid, m%nbytes, trim(m%label), idata=idata, offset=offset)
+
+          end if
+        end associate
+      end do
+
+    end subroutine export_and_write_data
+
+
     subroutine write_data(fid, nbytes, label, rdata, idata, offset)
       integer, intent(in) :: fid
       integer, intent(in) :: nbytes ! 1, 4, 8
@@ -492,7 +659,8 @@ end subroutine
         error stop 'write_data - rdata/idata must be present, but not both'
       end if
 
-      call data_descriptors(real_or_int, nbytes, data_kind, data_text)
+      data_kind = get_data_kind(real_or_int, nbytes)
+      data_text = get_data_text(real_or_int, nbytes)
 
       select case(real_or_int)
       case(META_IS_REAL)
@@ -541,97 +709,6 @@ end subroutine
         end select
       end if
     end subroutine write_data
-
-
-    subroutine extract_and_write_data(choice_export, graph, fid, vtudata, offset)
-      integer(I1B), intent(in) :: choice_export
-      class(graph_t), intent(in) :: graph
-      integer, intent(in) :: fid
-      type(vtuio_data_t), intent(in), optional :: vtudata
-      integer, intent(inout), optional :: offset
-!
-! Copy data to rdata/idata arrays and call write_data
-! Must be called twice - see write_data for details
-!
-      integer, allocatable :: idata(:,:)
-      real(dp), allocatable :: rdata(:,:)
-      integer :: nitems, i, j, choice_import
-
-      block
-        integer :: npoints, ncells
-        call get_counts(graph, npoints, ncells)
-        select case(choice_export)
-        case(META_IS_POINT)
-          nitems = npoints
-          select type(graph)
-          class is (mesh_t)
-            ! no data written to point data section
-            return
-          class default
-            ! data marked as point data exported from vertices to point data section
-            choice_import = META_IS_POINT
-          end select
-        case(META_IS_CELL)
-          nitems = ncells
-          select type(graph)
-          class is (mesh_t)
-            ! data marked as point data imported from vertices to cell data section
-            choice_import = META_IS_POINT
-          class default
-            ! data marked as cell data imported from edges to cell data section
-            choice_import = META_IS_CELL
-          end select
-        case default
-          error stop 'extract and write data - invalid data_export'
-        end select
-      end block
-      if (present(vtudata)) then
-        if (allocated(vtudata%meta)) then
-          do i=1,size(vtudata%meta)
-            associate(m=>vtudata%meta(i))
-              if (m%iclass==choice_import+META_IS_REAL) then
-                ! real data exported within current context
-                call reallocate(rdata, [m%ncomp, nitems])
-
-                if (.not. present(offset)) then
-                  select case(choice_import)
-                  case(META_IS_POINT)
-                    do j=1,nitems
-                      rdata(:,j) = graph%vertices(j)%rpar(m%start:m%start+m%ncomp-1)
-                    end do
-                  case(META_IS_CELL)
-                    do j=1,nitems
-                      rdata(:,j) = graph%edges(j)%rpar(m%start:m%start+m%ncomp-1)
-                    end do
-                  end select
-                end if
-                call write_data(fid, m%nbytes, trim(m%label), rdata=rdata, offset=offset)
-
-              else if (m%iclass==choice_import+META_IS_INT) then
-                ! integer data exported within current context
-                call reallocate(idata, [m%ncomp, nitems])
-
-                if (.not. present(offset)) then
-                  select case(choice_import)
-                  case(META_IS_POINT)
-                    do j=1,nitems
-                      idata(:,j) = graph%vertices(j)%ipar(m%start:m%start+m%ncomp-1)
-                    end do
-                  case(META_IS_CELL)
-                    do j=1,nitems
-                      idata(:,j) = graph%edges(j)%ipar(m%start:m%start+m%ncomp-1)
-                    end do
-                  end select
-                end if
-                call write_data(fid, m%nbytes, trim(m%label), idata=idata, offset=offset)
-
-              end if
-            end associate
-          end do
-        end if
-      end if
-
-    end subroutine extract_and_write_data
 
 
     subroutine write_time_value(fid, time)
@@ -774,12 +851,14 @@ integer :: ncomp
                 call parse_dataarray(cell_data, trim(m%label), type, ncomp, &
                     offset_meta(i))
 print *, trim(m%label), ncomp, type, offset_meta(i)
+print *, 'Type match ', get_data_text(2*(m%iclass/2),m%nbytes)=='"'//trim(type)//'"'
               end if
             case(META_IS_POINT)
               if (associated(point_data)) then
                 call parse_dataarray(point_data, trim(m%label), type, ncomp, &
                     offset_meta(i))
 print *, trim(m%label), ncomp, type, offset_meta(i)
+print *, 'Type match ', get_data_text(2*(m%iclass/2),m%nbytes)=='"'//trim(type)//'"'
               end if
             case default
               error stop 'vtuio_read - invalid branch'
@@ -1115,30 +1194,6 @@ print *, trim(m%label), ncomp, type, offset_meta(i)
     end function parse_value2
 
 
-    subroutine reallocate_real(arr, required_shape)
-      real(DP), intent(inout), allocatable :: arr(:,:)
-      integer, intent(in) :: required_shape(2)
-
-      if (allocated(arr)) then
-        if (any(shape(arr) /= required_shape)) deallocate(arr)
-      end if
-      if (.not. allocated(arr)) &
-          allocate(arr(required_shape(1), required_shape(2)))
-    end subroutine reallocate_real
-
-
-    subroutine reallocate_int(arr, required_shape)
-      integer, intent(inout), allocatable :: arr(:,:)
-      integer, intent(in) :: required_shape(2)
-
-      if (allocated(arr)) then
-        if (any(shape(arr) /= required_shape)) deallocate(arr)
-      end if
-      if (.not. allocated(arr)) &
-          allocate(arr(required_shape(1), required_shape(2)))
-    end subroutine reallocate_int
-
-
     ! ==============================
     ! Organize real and integer data
     ! ==============================
@@ -1160,10 +1215,9 @@ print *, trim(m%label), ncomp, type, offset_meta(i)
       if (ncomp /= 1 .and. ncomp /=3) &
           print '("WARNING: expected scalar or 3d-vector")'
       block
-        character(len=10) :: data_text
         integer :: data_kind, ubound
         ! error stops if nbytes/iclass combination is invalid
-        call data_descriptors(2*(iclass/2), nbytes, data_kind, data_text)
+        data_kind = get_data_kind(2*(iclass/2), nbytes)
         ! validate start
         select case(iclass)
         case(META_IS_REAL + META_IS_POINT)
