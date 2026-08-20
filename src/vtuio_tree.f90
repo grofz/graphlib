@@ -183,7 +183,7 @@ counter = counter - 1
       &  print *, 'vtuiotree_read WARNING finished, but not at the end of file'
 
       close(fid)
-print '("File size ",i0," bytes. Scan completed.")', pos-1
+print '("File ",a,": size ",i0," bytes. Scan completed.")', trim(file), pos-1
     end subroutine vtuio_tree_read
 
 

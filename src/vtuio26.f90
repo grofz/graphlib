@@ -24,7 +24,8 @@
 ! THIS IS A MODIFIED VERSION (July 2026)
 
   module vtuio_mod
-    use graph_mod, only : graph_t, graph_handle_t=>handle_t, edge_t, vertex_t
+    use graph_mod, only : graph_t, graph_handle_t=>handle_t, edge_t, vertex_t, &
+        MAP_NULL
     use graph_user_mod, only : VSIZE_RPAR, VSIZE_IPAR, ESIZE_RPAR, ESIZE_IPAR
     use mesh_mod, only : mesh_t, point_t, cell_t, mesh_handle_t
     use vtuio_tree_mod, only : object_t, vtuio_tree_read
@@ -188,6 +189,8 @@ integer, parameter :: MASK_RADIUS=1, MASK_POSITION=2, MASK_POINT_TYPE=3, MASK_CE
         case default
           error stop 'get_data_kind - 1 4 8 bytes for int data'
         end select
+      case default
+        error stop 'gey_data_kind - int_or_real value invalid'
       end select
     end function get_data_kind
 
@@ -766,20 +769,16 @@ end subroutine
 ! Read from VTU file
 !
       integer :: fid, npoints, ncells, ios, i, npoints_per_cell
-      integer :: offset_points, offset_cones, offset_offsets, offset_types
+      integer :: offset_points, offset_connectivity, offset_offsets, offset_types
       integer, allocatable :: offset_meta(:)
-      integer :: time_pos(2), data_pos(2)
+      integer :: time_pos(2), binary_start
       integer(HEADERTYPE_KIND) :: nblock   ! change KIND if error (!) TODO improve doc
-      integer(CONNECTIONS_KIND) :: vids(2)
-      integer, allocatable :: idata(:)
       real(DP) :: time0
-      real(DP), allocatable :: rdata(:)
       type(object_t), target :: root
-      type(object_t), pointer :: grid, piece, opoints, ocells, data_root
+      type(object_t), pointer :: grid, piece, opoints, ocells
       character(len=1) :: ch
-      type(graph_handle_t), allocatable :: graph_points(:)
-      type(mesh_handle_t), allocatable :: mesh_points(:)
-      type(graph_handle_t) :: cone
+      type(graph_handle_t), allocatable :: graph_points(:), graph_cells(:)
+      type(mesh_handle_t), allocatable :: mesh_points(:), mesh_cells(:)
 
       ! PART 0
       select type(graph)
@@ -810,6 +809,11 @@ end subroutine
       ! get "npoints" and "ncells"
       npoints = parse_value(piece, 'NumberOfPoints', 'npoints')
       ncells = parse_value(piece, 'NumberOfCells', 'ncells')
+      if (npoints<=0) error stop 'vtuio_read - positive value of npoints required'
+      if (ncells<0) error stop 'vtuio_read - ncells is negative'
+      if (ncells==0) error stop 'vtuio_read - zero ncells not supported'
+        ! reject empty graphs/meshes for now, to support it later, division
+        ! by zero must be redolved in code below
 
       ! get offsets for points and connections
       opoints => piece%findtag('Points')
@@ -820,8 +824,8 @@ end subroutine
       ocells => piece%findtag('Cells')
       if (.not. associated(ocells)) error stop &
           'vtuio_read - tag "Cells" not found'
-      offset_cones = parse_value(ocells, &
-          'Name', 'connectivity', 'offset', 'offset_cones')
+      offset_connectivity = parse_value(ocells, &
+          'Name', 'connectivity', 'offset', 'offset_connectivity')
       offset_offsets = parse_value(ocells, &
           'Name', 'offsets', 'offset', 'offset_offsets')
       offset_types = parse_value(ocells, &
@@ -855,7 +859,7 @@ end subroutine
 
         do i=1, size(offset_meta)
           associate(m=>vtudata%meta(i))
-            select case (mod(m%iclass,2)) ! mode_import 
+            select case (mod(m%iclass,2_I1B)) ! mode_import
             case(META_IS_POINT)
               select type(graph)
               class is (mesh_t)
@@ -881,7 +885,7 @@ end subroutine
             end select
 
             if(associated(block_read)) then
-              call parse_dataarray(block_read, trim(m%label), type, ncomp, &
+              call inspect_dataarray(block_read, trim(m%label), type, ncomp, &
                   offset_meta(i))
             end if
             if (offset_meta(i)==DATAARRAY_NOT_FOUND) then
@@ -902,14 +906,6 @@ end subroutine
         end do
       end block
 
-      ! where binary data start?
-      data_root => root%findtag('AppendedData')
-      if (.not. associated(grid)) error stop &
-      & 'vtuio_read - tag "AppendedData" not found'
-      data_pos = data_root%findraw()
-#ifdef DEBUG
-      print '("data_pos ",i0,1x,i0)', data_pos
-#endif
 
 
       ! PART TWO
@@ -918,16 +914,33 @@ end subroutine
       ! and verify it match the expected value.
       open(newunit=fid, file=file//SUFFIX, status='old', access='stream')
 
-      ! Reposition "data_pos" to start at "_" marker
-      do
-        read(fid, pos=data_pos(1)) ch
-        if (ch==' ' .or. ch==LF) then
-          data_pos(1) = data_pos(1) + 1
-          cycle
-        end if
-        if (ch /= '_') error stop 'vtuio_read - could not find appended data'
-        exit
-      end do
+      block
+        integer :: data_pos(2)
+        type(object_t), pointer :: data_root
+
+        ! where binary data start?
+        data_root => root%findtag('AppendedData')
+        if (.not. associated(data_root)) error stop &
+          & 'vtuio_read - tag "AppendedData" not found'
+        data_pos = data_root%findraw()
+#ifdef DEBUG
+        print '("data_pos ",i0,1x,i0)', data_pos
+#endif
+        ! Reposition "data_pos" to start at "_" marker
+        do
+          read(fid, pos=data_pos(1)) ch
+          if (ch==' ' .or. ch==LF) then
+            data_pos(1) = data_pos(1) + 1
+            cycle
+          end if
+          if (ch /= '_') error stop 'vtuio_read - could not find appended data'
+          binary_start = data_pos(1) + 1
+#ifdef DEBUG
+          print '("binary start ",i0)', binary_start
+#endif
+          exit
+        end do
+      end block
 
       ! First value in each data block is a header indicating the number of
       ! bytes for the datablock. Header can be 4 or 8 bytes integer.
@@ -936,7 +949,7 @@ end subroutine
       ! imported data will be shifted by 1 byte (!!!)
       ! TODO better validation???
       ! validate positions
-      read(fid, pos=data_pos(1)+1+offset_points) nblock
+      read(fid, pos=binary_start+offset_points) nblock
       associate(item=>int(nblock)/(3*npoints), check=>mod(int(nblock),3*npoints))
 #ifdef DEBUG
         print '("-points = ",i0,1x,i0)', nblock, item
@@ -948,7 +961,7 @@ end subroutine
       end associate
 
       ! validate offsets
-      read(fid, pos=data_pos(1)+1+offset_offsets) nblock
+      read(fid, pos=binary_start+offset_offsets) nblock
       associate(item=>int(nblock)/ncells, check=>mod(int(nblock),ncells))
 #ifdef DEBUG
         print '("-offsets = ",i0,1x,i0)', nblock, item
@@ -960,7 +973,7 @@ end subroutine
       end associate
 
       ! validate connectivity and for mesh_t decide if mesh is 2D or 3D
-      read(fid, pos=data_pos(1)+1+offset_cones) nblock
+      read(fid, pos=binary_start+offset_connectivity) nblock
       associate(item=>int(nblock)/(1*ncells), check=>mod(int(nblock),1*ncells))
 #ifdef DEBUG
         print '("-cones = ",i0,1x,i0)', nblock, item
@@ -986,7 +999,7 @@ end subroutine
 #endif
 
       ! validate types
-      read(fid, pos=data_pos(1)+1+offset_types) nblock
+      read(fid, pos=binary_start+offset_types) nblock
       associate(item=>int(nblock)/ncells, check=>mod(int(nblock),ncells))
 #ifdef DEBUG
         print '("-types = ",i0,1x,i0)', nblock, item
@@ -1003,10 +1016,10 @@ end subroutine
 
         do i=1, size(offset_meta)
           if (offset_meta(i)==DATAARRAY_NOT_FOUND) cycle
-          read(fid, pos=data_pos(1)+1+offset_meta(i)) nblock
+          read(fid, pos=binary_start+offset_meta(i)) nblock
 
           associate(m=>vtudata%meta(i))
-            select case (mod(m%iclass,2)) ! mode_import 
+            select case (mod(m%iclass,2_I1B)) ! mode_import
             case(META_IS_POINT)
               select type(graph)
               class is (mesh_t)
@@ -1070,64 +1083,91 @@ end subroutine
         allocate(mesh_points(npoints))
       end if
 
-      read(fid, pos=data_pos(1)+1+offset_points) nblock ! skip header
       block
-        real(POSITIONS_KIND) :: xloc(3)
+        real(POSITIONS_KIND) :: position(3)
         integer :: ipar(VSIZE_IPAR)
         real(DP) :: rpar(VSIZE_RPAR)
-        ipar = -77 ! arbitrary values (for debugging)
-        rpar = 0.11e-20_dp ! arbitrary values
+  ipar = -77 ! arbitrary values (for debugging)
+  rpar = 0.11e-20_dp ! arbitrary values (for debugging)
+
+        read(fid, pos=binary_start+offset_points) nblock ! skip header
         do i=1, npoints
-          read(fid) xloc
+          read(fid) position
           select type(graph)
           class is (mesh_t)
-            mesh_points(i) = graph%add_point(real(xloc, DP))
+            mesh_points(i) = graph%add_point(real(position, DP))
           class default
-            rpar(position_id:position_id+2) = real(xloc, DP)
+            rpar(position_id:position_id+2) = real(position, DP)
             graph_points(i) = graph%add_vertex(ipar, rpar)
           end select
         end do
       end block
 
-!     if (offset_r >= 0) then
-!       call read_data(fid, data_pos(1)+1+offset_r, npoints, rdata=rdata)
-!       graph%vertices(1:npoints)%rpar(mask(MASK_RADIUS)) = rdata
-!     else
-!       print '("VTU file Warning: radius component is not present")'
-!     end if
+      !TODO offset_meta meaning changing here, rewrite it for safety
+      where (offset_meta /= DATAARRAY_NOT_FOUND)
+        ! offset is now absolute / not relative to aooended data (TODO)
+        offset_meta = binary_start+offset_meta
+      end where
 
-!     if (offset_at >= 0) then
-!       call read_data(fid, data_pos(1)+1+offset_at, npoints, idata=idata)
-!       graph%vertices(1:npoints)%ipar(mask(MASK_POINT_TYPE)) = idata
-!     else
-!       print '("VTU file Warning: point type component is not present")'
-!     end if
+      ! Import from PointData block to vertices ipar/rpar arrays (graph_t only)
+      select type(graph)
+      class is (mesh_t)
+        continue
+      class default
+        call read_and_import_data(graph, fid,offset_meta, pdata=graph_points, &
+            vtudata=vtudata)
+      end select
 
 
       ! PART FOUR
       ! Read connections from the file
-      read(fid, pos=data_pos(1)+1+offset_cones) nblock ! skip header
+      if (npoints_per_cell==2) then
+        allocate(graph_cells(ncells))
+        allocate(mesh_cells(0))
+      else
+        allocate(graph_cells(0))
+        allocate(mesh_cells(ncells))
+      end if
+
       block
-        type(edge_t) :: edummy
-        integer :: ipar(size(edummy%ipar))
-        real(DP) :: rpar(size(edummy%rpar))
-        ipar = -42         ! arbitrary values
-        rpar = 0.11e-20_dp ! arbitrary values
+        integer :: ipar(ESIZE_IPAR)
+        real(DP) :: rpar(ESIZE_RPAR)
+        integer(CONNECTIONS_KIND) :: vids(4)
+ ipar = -42         ! arbitrary values
+ rpar = 0.11e-20_dp ! arbitrary values
+
+        read(fid, pos=binary_start+offset_connectivity) nblock ! skip header
         do i=1, ncells
-          read(fid) vids
+          read(fid) vids(1:npoints_per_cell)
           vids = vids + 1 ! our indices start at 1 (not 0)
-          if (any(vids<1) .or. any(vids>npoints)) &
-            & error stop 'vtuio_read - connection points at non-existent atom'
-          cone = graph%add_edge(graph_points(vids(1)), graph_points(vids(2)), ipar, rpar)
+          if (any(vids(1:npoints_per_cell) < 1) .or. &
+              any(vids(1:npoints_per_cell) > npoints)) &
+              error stop 'vtuio_read - connection reference out of bound'
+          select type (graph)
+          class is (mesh_t)
+            if (.not. graph%is_3d()) vids(4)=vids(3)
+            mesh_cells(i) = graph%add_cell([mesh_points(vids(1)), &
+                mesh_points(vids(2)),mesh_points(vids(3)),mesh_points(vids(4))])
+          class default
+            graph_cells(i) = graph%add_edge(graph_points(vids(1)), &
+                graph_points(vids(2)), ipar, rpar)
+          end select
         end do
       end block
 
-!     if (offset_ct >= 0) then
-!       call read_data(fid, data_pos(1)+1+offset_ct, ncells, idata=idata)
-!       graph%edges(1:ncells)%ipar(mask(MASK_CELL_TYPE)) = idata
-!     else
-!       print '("VTU file Warning: cell type component is not present")'
-!     end if
+      ! Import from CellData block to vertices (mesh_t) or edges (graph_t)
+      ! ipar/rpar arrays
+      select type(graph)
+      class is (mesh_t)
+        call read_and_import_data(graph, fid, offset_meta, cdata=mesh_cells, &
+            vtudata=vtudata)
+      class default
+        call read_and_import_data(graph, fid, offset_meta, cdata=graph_cells, &
+            vtudata=vtudata)
+      end select
+
+      ! Explicitly deallocate all handles
+      deallocate(graph_points, graph_cells, mesh_points, mesh_cells)
 
       ! PART FIVE
       ! Read time component
@@ -1157,7 +1197,7 @@ end subroutine
     end subroutine vtuio_read1
 
 
-    subroutine parse_dataarray(obj, name, type, ncomp, offset)
+    subroutine inspect_dataarray(obj, name, type, ncomp, offset)
       type(object_t), intent(in), target :: obj
       character(len=*), intent(in) :: name
       character(len=:), allocatable, intent(out) :: type
@@ -1205,7 +1245,7 @@ end subroutine
       if (was_found) then
         read(text,*,iostat=ios) ncomp
         if (ios/=0) error stop &
-            'parse_dataarray - invalid number in NumberOfComponents attribute'
+            'inspect_dataarray - invalid number in NumberOfComponents attribute'
       else
         print '("WARNING - NumberOfComponents not present in ",a,&
             & ". Assuming 1")', name
@@ -1217,8 +1257,152 @@ end subroutine
       if (was_found) read(text,*,iostat=ios) offset
       if (ios/=0 .or. .not. was_found) &
         error stop &
-          'parse_dataarray - a compulsory offset could not be find/read'
-    end subroutine parse_dataarray
+          'inspect_dataarray - a compulsory offset could not be find/read'
+    end subroutine inspect_dataarray
+
+
+    subroutine read_and_import_data(graph, fid, offsets, pdata, cdata, vtudata)
+      class(graph_t), intent(inout) :: graph
+      integer, intent(in) :: fid
+      class(graph_handle_t), intent(in), optional :: pdata(:), cdata(:)
+      type(vtuio_data_t), intent(in), optional :: vtudata
+      integer, intent(in) :: offsets(:)
+!
+! Call read_data and copy data to vertices/edges rpar/ipar arrays
+!
+! IN
+!   fid         - opened input file unit
+!   offsets     - array of data block offsets
+!   pdata/cdata - handles to created objects
+!                 (either one or another must be provided)
+!   vtudata     - descriptor of additional data to be read (optional)
+!
+! IN/OUT
+!   graph       - mesh_t or graph_t object
+!
+      integer(I1B) :: mode_read, mode_import
+      integer :: nvals
+      integer, allocatable :: idata(:)
+      real(dp), allocatable :: rdata(:)
+      integer :: i, j, vid
+
+      if (present(pdata) .and. .not. present(cdata)) then
+        mode_read = META_IS_POINT
+      else if (present(cdata) .and. .not. present(pdata)) then
+        mode_read = META_IS_CELL
+      else
+        error stop 'read_and_import_data - pdata or cdata must be given but not both'
+      end if
+      ! mode_read indicates if this procedure is called after point objects
+      ! (vertices/points) or cell objects (edges/cells) were created
+
+      if (.not. present(vtudata)) return
+      if (.not. allocated(vtudata%meta)) return
+
+      do i=1,size(vtudata%meta)
+        associate(m=>vtudata%meta(i))
+          if (offsets(i) == DATAARRAY_NOT_FOUND) cycle
+          select case(mode_read)
+          case(META_IS_POINT) ! read points related data
+            select type(graph)
+            class is (mesh_t)
+              ! an item of meta leading to this branch should be already off
+              error stop 'read_and_import_data - no point-related data for mesh_t'
+            class default
+              ! vertices data
+              nvals = graph%nvertices * m%ncomp
+              mode_import = META_IS_POINT
+            end select
+          case(META_IS_CELL) ! read cells related data
+            select type(graph)
+            class is (mesh_t)
+              ! cell data stored at vertices arrays
+              nvals = graph%ncells * m%ncomp
+              mode_import = META_IS_POINT
+            class default
+              ! edges data
+              nvals = graph%nedges * m%ncomp
+              mode_import = META_IS_CELL
+            end select
+          case default
+            error stop 'read_and_import_data - invalid mode_read'
+          end select
+
+          ! this item of meta is not relevant in this call context
+          if (mod(m%iclass,2_I1B)/=mode_import) cycle
+
+          select case(2*(m%iclass/2))
+          case(META_IS_REAL)
+            call read_data(fid, offsets(i), nvals, rdata=rdata)
+
+            select case(mode_import)
+            case(META_IS_POINT)
+              do j=1, nvals/m%ncomp
+                select type(graph)
+                class is (mesh_t)
+                  ! position of the j-th created cell
+                  vid = cdata(j)%get_index_to_map(graph)
+                  ! position of a dual vertex to the j-th crated cell
+                  vid = graph%cells(vid)%dual_vertex%get_index_to_map(graph%graph_t)
+                class default
+                  ! position of the j-th created vertex
+                  vid = pdata(j)%get_index_to_map(graph)
+                end select
+                ! import to vertice
+                graph%vertices(vid)%rpar(m%start : m%start+m%ncomp-1) = &
+                  rdata( (j-1)*m%ncomp+1 : j*m%ncomp)
+              end do
+
+            case(META_IS_CELL)
+              do j=1, nvals/m%ncomp
+                select type(graph)
+                class is (mesh_t)
+                  error stop 'read_and_import_data - internal error CR'
+                class default
+                  ! position of the j-th created edge
+                  vid = cdata(j)%get_index_to_map(graph)
+                end select
+                ! import to edge array
+                graph%edges(vid)%rpar(m%start : m%start+m%ncomp-1) = &
+                  rdata( (j-1)*m%ncomp+1 : j*m%ncomp)
+              end do
+            end select
+
+          ! same as above, but for integer data
+          case(META_IS_INT)
+            call read_data(fid, offsets(i), nvals, idata=idata)
+
+            select case(mode_import)
+            case(META_IS_POINT)
+              do j=1, nvals/m%ncomp
+                select type(graph)
+                class is (mesh_t)
+                  vid = cdata(j)%get_index_to_map(graph)
+                  vid = graph%cells(vid)%dual_vertex%get_index_to_map(graph%graph_t)
+                class default
+                  vid = pdata(j)%get_index_to_map(graph)
+                end select
+                graph%vertices(vid)%ipar(m%start : m%start+m%ncomp-1) = &
+                  idata( (j-1)*m%ncomp+1 : j*m%ncomp)
+              end do
+
+            case(META_IS_CELL)
+              do j=1, nvals/m%ncomp
+                select type(graph)
+                class is (mesh_t)
+                  error stop 'read_and_import_data - intental error CI'
+                class default
+                  vid = cdata(j)%get_index_to_map(graph)
+                end select
+                graph%edges(vid)%ipar(m%start : m%start+m%ncomp-1) = &
+                  idata( (j-1)*m%ncomp+1 : j*m%ncomp)
+              end do
+            end select
+          end select
+        end associate
+      end do
+
+    end subroutine read_and_import_data
 
 
     subroutine read_data(fid, pos_start, nvals, rdata, idata)
@@ -1230,7 +1414,7 @@ end subroutine
 ! position. The header value read from file and the number of values "nvals"
 ! are used to determine whether values are written in 1/4/8 bytes format.
 !
-      integer, parameter :: IS_REAL=1, IS_INT=2
+      integer, parameter :: IS_REAL=2, IS_INT=0
       integer :: ritype ! IS_REAL or IS_INT
       integer(HEADERTYPE_KIND) :: nblock
       integer :: nbytes
@@ -1253,8 +1437,8 @@ end subroutine
       read(fid, pos=pos_start) nblock
       nbytes = int(nblock)/nvals
 #ifdef DEBUG
-      print '("read_data - ",i0," blocks, ",i0," bytes. Zero check ",i0)', &
-          nblock, nbytes, mod(int(nblock),nvals)
+      print '("read_data - ",i0," bytes, ",i0," values. ",i0," bytes_per_value. Zero check ",i0)', &
+          nblock, nvals, nbytes, mod(int(nblock),nvals)
 #endif
       if (mod(int(nblock),nvals)/=0) error stop &
       & 'read_data - validation fails (input data inconsistent)'
@@ -1265,11 +1449,11 @@ end subroutine
         case(4)
           allocate(rdata32(nvals))
           read(fid) rdata32
-          rdata = rdata32
+          rdata = real(rdata32, DP)
         case(8)
           allocate(rdata64(nvals))
           read(fid) rdata64
-          rdata = real(rdata64)
+          rdata = real(rdata64, DP)
         case default
           error stop 'read_data - unsupported real data kind'
         end select

@@ -1,18 +1,20 @@
 program test_mesh
   use iso_fortran_env, only : dp=>real64, output_unit
   use mesh_mod, only : mesh_t, mesh_handle_t
-  use vtuio_mod, only : vtuio_write, vtuio_data_t
-  use map_mod, only : VPOS_TYPE
+  use vtuio_mod, only : vtuio_write, vtuio_data_t, vtuio_read
+  use map_mod, only : VPOS_TYPE, VPOS_X
   implicit none (type, external)
 
   type(vtuio_data_t) :: vtuio
-  type(mesh_t) :: grid, grid3d
+  type(mesh_t) :: grid, grid3d, grid_read, grid3d_read
   type(mesh_handle_t), allocatable :: parr(:), carr(:)
   integer :: i
 
 
   call grid%initialize(is_3d=.false.)
   call vtuio%add_item('type', VPOS_TYPE, 0, 1, 4)
+  call vtuio%add_item('velo', VPOS_X, 2, 3, 8)
+  call vtuio%add_item('ignore', 1, 3, 1, 4)
 
   allocate(parr(11))
   parr(1) =grid%add_point(real([1.0, 0.0, 0.0],dp))
@@ -41,6 +43,7 @@ program test_mesh
 
   do i=1, grid%nvertices
     grid%vertices(i)%ipar(VPOS_TYPE) = i
+    grid%vertices(i)%rpar(VPOS_X:VPOS_X+2) = grid%points(i)%position
   end do
   call grid%print(output_unit)
   call vtuio_write('mesh', grid, vtudata=vtuio)
@@ -63,4 +66,13 @@ program test_mesh
   end do
   call grid3d%print(output_unit)
   call vtuio_write('mesh3d', grid3d, vtudata=vtuio)
+
+  print *, 'TEST READ'
+  call vtuio_read('mesh', grid_read, vtudata=vtuio)
+  call grid_read%print(output_unit)
+  call vtuio_write('mesh_copy', grid_read, vtudata=vtuio)
+
+  call vtuio_read('mesh3d', grid3d_read, vtudata=vtuio)
+  call grid3d_read%print(output_unit)
+  call vtuio_write('mesh3d_copy', grid3d_read, vtudata=vtuio)
 end program
