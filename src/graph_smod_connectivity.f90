@@ -77,7 +77,7 @@
       lab_current = 0
 
       ! Stack for deep-first graph traversal (DFS)
-      call stack%initialize(chunksize=size(transfer(i,INTEGER_MOLD)))
+      call stack%initialize(chunksize=size(transfer(1,INTEGER_MOLD)))
 
       MAIN_LOOP: do i=1, this%nvertices
         ! Find the next unprocessed vertex and add it to the empty stack

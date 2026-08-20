@@ -699,7 +699,7 @@
       integer :: current_id, iedge, ngb_id
       type(iterator_t) :: iterator
 
-      call q%initialize(chunksize=size(transfer(current_id,INTEGER_MOLD)))
+      call q%initialize(chunksize=size(transfer(1,INTEGER_MOLD)))
       call q%enqueue(transfer(source_id,INTEGER_MOLD))
       prev_edge = MAP_NULL
       if (present(levels)) then

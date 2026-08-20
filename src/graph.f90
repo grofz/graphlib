@@ -1394,7 +1394,7 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
       allocate(visited(this%nvertices), source=.false.)
       allocate(prev_id(this%nvertices), source=MAP_NULL)
       this%vertices(1:this%nvertices)%rpar(position_distance) = huge(cost_to_ngb)
-      call pqueue%initialize(chunksize=size(transfer(i,INTEGER_MOLD)), ordering=PQUEUE_MIN)
+      call pqueue%initialize(chunksize=size(transfer(1,INTEGER_MOLD)), ordering=PQUEUE_MIN)
       allocate(handles(this%nvertices))
 
       ! Insert starting vertex to the queue
@@ -1444,7 +1444,7 @@ print '("temove_orphaned_edges: removed ",i0," edges")', nedges_removed0
         block
           type(stack_t) :: stack
 
-          call stack%initialize(chunksize=size(transfer(i,INTEGER_MOLD)))
+          call stack%initialize(chunksize=size(transfer(1,INTEGER_MOLD)))
           id_current = id_target
           do while (prev_id(id_current)/=MAP_NULL)
             call stack%push(transfer(id_current,INTEGER_MOLD))
