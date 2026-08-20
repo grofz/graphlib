@@ -24,9 +24,9 @@
 ! THIS IS A MODIFIED VERSION (July 2026)
 
   module vtuio_mod
-    use graph_mod, only : graph_t, handle_t, edge_t, vertex_t
+    use graph_mod, only : graph_t, graph_handle_t=>handle_t, edge_t, vertex_t
     use graph_user_mod, only : VSIZE_RPAR, VSIZE_IPAR, ESIZE_RPAR, ESIZE_IPAR
-    use mesh_mod, only : mesh_t, point_t, cell_t
+    use mesh_mod, only : mesh_t, point_t, cell_t, mesh_handle_t
     use vtuio_tree_mod, only : object_t, vtuio_tree_read
     use iso_fortran_env, only : &
     &   SP=>real32, DP=>real64, I4B=>int32, I8B=>int64, I1B=>int8, &
@@ -755,39 +755,45 @@ subroutine vtuio_read2(file, graph, mask, time, vtudata)
   end if
 end subroutine
 
+!TODO rename to vtuio_read
     subroutine vtuio_read1(file, graph, position_id, time, vtudata)
       character(len=*), intent(in) :: file
-      type(graph_t), intent(inout) :: graph
+      class(graph_t), intent(inout) :: graph
       integer, intent(in), optional :: position_id
       type(vtuio_data_t), intent(in), optional :: vtudata
       real(DP), intent(out), optional :: time
 !
 ! Read from VTU file
 !
-      integer :: fid, npoints, ncells, ios, i, n_meta
+      integer :: fid, npoints, ncells, ios, i, npoints_per_cell
       integer :: offset_points, offset_cones, offset_offsets, offset_types
       integer, allocatable :: offset_meta(:)
       integer :: time_pos(2), data_pos(2)
-      integer(HEADERTYPE_KIND) :: nblock   ! change KIND if error (!)
+      integer(HEADERTYPE_KIND) :: nblock   ! change KIND if error (!) TODO improve doc
       integer(CONNECTIONS_KIND) :: vids(2)
       integer, allocatable :: idata(:)
       real(DP) :: time0
-      real(POSITIONS_KIND) :: xloc(3)
       real(DP), allocatable :: rdata(:)
       type(object_t), target :: root
-      type(object_t), pointer :: grid, piece, opoints, ocells, point_data, &
-          cell_data, data_root
+      type(object_t), pointer :: grid, piece, opoints, ocells, data_root
       character(len=1) :: ch
-      type(handle_t), allocatable :: points(:)
-      type(handle_t) :: cone
+      type(graph_handle_t), allocatable :: graph_points(:)
+      type(mesh_handle_t), allocatable :: mesh_points(:)
+      type(graph_handle_t) :: cone
 
-      time0 = 0.0
-
-      n_meta = 0
-      if (present(vtudata)) then
-        if (allocated(vtudata%meta)) n_meta = size(vtudata%meta)
-      end if
-      allocate(offset_meta(n_meta), source=DATAARRAY_NOT_FOUND)
+      ! PART 0
+      select type(graph)
+      class is (mesh_t)
+        npoints_per_cell = 3 ! or 4
+        if (present(position_id)) error stop &
+            'vtuio_read = position_id should not be present for mesh_t'
+      class default
+        npoints_per_cell = 2
+        if (.not. present(position_id)) error stop &
+            'vtuio_read - position_id is required for graph_t'
+        if (position_id < 1 .or. position_id+2 > VSIZE_RPAR) error stop &
+            'vtuio_read - position_id is out of bounds'
+      end select
 
       ! PART ONE
       ! read and analyze the vtk-tree
@@ -835,36 +841,63 @@ end subroutine
 #endif
       end block
 
-      ! get offsets for PointData / CellData in vtudata
-      point_data => grid%findtag('PointData')
-      cell_data => grid%findtag('CellData')
-
+      ! get offsets for PointData / CellData
       block
-character(len=:), allocatable :: type
-integer :: ncomp
+        type(object_t), pointer :: block_read
+        character(len=:), allocatable :: type
+        integer :: ncomp, n_meta
+
+        n_meta = 0
+        if (present(vtudata)) then
+          if (allocated(vtudata%meta)) n_meta = size(vtudata%meta)
+        end if
+        allocate(offset_meta(n_meta), source=DATAARRAY_NOT_FOUND)
 
         do i=1, size(offset_meta)
           associate(m=>vtudata%meta(i))
-            select case (mod(m%iclass,2))
-            case(META_IS_CELL)
-              if(associated(cell_data)) then
-                call parse_dataarray(cell_data, trim(m%label), type, ncomp, &
-                    offset_meta(i))
-print *, trim(m%label), ncomp, type, offset_meta(i)
-print *, 'Type match ', get_data_text(2*(m%iclass/2),m%nbytes)=='"'//trim(type)//'"'
-              end if
+            select case (mod(m%iclass,2)) ! mode_import 
             case(META_IS_POINT)
-              if (associated(point_data)) then
-                call parse_dataarray(point_data, trim(m%label), type, ncomp, &
-                    offset_meta(i))
-print *, trim(m%label), ncomp, type, offset_meta(i)
-print *, 'Type match ', get_data_text(2*(m%iclass/2),m%nbytes)=='"'//trim(type)//'"'
-              end if
+              select type(graph)
+              class is (mesh_t)
+                ! point data for vertice arrays imported from CellData block
+                block_read => grid%findtag('CellData')
+              class default
+                ! point data for vertice arrays imported from PointData block
+                block_read => grid%findtag('PointData')
+              end select
+            case(META_IS_CELL)
+              select type(graph)
+              class is (mesh_t)
+                ! cell data for edge arrays are ignored in mesh_t objects
+                print '("WARNING - vtudata label ",a, &
+                    &": cell data ignored in mesh_t objects")', trim(m%label)
+                cycle
+              class default
+                ! cell data for edge arrays imported from CellData block
+                block_read => grid%findtag('CellData')
+              end select
             case default
-              error stop 'vtuio_read - invalid branch'
+              error stop 'vtuio_read - invalid meta%iclass value'
             end select
-            if (offset_meta(i)==DATAARRAY_NOT_FOUND) &
-                print '("WARNING vtuio_read - ",a," not found in file")', trim(m%label)
+
+            if(associated(block_read)) then
+              call parse_dataarray(block_read, trim(m%label), type, ncomp, &
+                  offset_meta(i))
+            end if
+            if (offset_meta(i)==DATAARRAY_NOT_FOUND) then
+              print '("WARNING vtudata label ",a,": not found in file")', &
+                  trim(m%label)
+            else
+              if (ncomp /= m%ncomp .or. type /= get_data_text(2*(m%iclass/2),m%nbytes)) then
+                offset_meta(i) = DATAARRAY_NOT_FOUND
+                print '("WARNING vtudata label ",a,": attribute mismatch, skipping data block")', trim(m%label)
+                print '("  NumberOfComponents ",i0," (expected ",i0,") and type ",a," (expected ",a,")" )', &
+                    ncomp, m%ncomp, type, get_data_text(2*(m%iclass/2),m%nbytes)
+              end if
+            end if
+#ifdef DEBUG
+            print '("label ",a,": offset = ",i0)', trim(m%label), offset_meta(i)
+#endif
           end associate
         end do
       end block
@@ -881,6 +914,8 @@ print *, 'Type match ', get_data_text(2*(m%iclass/2),m%nbytes)=='"'//trim(type)/
 
       ! PART TWO
       ! Verify consistency of offsets / npoints / ncells with actual datablock
+      ! Read data block at position defined by offsets obtained in PART ONE
+      ! and verify it match the expected value.
       open(newunit=fid, file=file//SUFFIX, status='old', access='stream')
 
       ! Reposition "data_pos" to start at "_" marker
@@ -900,10 +935,11 @@ print *, 'Type match ', get_data_text(2*(m%iclass/2),m%nbytes)=='"'//trim(type)/
       ! 8 bytes headers read into 4 byte "nblock" will pass validation, but
       ! imported data will be shifted by 1 byte (!!!)
       ! TODO better validation???
+      ! validate positions
       read(fid, pos=data_pos(1)+1+offset_points) nblock
       associate(item=>int(nblock)/(3*npoints), check=>mod(int(nblock),3*npoints))
 #ifdef DEBUG
-        print '("-points = ",i0,1x,i0,1x,i0)', nblock, item, check
+        print '("-points = ",i0,1x,i0)', nblock, item
 #endif
         if (check/=0) error stop &
             'vtuio_read - validation fails, header size 32/64 mismatch?'
@@ -911,10 +947,11 @@ print *, 'Type match ', get_data_text(2*(m%iclass/2),m%nbytes)=='"'//trim(type)/
             'vtuio_read - validation fails, position kind mismatch'
       end associate
 
-      read(fid, pos=data_pos(1)+1+offset_cones) nblock
-      associate(item=>int(nblock)/(2*ncells), check=>mod(int(nblock),2*ncells))
+      ! validate offsets
+      read(fid, pos=data_pos(1)+1+offset_offsets) nblock
+      associate(item=>int(nblock)/ncells, check=>mod(int(nblock),ncells))
 #ifdef DEBUG
-        print '("-cones = ",i0,1x,i0,1x,i0)', nblock, item, check
+        print '("-offsets = ",i0,1x,i0)', nblock, item
 #endif
         if (check/=0) error stop &
             'vtuio_read - validation fails, header size 32/64 mismatch?'
@@ -922,32 +959,133 @@ print *, 'Type match ', get_data_text(2*(m%iclass/2),m%nbytes)=='"'//trim(type)/
             'vtuio_read - validation fails, connections kind mismatch'
       end associate
 
-      read(fid, pos=data_pos(1)+1+offset_offsets) nblock
+      ! validate connectivity and for mesh_t decide if mesh is 2D or 3D
+      read(fid, pos=data_pos(1)+1+offset_cones) nblock
+      associate(item=>int(nblock)/(1*ncells), check=>mod(int(nblock),1*ncells))
 #ifdef DEBUG
-      print '("-offsets = ",i0,1x,i0,1x,i0)', nblock, int(nblock)/(ncells), mod(int(nblock),ncells)
+        print '("-cones = ",i0,1x,i0)', nblock, item
+#endif
+        if (check/=0) error stop &
+            'vtuio_read - validation fails, header size 32/64 mismatch?'
+        if (npoints_per_cell == 2) then
+          if (item/=2*CONNECTIONS_SIZE) error stop &
+              'vtuio_read - validation fails, connections kind mismatch'
+        else
+          if (item==3*CONNECTIONS_SIZE) then
+            npoints_per_cell = 3
+          else if (item==4*CONNECTIONS_SIZE) then
+            npoints_per_cell = 4
+          else
+            error stop &
+              'vtuio_read - validation fails, connections kind mismatch'
+          end if
+        end if
+      end associate
+#ifdef DEBUG
+      print '("npoints_per_cell = ",i0)', npoints_per_cell
 #endif
 
+      ! validate types
       read(fid, pos=data_pos(1)+1+offset_types) nblock
+      associate(item=>int(nblock)/ncells, check=>mod(int(nblock),ncells))
 #ifdef DEBUG
-      print '("-types = ",i0,1x,i0,1x,i0)', nblock, int(nblock)/(ncells), mod(int(nblock),ncells)
+        print '("-types = ",i0,1x,i0)', nblock, item
 #endif
+        if (check/=0) error stop &
+            'vtuio_read - validation fails, header size 32/64 mismatch?'
+        if (item/=CELLTYPE_SIZE) error stop &
+            'vtuio_read - validation fails, connections kind mismatch'
+      end associate
+
+      ! validate PointData/CellData
+      block
+        integer :: items_expected, nbytes
+
+        do i=1, size(offset_meta)
+          if (offset_meta(i)==DATAARRAY_NOT_FOUND) cycle
+          read(fid, pos=data_pos(1)+1+offset_meta(i)) nblock
+
+          associate(m=>vtudata%meta(i))
+            select case (mod(m%iclass,2)) ! mode_import 
+            case(META_IS_POINT)
+              select type(graph)
+              class is (mesh_t)
+                ! point data for vertice arrays imported from CellData block
+                items_expected = ncells * m%ncomp
+              class default
+                ! point data for vertice arrays imported from PointData block
+                items_expected = npoints * m%ncomp
+              end select
+            case(META_IS_CELL)
+              select type(graph)
+              class is (mesh_t)
+                ! cell data for edge arrays are ignored in mesh_t objects
+                error stop 'vtuio_read - offset should be -1 here (iternal error)'
+              class default
+                ! cell data for edge arrays imported from CellData block
+                items_expected = ncells * m%ncomp
+              end select
+            case default
+              error stop 'vtuio_read - invalid meta%iclass value 2'
+            end select
+
+            nbytes = int(nblock)/items_expected
+            if (nbytes/=m%nbytes) then
+              print '("vtudata label ",a,": bytes per item ",i0,", expecting ",i0)', &
+                  trim(m%label), nbytes, m%nbytes
+              error stop
+            else
+              continue
+#ifdef DEBUG
+              print '("vtudata label ",a,": bytes per item ",i0,", expecting ",i0)', &
+                  trim(m%label), nbytes, m%nbytes
+#endif
+            end if
+          end associate
+        end do
+      end block
 
 
       ! PART THREE
       ! Initialize and read points from the file
-      call graph%initialize(npoints, ncells, is_directed_graph=.false.)
-      allocate(points(npoints))
+      select case (npoints_per_cell)
+      case(2) ! vertex/edge graph
+        call graph%initialize( &
+            vcapacity=npoints, ecapacity=ncells, is_directed_graph=.false.)
+      case(3) ! a 2D mesh
+        call graph%initialize(vcapacity=ncells, ccapacity=ncells, &
+            pcapacity=npoints, is_directed_graph=.false., is_3d=.false.)
+      case(4) ! a 3D mesh
+        call graph%initialize(vcapacity=ncells, ccapacity=ncells, &
+            pcapacity=npoints, is_directed_graph=.false., is_3d=.true.)
+      case default
+        error stop 'vtuio_read - npoints_per_cell invalid'
+      end select
+
+      if (npoints_per_cell==2) then
+        allocate(graph_points(npoints))
+        allocate(mesh_points(0))
+      else
+        allocate(graph_points(0))
+        allocate(mesh_points(npoints))
+      end if
+
       read(fid, pos=data_pos(1)+1+offset_points) nblock ! skip header
       block
-        type(vertex_t) :: vdummy
-        integer :: ipar(size(vdummy%ipar))
-        real(DP) :: rpar(size(vdummy%rpar))
+        real(POSITIONS_KIND) :: xloc(3)
+        integer :: ipar(VSIZE_IPAR)
+        real(DP) :: rpar(VSIZE_RPAR)
         ipar = -77 ! arbitrary values (for debugging)
         rpar = 0.11e-20_dp ! arbitrary values
         do i=1, npoints
           read(fid) xloc
-          rpar(position_id:position_id+2) = real(xloc, kind=DP)
-          points(i) = graph%add_vertex(ipar, rpar)
+          select type(graph)
+          class is (mesh_t)
+            mesh_points(i) = graph%add_point(real(xloc, DP))
+          class default
+            rpar(position_id:position_id+2) = real(xloc, DP)
+            graph_points(i) = graph%add_vertex(ipar, rpar)
+          end select
         end do
       end block
 
@@ -980,7 +1118,7 @@ print *, 'Type match ', get_data_text(2*(m%iclass/2),m%nbytes)=='"'//trim(type)/
           vids = vids + 1 ! our indices start at 1 (not 0)
           if (any(vids<1) .or. any(vids>npoints)) &
             & error stop 'vtuio_read - connection points at non-existent atom'
-          cone = graph%add_edge(points(vids(1)), points(vids(2)), ipar, rpar)
+          cone = graph%add_edge(graph_points(vids(1)), graph_points(vids(2)), ipar, rpar)
         end do
       end block
 
@@ -1001,6 +1139,10 @@ print *, 'Type match ', get_data_text(2*(m%iclass/2),m%nbytes)=='"'//trim(type)/
           read(fid, pos=time_pos(1)) val
           read(val,*,iostat=ios) time0
           if (ios/=0) error stop 'vtuio_read - error reading time value'
+        else
+          time0 = 0.0
+          if (present(time)) &
+              print '("WARNING - time component not found in VTU file")'
         end if
       end block
 
@@ -1047,14 +1189,13 @@ print *, 'Type match ', get_data_text(2*(m%iclass/2),m%nbytes)=='"'//trim(type)/
         allocate(character(len=0)::type)
         ncomp = 1
         offset = DATAARRAY_NOT_FOUND
-        print '("WARNING - DataArray ",a," not found")', name
         return
       end if
 
       text = dataarray%findval('type', was_found)
       if (was_found) then
-        allocate(character(len=len_trim(text)) :: type)
-        type = trim(text)
+        allocate(character(len=len_trim(text)+2) :: type)
+        type = '"'//trim(text)//'"'
       else
         allocate(character(len=0) :: type)
         print '("WARNING - type attribute not found in DataArray ",a)', name
