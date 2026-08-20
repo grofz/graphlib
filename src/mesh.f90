@@ -72,7 +72,7 @@ public order_point_indices
       integer, allocatable, private :: pmap(:), cmap(:)
           ! storing position of points/cells in "points"/"cells" arrays
       integer :: npoints=NOT_INITIALIZED, ncells=NOT_INITIALIZED
-      logical, private :: is_3d=.false.
+      logical, private :: is_3d_mesh=.false.
           ! .false. = triangular mesh (cell defined from 3 points)
           ! .true. = tetrahedral mesh (cell defined from 4 points)
       type(queue_t), private :: free_phandles, free_chandles
@@ -88,6 +88,7 @@ public order_point_indices
       procedure, non_overridable :: add_point => mesh_add_point
       procedure, non_overridable :: add_cell => mesh_add_cell
       procedure :: npoints_per_cell => mesh_npoints_per_cell
+      procedure, non_overridable :: is_3d => mesh_is_3d
     end type mesh_t
 
   contains
@@ -190,8 +191,14 @@ public order_point_indices
     pure integer function mesh_npoints_per_cell(this) result(n)
       class(mesh_t), intent(in) :: this
       n = 3
-      if (this%is_3d) n = 4
+      if (this%is_3d_mesh) n = 4
     end function mesh_npoints_per_cell
+
+
+    pure logical function mesh_is_3d(this) result(is)
+      class(mesh_t), intent(in) :: this
+      is = this%is_3d_mesh
+    end function mesh_is_3D
 
 
     subroutine mesh_initialize(this, vcapacity, ecapacity, is_directed_graph, &
@@ -211,8 +218,8 @@ public order_point_indices
           is_directed_graph=.false.)
 
       ! two-dimensional or three dimensional?
-      this%is_3d = .false. ! 2d is a default at the moment
-      if (present(is_3d)) this%is_3d = is_3d
+      this%is_3d_mesh = .false. ! 2d is a default at the moment
+      if (present(is_3d)) this%is_3d_mesh = is_3d
 
       ! reallocate all arrays to zero size
       if (allocated(this%points)) deallocate(this%points)
@@ -332,7 +339,7 @@ public order_point_indices
       end if
 
       ! For a 2-D mesh, reject positions above the reference point
-      if (.not. this%is_3d) then
+      if (.not. this%is_3d_mesh) then
         if (position(3) >= ORIENTATION_2D_REFPOINT(3)) error stop &
             'mesh_add_point - expecting z-coordinate bellow reference point'
       end if
@@ -444,7 +451,7 @@ print '("Point ",i0," - across is cell ",i0)', new_cell%points(i)%get_index_to_m
         end do
 
         ! Make sure handles at unused position are set to null in 2D-meshes
-        if (.not. this%is_3d) then
+        if (.not. this%is_3d_mesh) then
           new_cell%points(4)%graph_handle_t = &
               graph_handle_t(id=MAP_NULL, type=POINT_HANDLE_TYPE, version=1)
           new_cell%ngbcells(4)%graph_handle_t = &
@@ -494,7 +501,7 @@ print '("Cell added. Handle is ",i0)', handle%get_index_to_map(this)
         return
       end if
 
-      if (this%is_3d) then
+      if (this%is_3d_mesh) then
         text_meshdim = '3D mesh'
       else
         text_meshdim = '2D mesh'
@@ -623,7 +630,7 @@ print '("Cell added. Handle is ",i0)', handle%get_index_to_map(this)
 
       integer :: i
 
-      if (.not. mesh%is_3d) ids(4) = MAP_NULL
+      if (.not. mesh%is_3d_mesh) ids(4) = MAP_NULL
       do i=1, mesh%npoints_per_cell()
         ids(i) = mesh%index_from_handle(this%points(i)%graph_handle_t)
       end do
@@ -679,7 +686,7 @@ print '("Cell added. Handle is ",i0)', handle%get_index_to_map(this)
 
           a = p2 - p1
           b = p3 - p1
-          if (this%is_3d) then
+          if (this%is_3d_mesh) then
             c = p4 - p1
           else
             c = p_ref - p1
@@ -689,10 +696,10 @@ print '("Cell added. Handle is ",i0)', handle%get_index_to_map(this)
         axb(1) = a(2)*b(3) - a(3)*b(2)
         axb(2) = a(3)*b(1) - a(1)*b(3)
         axb(3) = a(1)*b(2) - a(2)*b(1)
-        ! d determines the side of the plane on which p4/p_ref lies  
+        ! d determines the side of the plane on which p4/p_ref lies
         d = dot_product(axb, c)
         ! tolerance for the signed volume calculation
-        tol = eps*max(1.0, maxval(abs(a))*maxval(abs(b))*maxval(abs(c)))
+        tol = eps*max(1.0_dp, maxval(abs(a))*maxval(abs(b))*maxval(abs(c)))
       end block
 
       if (abs(d)<tol) then
