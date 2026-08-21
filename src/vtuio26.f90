@@ -825,7 +825,7 @@ end subroutine
       if (ncells<0) error stop 'vtuio_read - ncells is negative'
       if (ncells==0) error stop 'vtuio_read - zero ncells not supported'
         ! reject empty graphs/meshes for now, to support it later, division
-        ! by zero must be redolved in code below
+        ! by zero must be resolved in code below
 
       ! get offsets for points and connections
       opoints => piece%findtag('Points')
@@ -919,18 +919,17 @@ end subroutine
       end block
 
 
-
       ! PART TWO
       ! Verify consistency of offsets / npoints / ncells with actual datablock
       ! Read data block at position defined by offsets obtained in PART ONE
-      ! and verify it match the expected value.
+      ! and verify it matches with the expected value.
       open(newunit=fid, file=file//SUFFIX, status='old', access='stream')
 
+      ! Where binary data start?
       block
         integer :: data_pos(2)
         type(object_t), pointer :: data_root
 
-        ! where binary data start?
         data_root => root%findtag('AppendedData')
         if (.not. associated(data_root)) error stop &
           & 'vtuio_read - tag "AppendedData" not found'
@@ -959,72 +958,96 @@ end subroutine
       !
       ! 8 bytes headers read into 4 byte "nblock" will pass validation, but
       ! imported data will be shifted by 1 byte (!!!)
-      ! TODO better validation???
+! TODO better validation???
+
+      99 format(2x,a,": nblock = ",i0,"  expected = ",i0)
+
       ! validate positions
       read(fid, pos=binary_start+offset_points) nblock
-      associate(item=>int(nblock)/(3*npoints), check=>mod(int(nblock),3*npoints))
+      associate(expected=>int(3*npoints*POSITIONS_SIZE,kind=HEADERTYPE_KIND))
 #ifdef DEBUG
-        print '("-points = ",i0,1x,i0)', nblock, item
+        print 99, 'points', nblock, expected
 #endif
-        if (check/=0) error stop &
+        if (expected/=nblock) error stop &
             'vtuio_read - validation fails, header size 32/64 mismatch?'
-        if (item/=POSITIONS_SIZE) error stop &
-            'vtuio_read - validation fails, position kind mismatch'
       end associate
 
       ! validate offsets
       read(fid, pos=binary_start+offset_offsets) nblock
-      associate(item=>int(nblock)/ncells, check=>mod(int(nblock),ncells))
+      associate(expected=>int(ncells*CONNECTIONS_SIZE,kind=HEADERTYPE_KIND))
 #ifdef DEBUG
-        print '("-offsets = ",i0,1x,i0)', nblock, item
+        print 99, 'offsets', nblock, expected
 #endif
-        if (check/=0) error stop &
+        if (expected/=nblock) error stop &
             'vtuio_read - validation fails, header size 32/64 mismatch?'
-        if (item/=CONNECTIONS_SIZE) error stop &
-            'vtuio_read - validation fails, connections kind mismatch'
       end associate
 
       ! validate connectivity and for mesh_t decide if mesh is 2D or 3D
       read(fid, pos=binary_start+offset_connectivity) nblock
-      associate(item=>int(nblock)/(1*ncells), check=>mod(int(nblock),1*ncells))
+      block
+        integer(HEADERTYPE_KIND) :: size_per_ref, refs_per_cell, check
+        size_per_ref = int(ncells*CONNECTIONS_SIZE,kind=HEADERTYPE_KIND)
+        refs_per_cell = nblock/size_per_ref
+        check = mod(nblock,size_per_ref)
 #ifdef DEBUG
-        print '("-cones = ",i0,1x,i0)', nblock, item
+        print '("  connectivity: &
+            &nblock = ",i0,"  size/ref = ",i0,"  refs/cell = ",i0)', &
+            nblock, size_per_ref, refs_per_cell
 #endif
         if (check/=0) error stop &
             'vtuio_read - validation fails, header size 32/64 mismatch?'
         if (npoints_per_cell == 2) then
-          if (item/=2*CONNECTIONS_SIZE) error stop &
-              'vtuio_read - validation fails, connections kind mismatch'
+          if (refs_per_cell/=2) error stop &
+            'vtuio_read - validation fails, refs_per_cell=2 expected for graph_t'
+        else if (refs_per_cell==3) then
+          npoints_per_cell = 3
+        else if (refs_per_cell==4) then
+          npoints_per_cell = 4
         else
-          if (item==3*CONNECTIONS_SIZE) then
-            npoints_per_cell = 3
-          else if (item==4*CONNECTIONS_SIZE) then
-            npoints_per_cell = 4
-          else
-            error stop &
-              'vtuio_read - validation fails, connections kind mismatch'
-          end if
+          error stop &
+            'vtuio_read - validation fails, refs_per_cell=3 or 4 expected for meshat_'
         end if
-      end associate
-#ifdef DEBUG
-      print '("npoints_per_cell = ",i0)', npoints_per_cell
-#endif
+      end block
 
       ! validate types
-      read(fid, pos=binary_start+offset_types) nblock
-      associate(item=>int(nblock)/ncells, check=>mod(int(nblock),ncells))
+      block
+        integer(CELLTYPE_KIND), allocatable :: celltypes(:)
+
+        read(fid, pos=binary_start+offset_types) nblock
+!       associate(item=>int(nblock)/ncells, check=>mod(int(nblock),ncells))
+        associate(expected=>int(ncells*CELLTYPE_SIZE,kind=HEADERTYPE_SIZE))
 #ifdef DEBUG
-        print '("-types = ",i0,1x,i0)', nblock, item
+          print 99, 'types', nblock, expected
 #endif
-        if (check/=0) error stop &
-            'vtuio_read - validation fails, header size 32/64 mismatch?'
-        if (item/=CELLTYPE_SIZE) error stop &
-            'vtuio_read - validation fails, connections kind mismatch'
-      end associate
+          if (nblock/=expected) error stop &
+              'vtuio_read - validation fails, header size 32/64 mismatch?'
+        end associate
+        allocate(celltypes(ncells))
+        read(fid) celltypes
+#ifdef DEBUG
+        if (ncells>0) print &
+            '("  vtk_type:  (line/triangle/tetra)  ",l1,"/",l1,"/",l1)', &
+            celltypes(1)==[VTK_LINE, VTK_TRIANGLE, VTK_TETRA]
+#endif
+        select case(npoints_per_cell)
+        case(2)
+          if (any(celltypes /= VTK_LINE)) error stop &
+            'vtuio_read - invalid cell type value - VTK_LINE expected'
+        case(3)
+          if (any(celltypes /= VTK_TRIANGLE)) error stop &
+            'vtuio_read - invalid cell type value - VTK_TRIANGLE expected'
+        case(4)
+          if (any(celltypes /= VTK_TETRA)) error stop &
+            'vtuio_read - invalid cell type value - VTK_TETRA expected'
+        case default
+          error stop 'vtuio_read - npoints_per_cell invalid (internal error)'
+        end select
+      end block
 
       ! validate PointData/CellData
       block
-        integer :: items_expected, nbytes
+        integer :: items_expected
+        integer(HEADERTYPE_KIND) :: expected
 
         do i=1, size(offset_meta)
           if (offset_meta(i)==DATAARRAY_NOT_FOUND) cycle
@@ -1054,16 +1077,14 @@ end subroutine
               error stop 'vtuio_read - invalid meta%iclass value 2'
             end select
 
-            nbytes = int(nblock)/items_expected
-            if (nbytes/=m%nbytes) then
-              print '("vtudata label ",a,": bytes per item ",i0,", expecting ",i0)', &
-                  trim(m%label), nbytes, m%nbytes
+            expected = int(items_expected*m%nbytes,kind=HEADERTYPE_KIND)
+            if (nblock/=expected) then
+              print 99, "(data) "//trim(m%label), nblock, expected
               error stop
             else
               continue
 #ifdef DEBUG
-              print '("vtudata label ",a,": bytes per item ",i0,", expecting ",i0)', &
-                  trim(m%label), nbytes, m%nbytes
+              print 99, "(data) "//trim(m%label), nblock, expected
 #endif
             end if
           end associate
@@ -1099,8 +1120,9 @@ end subroutine
         real(POSITIONS_KIND) :: position(3)
         integer :: ipar(VSIZE_IPAR)
         real(DP) :: rpar(VSIZE_RPAR)
-  ipar = -77 ! arbitrary values (for debugging)
-  rpar = 0.11e-20_dp ! arbitrary values (for debugging)
+
+        ipar = 0
+        rpar = 0.0 ! initialize to avoid NaN-like traps
 
         read(fid, pos=binary_start+offset_points) nblock ! skip header
         do i=1, npoints
@@ -1146,9 +1168,9 @@ end subroutine
         integer :: ipar(ESIZE_IPAR)
         real(DP) :: rpar(ESIZE_RPAR)
         integer(CONNECTIONS_KIND) :: vids(4)
- ipar = -42         ! arbitrary values
- rpar = 0.11e-20_dp ! arbitrary values
 
+        ipar = 0
+        rpar = 0.0 ! initialze to avoid NaN-like traps
         read(fid, pos=binary_start+offset_connectivity) nblock ! skip header
         do i=1, ncells
           read(fid) vids(1:npoints_per_cell)
@@ -1182,6 +1204,7 @@ end subroutine
       ! Explicitly deallocate all handles
       deallocate(graph_points, graph_cells, mesh_points, mesh_cells)
 
+
       ! PART FIVE
       ! Read time component
       block
@@ -1198,6 +1221,7 @@ end subroutine
               print '("WARNING - time component not found in VTU file")'
         end if
       end block
+
 
       ! THE END
       print '("VTU file read: points=",i0," cells=",i0)', npoints, ncells
@@ -1259,6 +1283,8 @@ end subroutine
         read(text,*,iostat=ios) ncomp
         if (ios/=0) error stop &
             'inspect_dataarray - invalid number in NumberOfComponents attribute'
+        if (ncomp < 1) error stop &
+            'inspect_dataarray - NumberOfComponents must be a positive number'
       else
         print '("WARNING - NumberOfComponents not present in ",a,&
             & ". Assuming 1")', name
@@ -1293,7 +1319,7 @@ end subroutine
 ! IN/OUT
 !   graph       - mesh_t or graph_t object
 !
-      integer(I1B) :: mode_read, mode_import
+      integer(I1B) :: mode_read
       integer :: nvals
       integer, allocatable :: idata(:)
       real(dp), allocatable :: rdata(:)
@@ -1310,92 +1336,88 @@ end subroutine
         mode_read = META_IS_CELL
         data => cdata
       else
-        error stop 'read_and_import_data - pdata or cdata must be given but not both'
+        error stop &
+            'read_and_import_data - pdata or cdata must be given but not both'
       end if
-      mode_import = mode_read
 
-! mode_read indicates if this procedure is called after point objects
-! (vertices/points) or cell objects (edges/cells) were created
-
-
-      do i=1,size(vtudata%meta)
+      METALOOP: do i=1, size(vtudata%meta)
         associate(m=>vtudata%meta(i))
           if (data_pos(i) < 0) cycle
-          nvals = size(data) * m%ncomp
 
           ! this item of meta is not relevant in this call context
-          if (mod(m%iclass,2_I1B)/=mode_import) cycle
+          if (mod(m%iclass,2_I1B)/=mode_read) cycle
 
-          select case(2*(m%iclass/2))
+          nvals = size(data) * m%ncomp
+
+          select case(2*(m%iclass/2)) ! REAL or INT
           case(META_IS_REAL)
             call read_data(fid, data_pos(i), nvals, rdata=rdata)
 
-            select case(mode_import)
-            case(META_IS_POINT)
-              do j=1, nvals/m%ncomp
-                select type(graph)
-                class is (mesh_t)
+            REALLOOP: do j=1, size(data)
+              select type(graph)
+              class is (mesh_t)
+                select case(mode_read)
+                case(META_IS_POINT)
                   ! position of the j-th created cell
                   vid = data(j)%get_index_to_map(graph)
-                  ! position of a dual vertex to the j-th crated cell
+                  ! position of the dual vertex to the created cell
                   vid = graph%cells(vid)%dual_vertex%get_index_to_map(graph%graph_t)
-                class default
-                  ! position of the j-th created vertex
-                  vid = data(j)%get_index_to_map(graph)
+                  graph%vertices(vid)%rpar(m%start : m%start+m%ncomp-1) = &
+                      rdata( (j-1)*m%ncomp+1 : j*m%ncomp)
+                case(META_IS_CELL)
+                  error stop &
+                      'read_and_import_data - mode_read must be P for mesh_t'
                 end select
-                ! import to vertice
-                graph%vertices(vid)%rpar(m%start : m%start+m%ncomp-1) = &
-                  rdata( (j-1)*m%ncomp+1 : j*m%ncomp)
-              end do
 
-            case(META_IS_CELL)
-              do j=1, nvals/m%ncomp
-                select type(graph)
-                class is (mesh_t)
-                  error stop 'read_and_import_data - internal error CR'
-                class default
-                  ! position of the j-th created edge
-                  vid = data(j)%get_index_to_map(graph)
+              class default
+                ! position of the j-th created vertex/edge
+                vid = data(j)%get_index_to_map(graph)
+                select case(mode_read)
+                case(META_IS_POINT)
+                  graph%vertices(vid)%rpar(m%start : m%start+m%ncomp-1) = &
+                      rdata( (j-1)*m%ncomp+1 : j*m%ncomp)
+                case(META_IS_CELL)
+                  graph%edges(vid)%rpar(m%start : m%start+m%ncomp-1) = &
+                      rdata( (j-1)*m%ncomp+1 : j*m%ncomp)
                 end select
-                ! import to edge array
-                graph%edges(vid)%rpar(m%start : m%start+m%ncomp-1) = &
-                  rdata( (j-1)*m%ncomp+1 : j*m%ncomp)
-              end do
-            end select
+              end select
+            end do REALLOOP
 
           ! same as above, but for integer data
           case(META_IS_INT)
             call read_data(fid, data_pos(i), nvals, idata=idata)
 
-            select case(mode_import)
-            case(META_IS_POINT)
-              do j=1, nvals/m%ncomp
-                select type(graph)
-                class is (mesh_t)
+            INTLOOP: do j=1, size(data)
+              select type(graph)
+              class is (mesh_t)
+                select case(mode_read)
+                case(META_IS_POINT)
                   vid = data(j)%get_index_to_map(graph)
                   vid = graph%cells(vid)%dual_vertex%get_index_to_map(graph%graph_t)
-                class default
-                  vid = data(j)%get_index_to_map(graph)
+                  graph%vertices(vid)%ipar(m%start : m%start+m%ncomp-1) = &
+                      idata( (j-1)*m%ncomp+1 : j*m%ncomp)
+                case(META_IS_CELL)
+                  error stop &
+                      'read_and_import_data - mode_read must be P for mesh_t'
                 end select
-                graph%vertices(vid)%ipar(m%start : m%start+m%ncomp-1) = &
-                  idata( (j-1)*m%ncomp+1 : j*m%ncomp)
-              end do
 
-            case(META_IS_CELL)
-              do j=1, nvals/m%ncomp
-                select type(graph)
-                class is (mesh_t)
-                  error stop 'read_and_import_data - intental error CI'
-                class default
-                  vid = data(j)%get_index_to_map(graph)
+              class default
+                vid = data(j)%get_index_to_map(graph)
+                select case(mode_read)
+                case(META_IS_POINT)
+                  graph%vertices(vid)%ipar(m%start : m%start+m%ncomp-1) = &
+                      idata( (j-1)*m%ncomp+1 : j*m%ncomp)
+                case(META_IS_CELL)
+                  graph%edges(vid)%ipar(m%start : m%start+m%ncomp-1) = &
+                      idata( (j-1)*m%ncomp+1 : j*m%ncomp)
                 end select
-                graph%edges(vid)%ipar(m%start : m%start+m%ncomp-1) = &
-                  idata( (j-1)*m%ncomp+1 : j*m%ncomp)
-              end do
-            end select
-          end select
+              end select
+            end do INTLOOP
+
+          end select ! REAL or INT
+
         end associate
-      end do
+      end do METALOOP
 
     end subroutine read_and_import_data
 
