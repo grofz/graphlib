@@ -65,8 +65,9 @@
       !! 3. Call `finalize`
       type(vtuio_meta_t), allocatable :: meta(:)
     contains
-      procedure :: add_item => meta_add_item
+      generic :: add_item => meta_add_item1, meta_add_item2
       procedure :: free => meta_free
+      procedure, private :: meta_add_item1,  meta_add_item2
     end type vtuio_data_t
 
     interface reallocate
@@ -1523,10 +1524,20 @@ end subroutine
     ! Organize real and integer data
     ! ==============================
 
-    subroutine meta_add_item(this, label, start, iclass, ncomp, nbytes)
+    subroutine meta_add_item2(this, label, start, iclass, ncomp, nbytes)
       class(vtuio_data_t), intent(inout) :: this
       character(len=*), intent(in) :: label
-      integer, intent(in) :: iclass
+      integer, intent(in) :: iclass, ncomp, nbytes, start
+!
+! A wrapper allowing "iclass" be an integer(4) or integer(1)
+!
+      call meta_add_item1(this, label, start, int(iclass,I1B), ncomp, nbytes)
+    end subroutine meta_add_item2
+
+    subroutine meta_add_item1(this, label, start, iclass, ncomp, nbytes)
+      class(vtuio_data_t), intent(inout) :: this
+      character(len=*), intent(in) :: label
+      integer(I1B), intent(in) :: iclass
         !! use VTUIO_META_POINT/CELL + VTUIO_META_R/I to select the correct
         !! value
       integer, intent(in) :: ncomp, nbytes
@@ -1562,7 +1573,7 @@ end subroutine
 
       this%meta = [this%meta, &
           vtuio_meta_t(start,ncomp,nbytes,label,int(iclass,I1B))]
-    end subroutine meta_add_item
+    end subroutine meta_add_item1
 
 
     subroutine meta_free(this)
