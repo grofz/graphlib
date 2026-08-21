@@ -209,18 +209,20 @@
       integer :: k, j
       logical :: match1, match2
 
-      call utest%assert(mold%npoints, mnew%npoints, 'number of points match')
-      call utest%assert(mold%ncells, mnew%ncells, 'number of cells match')
-      call utest%assert(mold%is_3d(), mnew%is_3d(), '2D / 3D flag match' )
+      call utest%assert(mold%npoints, mnew%npoints, '2d: number of points match')
+      call utest%assert(mold%ncells, mnew%ncells, '2d: number of cells match')
+      call utest%assert(mold%nedges, mnew%nedges, '2d: number of edges match')
+      call utest%assert(mold%nvertices, mnew%nvertices, '2d: number of vertices match')
+      call utest%assert(mold%is_3d(), mnew%is_3d(), '2d: 2d/3d flag match' )
       call utest%assert(.true., &
           all(real(mold%points(1:mold%npoints)%position(1)) == &
-              real(mnew%points(1:mnew%npoints)%position(1))), 'position x match')
+              real(mnew%points(1:mnew%npoints)%position(1))), '2d: position x match')
       call utest%assert(.true., &
           all(real(mold%points(1:mold%npoints)%position(2)) == &
-              real(mnew%points(1:mnew%npoints)%position(2))), 'position y match')
+              real(mnew%points(1:mnew%npoints)%position(2))), '2d: position y match')
       call utest%assert(.true., &
           all(real(mold%points(1:mold%npoints)%position(3)) == &
-              real(mnew%points(1:mnew%npoints)%position(3))), 'position z match')
+              real(mnew%points(1:mnew%npoints)%position(3))), '2d: position z match')
 
       match1 = .true.
       match2 = .true.
@@ -230,8 +232,8 @@
             all(mnew%vertices(k)%rpar(VPOS_VB:VPOS_VB+2)==vvelo(:,j))
         match2 = match2 .and. mnew%vertices(k)%ipar(VPOS_TYPE)==vtype(j)
       end do
-      call utest%assert(match1,.true.,'read velocity match')
-      call utest%assert(match2,.true.,'read type match')
+      call utest%assert(match1,.true.,'2d: read velocity match')
+      call utest%assert(match2,.true.,'2d: read type match')
     end block
 #ifdef DEBUG
     print '("vvv  MOLD  vvv")'
@@ -274,9 +276,6 @@
       vtype = [10, 20, 30]
 
       do i=1, mold%ncells
-print *, i, mold%ncells
-print *, c_handles(i)%get_index_to_map()
-print *, c_handles(i)%get_index_to_map(mold)
         j = c_handles(i)%get_index_to_map(mold)
         mold%vertices(mold%cells(j)%dual_vertex%get_index_to_map(mold%graph_t))% &
             ipar(VPOS_TYPE) = vtype(i)
@@ -299,23 +298,25 @@ print *, c_handles(i)%get_index_to_map(mold)
 
       call utest%assert(mold%npoints, mnew%npoints, '3d: number of points match')
       call utest%assert(mold%ncells, mnew%ncells, '3d: number of cells match')
-      call utest%assert(mold%is_3d(), mnew%is_3d(), '3d: 2D / 3D flag match' )
+      call utest%assert(mold%nedges, mnew%nedges, '3d: number of edges match')
+      call utest%assert(mold%nvertices-2, mnew%nvertices, '3d: mnew expected number of vertices')
+      call utest%assert(mold%is_3d(), mnew%is_3d(), '3d: 2d/3d flag match' )
       call utest%assert(.true., &
           all(real(mold%points(1:mold%npoints)%position(1)) == &
-              real(mnew%points(1:mnew%npoints)%position(1))), 'position x match')
+              real(mnew%points(1:mnew%npoints)%position(1))), '3d: position x match')
       call utest%assert(.true., &
           all(real(mold%points(1:mold%npoints)%position(2)) == &
-              real(mnew%points(1:mnew%npoints)%position(2))), 'position y match')
+              real(mnew%points(1:mnew%npoints)%position(2))), '3d: position y match')
       call utest%assert(.true., &
           all(real(mold%points(1:mold%npoints)%position(3)) == &
-              real(mnew%points(1:mnew%npoints)%position(3))), 'position z match')
+              real(mnew%points(1:mnew%npoints)%position(3))), '3d: position z match')
 
       match = .true.
       do j=1,mnew%ncells
         k = mnew%cells(j)%dual_vertex%get_index_to_map(mnew%graph_t)
         match = match .and. mnew%vertices(k)%ipar(VPOS_TYPE)==vtype(j)
       end do
-      call utest%assert(match,.true.,'3d - read type match')
+      call utest%assert(match,.true.,'3d: read type match (with ghost vertices)')
     end block
 #ifdef DEBUG
     print '("vvv  3D MOLD  vvv")'
@@ -328,6 +329,8 @@ print *, c_handles(i)%get_index_to_map(mold)
 
     ! test summary
     call utest%summarize()
+    print '("Also check if these files can be opened by Paravies: ",/,a)', &
+      'test_graph.vtu  big_copy.vtu  mesh.vtu  mesh3d.vtu'
     if (.not. utest%all_passed()) stop 1
 
   end program vtuio_test

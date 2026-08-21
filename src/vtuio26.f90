@@ -782,7 +782,7 @@ end subroutine
 !
       integer :: fid, npoints, ncells, ios, i, npoints_per_cell
       integer :: offset_points, offset_connectivity, offset_offsets, offset_types
-      integer, allocatable :: offset_meta(:)
+      integer, allocatable :: offset_meta(:), pos_meta(:)
       integer :: time_pos(2), binary_start
       integer(HEADERTYPE_KIND) :: nblock   ! change KIND if error (!) TODO improve doc
       real(DP) :: time0
@@ -1115,10 +1115,11 @@ end subroutine
         end do
       end block
 
-      !TODO offset_meta meaning changing here, rewrite it for safety
+      allocate(pos_meta(size(offset_meta)))
       where (offset_meta /= DATAARRAY_NOT_FOUND)
-        ! offset is now absolute / not relative to aooended data (TODO)
-        offset_meta = binary_start+offset_meta
+        pos_meta = binary_start+offset_meta
+      else where
+        pos_meta = DATAARRAY_NOT_FOUND
       end where
 
       ! Import from PointData block to vertices ipar/rpar arrays (graph_t only)
@@ -1126,8 +1127,8 @@ end subroutine
       class is (mesh_t)
         continue
       class default
-        call read_and_import_data(graph, fid,offset_meta, pdata=graph_points, &
-            vtudata=vtudata)
+        call read_and_import_data(graph, fid, pos_meta, &
+            pdata=graph_points, vtudata=vtudata)
       end select
 
 
@@ -1171,11 +1172,11 @@ end subroutine
       ! ipar/rpar arrays
       select type(graph)
       class is (mesh_t)
-        call read_and_import_data(graph, fid, offset_meta, cdata=mesh_cells, &
-            vtudata=vtudata)
+        call read_and_import_data(graph, fid, pos_meta, &
+            pdata=mesh_cells, vtudata=vtudata)
       class default
-        call read_and_import_data(graph, fid, offset_meta, cdata=graph_cells, &
-            vtudata=vtudata)
+        call read_and_import_data(graph, fid, pos_meta, &
+            cdata=graph_cells, vtudata=vtudata)
       end select
 
       ! Explicitly deallocate all handles
@@ -1273,18 +1274,18 @@ end subroutine
     end subroutine inspect_dataarray
 
 
-    subroutine read_and_import_data(graph, fid, offsets, pdata, cdata, vtudata)
+    subroutine read_and_import_data(graph, fid, data_pos, pdata, cdata, vtudata)
       class(graph_t), intent(inout) :: graph
       integer, intent(in) :: fid
-      class(graph_handle_t), intent(in), optional :: pdata(:), cdata(:)
+      class(graph_handle_t), intent(in), optional, target :: pdata(:), cdata(:)
       type(vtuio_data_t), intent(in), optional :: vtudata
-      integer, intent(in) :: offsets(:)
+      integer, intent(in) :: data_pos(:)
 !
 ! Call read_data and copy data to vertices/edges rpar/ipar arrays
 !
 ! IN
 !   fid         - opened input file unit
-!   offsets     - array of data block offsets
+!   data_pos    - array of data block positions in opened file
 !   pdata/cdata - handles to created objects
 !                 (either one or another must be provided)
 !   vtudata     - descriptor of additional data to be read (optional)
@@ -1297,55 +1298,37 @@ end subroutine
       integer, allocatable :: idata(:)
       real(dp), allocatable :: rdata(:)
       integer :: i, j, vid
-
-      if (present(pdata) .and. .not. present(cdata)) then
-        mode_read = META_IS_POINT
-      else if (present(cdata) .and. .not. present(pdata)) then
-        mode_read = META_IS_CELL
-      else
-        error stop 'read_and_import_data - pdata or cdata must be given but not both'
-      end if
-      ! mode_read indicates if this procedure is called after point objects
-      ! (vertices/points) or cell objects (edges/cells) were created
+      class(graph_handle_t), pointer :: data(:)
 
       if (.not. present(vtudata)) return
       if (.not. allocated(vtudata%meta)) return
 
+      if (present(pdata) .and. .not. present(cdata)) then
+        mode_read = META_IS_POINT
+        data => pdata
+      else if (present(cdata) .and. .not. present(pdata)) then
+        mode_read = META_IS_CELL
+        data => cdata
+      else
+        error stop 'read_and_import_data - pdata or cdata must be given but not both'
+      end if
+      mode_import = mode_read
+
+! mode_read indicates if this procedure is called after point objects
+! (vertices/points) or cell objects (edges/cells) were created
+
+
       do i=1,size(vtudata%meta)
         associate(m=>vtudata%meta(i))
-          if (offsets(i) == DATAARRAY_NOT_FOUND) cycle
-          select case(mode_read)
-          case(META_IS_POINT) ! read points related data
-            select type(graph)
-            class is (mesh_t)
-              ! an item of meta leading to this branch should be already off
-              error stop 'read_and_import_data - no point-related data for mesh_t'
-            class default
-              ! vertices data
-              nvals = graph%nvertices * m%ncomp
-              mode_import = META_IS_POINT
-            end select
-          case(META_IS_CELL) ! read cells related data
-            select type(graph)
-            class is (mesh_t)
-              ! cell data stored at vertices arrays
-              nvals = graph%ncells * m%ncomp
-              mode_import = META_IS_POINT
-            class default
-              ! edges data
-              nvals = graph%nedges * m%ncomp
-              mode_import = META_IS_CELL
-            end select
-          case default
-            error stop 'read_and_import_data - invalid mode_read'
-          end select
+          if (data_pos(i) < 0) cycle
+          nvals = size(data) * m%ncomp
 
           ! this item of meta is not relevant in this call context
           if (mod(m%iclass,2_I1B)/=mode_import) cycle
 
           select case(2*(m%iclass/2))
           case(META_IS_REAL)
-            call read_data(fid, offsets(i), nvals, rdata=rdata)
+            call read_data(fid, data_pos(i), nvals, rdata=rdata)
 
             select case(mode_import)
             case(META_IS_POINT)
@@ -1353,12 +1336,12 @@ end subroutine
                 select type(graph)
                 class is (mesh_t)
                   ! position of the j-th created cell
-                  vid = cdata(j)%get_index_to_map(graph)
+                  vid = data(j)%get_index_to_map(graph)
                   ! position of a dual vertex to the j-th crated cell
                   vid = graph%cells(vid)%dual_vertex%get_index_to_map(graph%graph_t)
                 class default
                   ! position of the j-th created vertex
-                  vid = pdata(j)%get_index_to_map(graph)
+                  vid = data(j)%get_index_to_map(graph)
                 end select
                 ! import to vertice
                 graph%vertices(vid)%rpar(m%start : m%start+m%ncomp-1) = &
@@ -1372,7 +1355,7 @@ end subroutine
                   error stop 'read_and_import_data - internal error CR'
                 class default
                   ! position of the j-th created edge
-                  vid = cdata(j)%get_index_to_map(graph)
+                  vid = data(j)%get_index_to_map(graph)
                 end select
                 ! import to edge array
                 graph%edges(vid)%rpar(m%start : m%start+m%ncomp-1) = &
@@ -1382,17 +1365,17 @@ end subroutine
 
           ! same as above, but for integer data
           case(META_IS_INT)
-            call read_data(fid, offsets(i), nvals, idata=idata)
+            call read_data(fid, data_pos(i), nvals, idata=idata)
 
             select case(mode_import)
             case(META_IS_POINT)
               do j=1, nvals/m%ncomp
                 select type(graph)
                 class is (mesh_t)
-                  vid = cdata(j)%get_index_to_map(graph)
+                  vid = data(j)%get_index_to_map(graph)
                   vid = graph%cells(vid)%dual_vertex%get_index_to_map(graph%graph_t)
                 class default
-                  vid = pdata(j)%get_index_to_map(graph)
+                  vid = data(j)%get_index_to_map(graph)
                 end select
                 graph%vertices(vid)%ipar(m%start : m%start+m%ncomp-1) = &
                   idata( (j-1)*m%ncomp+1 : j*m%ncomp)
@@ -1404,7 +1387,7 @@ end subroutine
                 class is (mesh_t)
                   error stop 'read_and_import_data - intental error CI'
                 class default
-                  vid = cdata(j)%get_index_to_map(graph)
+                  vid = data(j)%get_index_to_map(graph)
                 end select
                 graph%edges(vid)%ipar(m%start : m%start+m%ncomp-1) = &
                   idata( (j-1)*m%ncomp+1 : j*m%ncomp)
@@ -1540,17 +1523,28 @@ end subroutine
       character(len=*), intent(in) :: label
       integer, intent(in) :: iclass, ncomp, nbytes, start
 !
-! A wrapper allowing "iclass" be an integer(4) or integer(1)
+! A wrapper allowing "iclass" be integer(4) instead of integer(1)
 !
       call meta_add_item1(this, label, start, int(iclass,I1B), ncomp, nbytes)
     end subroutine meta_add_item2
+
 
     subroutine meta_add_item1(this, label, start, iclass, ncomp, nbytes)
       class(vtuio_data_t), intent(inout) :: this
       character(len=*), intent(in) :: label
       integer(I1B), intent(in) :: iclass
-        !! use VTUIO_META_POINT/CELL + VTUIO_META_R/I to select the correct
-        !! value
+!
+! Add a meta-data descriptor line to the data object
+!
+! IN
+!   label  - "Name" attribute of DataArray in XML file
+!   start  - location of the first data point in ipar/rpar array
+!   iclass - determines data context and type (see table at the top of file)
+!              *** VTUIO_META_POINT/CELL + VTUIO_META_R/I ***
+!            can be used to select iclass value
+!   ncomps - 1 for scalar ot 3 for vector data
+!   nbytes - determine the number of bytes per value
+!
       integer, intent(in) :: ncomp, nbytes
       integer, intent(in) :: start
 
