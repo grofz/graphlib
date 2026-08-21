@@ -1,168 +1,139 @@
-  program atom_test
+  program vtuio_test
     use iso_fortran_env, only : DP=>real64, output_unit, I1=>int8
-    use vtuio_mod, only : vtuio_write, vtuio_read, vtuio_data_t
-    use graph_mod, only : graph_t, handle_t, edge_t
-    use map_mod, only : VTUIO_MASK, VPOS_X, VPOS_VB, VPOS_RADIUS, VPOS_TYPE, &
-      EPOS_TYPE
+    use vtuio_mod, only : vtuio_write, vtuio_read, vtuio_data_t, META_IS_CELL, &
+      META_IS_POINT, META_IS_INT, META_IS_REAL
+    use graph_mod, only : graph_t, graph_handle_t=>handle_t, edge_t
+    use mesh_mod, only : mesh_t, mesh_handle_t
     use graph_user_mod, only : ESIZE_RPAR, ESIZE_IPAR, VSIZE_IPAR, VSIZE_RPAR
+    use map_mod
+    use utest_mod, only : utest_t
     implicit none (type, external)
 
-    real(DP) :: time
-    integer :: i, lab_count
-
-    type(graph_t) :: g, gnew, gbig
-    type(handle_t), allocatable :: atom_handles(:), cone_handles(:)
+    type(graph_t) :: gold, gnew, gbig
+    type(mesh_t) :: mold, mnew
+    type(graph_handle_t), allocatable :: v_handles(:), e_handles(:)
+    type(mesh_handle_t), allocatable :: p_handles(:), c_handles(:)
     type(vtuio_data_t) :: vtudata
-
-    real(dp) :: e_rpar(ESIZE_RPAR)
-    integer :: e_ipar(ESIZE_IPAR)
-
-    interface
-      pure logical function select_edge(this, e)
-        use graph_mod, only : edge_t, graph_t
-        implicit none (type, external)
-        class(graph_t), intent(in) :: this
-        type(edge_t), intent(in) :: e
-      end function
-      pure logical function select_vertex(this, v)
-        use graph_mod, only : vertex_t, graph_t
-        implicit none (type, external)
-        class(graph_t), intent(in) :: this
-        type(vertex_t), intent(in) :: v
-      end function
-    end interface
+    type(utest_t) :: utest
+    real(DP) :: time
+    real(dp), allocatable :: vpos(:,:), vrad(:), vvelo(:,:), eflow(:)
+    integer, allocatable :: vtype(:), etype(:)
 
     ! Initialize graph
-    call g%initialize()
-   !call g%initialize(is_directed_graph=.true.)
+    call gold%initialize()
 
-    ! Testing sample of atoms / cones
-    allocate(atom_handles(5))
+    ! Construct graph
+    block
+      real(dp) :: e_rpar(ESIZE_RPAR), v_rpar(VSIZE_RPAR)
+      integer :: e_ipar(ESIZE_IPAR), v_ipar(VSIZE_IPAR)
+      integer :: i
+      integer, allocatable :: connections(:,:)
 
-    call add_vertex(g, atom_handles(1), &
-      0.75_DP, [0.0_DP, 0.0_DP, 0.0_DP], 1, [1.0_DP, 1.0_DP, 0.0_DP])
-    call add_vertex(g, atom_handles(2), &
-      0.25_DP, [1.0_DP,0.0_DP,0.0_DP], 1, [1.0_DP, 2.0_DP, 0.0_DP])
-    call add_vertex(g, atom_handles(3), &
-      0.10_DP, [0.5707_DP,0.6297_DP,0.0_DP], 1, [2.0_DP, 1.0_DP, 0.0_DP])
-    call add_vertex(g, atom_handles(4), &
-      0.05_DP, [0.0_DP,0.0_DP,1.0_DP], 2, [0.0_DP, 0.0_DP, 0.1_DP])
-    call add_vertex(g, atom_handles(5), &
-      0.05_DP, [0.0_DP,0.0_DP,2.0_DP], 2, [0.0_DP, 0.0_DP, 0.1_DP])
+      allocate(v_handles(5), e_handles(4))
 
-    allocate(cone_handles(4))
-   !allocate(cone_handles(8))
-    e_rpar = 0.0_DP
-    e_ipar = 0
+      ! graph attributes
+      vtype = [1, 1, 1, 2, 2] 
+      vrad = [0.75_DP, 0.25_DP, 0.10_DP, 0.05_DP, 0.05_DP]
+      vpos = reshape( [                 &
+          1.0_DP,    0.0_DP,    0.0_DP, &
+          0.5707_DP, 0.6297_DP, 0.0_DP, &
+          0.0_DP,    0.0_DP,    1.0_DP, &
+          0.0_DP,    0.0_DP,    2.0_DP, &
+          0.0_DP,    0.0_DP,    0.0_DP  &
+          ], [3, size(v_handles)])
+      vvelo = reshape( [ &
+          1.0_DP, 1.0_DP, 0.0_DP, &
+          1.0_DP, 2.0_DP, 0.0_DP, &
+          2.0_DP, 1.0_DP, 0.0_DP, &
+          0.0_DP, 0.0_DP, 0.1_DP, &
+          0.0_DP, 0.0_DP, 0.1_DP  &
+          ], [3, size(v_handles)])
+      etype = [10, 20, 30, 40]
+      eflow = [11.0, 22.0, 33.0, 44.0]
+      connections = reshape( [ &
+          1, 2, &
+          1, 3, &
+          1, 4, &
+          4, 5  &
+          ], [2, size(e_handles)])
 
-    e_ipar(EPOS_TYPE) = 10
-    cone_handles(1) = g%add_edge(atom_handles(1), atom_handles(2), e_ipar, e_rpar)
-   !cone_handles(5) = g%add_edge(atom_handles(2), atom_handles(1), e_ipar, e_rpar)
-    e_ipar(EPOS_TYPE) = 10
-    cone_handles(2) = g%add_edge(atom_handles(1), atom_handles(3), e_ipar, e_rpar)
-   !cone_handles(6) = g%add_edge(atom_handles(3), atom_handles(1), e_ipar, e_rpar)
-    e_ipar(EPOS_TYPE) = 20
-    cone_handles(3) = g%add_edge(atom_handles(1), atom_handles(4), e_ipar, e_rpar)
-   !cone_handles(7) = g%add_edge(atom_handles(4), atom_handles(1), e_ipar, e_rpar)
-    e_ipar(EPOS_TYPE) = 20
-    cone_handles(4) = g%add_edge(atom_handles(4), atom_handles(5), e_ipar, e_rpar)
-   !cone_handles(8) = g%add_edge(atom_handles(5), atom_handles(4), e_ipar, e_rpar)
+      ! graph vertices
+      do i=1, size(v_handles)
+        v_ipar(VPOS_TYPE)   = vtype(i)
+        v_rpar(VPOS_RADIUS) = vrad(i)
+        v_rpar(VPOS_X:VPOS_X+2) = vpos(:,i)
+        v_rpar(VPOS_VB:VPOS_VB+2) = vvelo(:,i)
+        v_handles(i) = gold%add_vertex(v_ipar,v_rpar)
+      end do
 
-    ! Write graph to file
-    call vtudata%add_item('velocity',start=VPOS_VB,iclass=2,ncomp=3,nbytes=4)
-    call vtuio_write('test', g, vtuio_mask, time=123.0_DP, vtudata=vtudata)
+      ! graph edges
+      do i=1, size(e_handles)
+        e_ipar(EPOS_TYPE) = etype(i)
+        e_rpar(EPOS_FLOW) = eflow(i)
+        e_handles(i) = gold%add_edge(v_handles(connections(1,i)), &
+            v_handles(connections(2,i)), e_ipar, e_rpar)
+      end do
+    end block
 
-    ! Test removing vertex
-   !call g%remove_vertex(atom_handles(4))
-   !call g%remove_orphaned_edges()
-   !call g%print(output_unit)
+    ! Write graph
+    call vtudata%add_item('velocity', VPOS_VB, META_IS_POINT+META_IS_REAL, 3, 4)
+    call vtudata%add_item('radius', VPOS_RADIUS, META_IS_POINT+META_IS_REAL, 1, 8)
+    call vtudata%add_item('ctype', EPOS_TYPE, META_IS_CELL+META_IS_INT, 1, 1)
+    call vtudata%add_item('vtype', VPOS_TYPE, META_IS_POINT+META_IS_INT, 1, 1)
+    call vtudata%add_item('flow', EPOS_FLOW, META_IS_CELL+META_IS_REAL, 1, 8)
+    call vtuio_write('test_graph', gold, position_id=VPOS_X, time=123.0_DP, vtudata=vtudata)
 
-    ! Read back from file to a new structure
-    call vtuio_read('test', gnew, vtuio_mask, time)
+    ! Read graph
+    call vtuio_read('test_graph', gnew, position_id=VPOS_X, time=time, vtudata=vtudata)
 
-    ! Write back a read copy
-    call vtuio_write('test_copy', gnew, vtuio_mask, 456.0_DP)
-
-    ! Compare the two
-    print *, 'These dumps should be the same'
-    call g%print(output_unit)
+    ! Compare gold and gnew
+    block
+      call utest%assert(gold%nvertices, gnew%nvertices, 'number of vertices match')
+      call utest%assert(gold%nedges, gnew%nedges, 'number of edges match')
+      call utest%assert(.true., &
+          all(real(gold%vertices(1:gold%nvertices)%rpar(VPOS_X)) == &
+              real(gnew%vertices(1:gnew%nvertices)%rpar(VPOS_X))), 'position x match')
+      call utest%assert(.true., &
+          all(real(gold%vertices(1:gold%nvertices)%rpar(VPOS_X+1)) == &
+              real(gnew%vertices(1:gnew%nvertices)%rpar(VPOS_X+1))), 'position y match')
+      call utest%assert(.true., &
+          all(real(gold%vertices(1:gold%nvertices)%rpar(VPOS_X+2)) == &
+              real(gnew%vertices(1:gnew%nvertices)%rpar(VPOS_X+2))), 'position z match')
+      call utest%assert(.true., &
+          all((gold%vertices(1:gold%nvertices)%rpar(VPOS_RADIUS)) == &
+              (gnew%vertices(1:gnew%nvertices)%rpar(VPOS_RADIUS))), 'radius match')
+      call utest%assert(.true., &
+          all(real(gold%vertices(1:gold%nvertices)%rpar(VPOS_VB)) == &
+              real(gnew%vertices(1:gnew%nvertices)%rpar(VPOS_VB))), 'velocity x match')
+      call utest%assert(.true., &
+          all(real(gold%vertices(1:gold%nvertices)%rpar(VPOS_VB+1)) == &
+              real(gnew%vertices(1:gnew%nvertices)%rpar(VPOS_VB+1))), 'velocity y match')
+      call utest%assert(.true., &
+          all(real(gold%vertices(1:gold%nvertices)%rpar(VPOS_VB+2)) == &
+              real(gnew%vertices(1:gnew%nvertices)%rpar(VPOS_VB+2))), 'velocity z match')
+      call utest%assert(.true., &
+          all(gold%vertices(1:gold%nvertices)%ipar(VPOS_TYPE) == &
+              gnew%vertices(1:gnew%nvertices)%ipar(VPOS_TYPE)), 'vertex type match')
+      call utest%assert(.true., &
+          all(gold%edges(1:gold%nedges)%ipar(EPOS_TYPE) == &
+              gnew%edges(1:gnew%nedges)%ipar(EPOS_TYPE)), 'edges type match')
+      call utest%assert(.true., &
+          all(gold%edges(1:gold%nedges)%rpar(EPOS_FLOW) == &
+              gnew%edges(1:gnew%nedges)%rpar(EPOS_FLOW)), 'flow match')
+    end block
+#ifdef DEBUG
+    call gold%print(output_unit)
     call gnew%print(output_unit)
+#endif
 
-goto 100
-    do i=1, min(gnew%nvertices, 100)
-      print *, gnew%vertices(i)%rpar
-      print *, gnew%vertices(i)%rpar==g%vertices(i)%rpar
-      print *, gnew%vertices(i)%ipar, gnew%vertices(i)%ipar==g%vertices(i)%ipar
-      print *
-    end do
-    do i=1, min(gnew%nedges, 100)
-      print *, gnew%edges(i)%ipar, gnew%edges(i)%ipar==g%edges(i)%ipar
-    end do
-100 continue
-
-    ! label connected components
-    print *, 'label con com'
-    call g%remove_edge(cone_handles(4))
-    call g%connected_components( &
-        position_label=1, lab_count=lab_count, eselector=select_edge)
-    print *, 'Label connected components ', lab_count
-    call g%print(output_unit)
-
-
-    ! remove some objects
-    print *, 'Test to remove somethinh...'
-    call g%remove_vertex(atom_handles(4))
-
-    call g%print(output_unit)
-    call vtuio_write('test_remove', g, vtuio_mask, 123.0_DP)
-
-   !stop 7
+    ! test reading a big file
     print *
     print *, '*** big file ***'
-    call vtuio_read('big', gbig, vtuio_mask)
-    call vtuio_write('big_copy', gbig, vtuio_mask)
+    call vtuio_read('big', gbig, position_id=VPOS_X, vtudata=vtudata)
+    call vtuio_write('big_copy', gbig, position_id=VPOS_X)
 
-  contains
-    subroutine add_vertex(gg, handle, r, x, vtype, vec3)
-      type(graph_t), intent(inout) :: gg
-      type(handle_t), intent(out) :: handle
-      real(dp), intent(in) :: r, x(3)
-      integer, intent(in) :: vtype
-      real(dp), intent(in) :: vec3(3)
+    ! test summary
+    call utest%summarize()
+    if (.not. utest%all_passed()) stop 1
 
-      real(dp) :: v_rpar(VSIZE_RPAR)
-      integer :: v_ipar(VSIZE_IPAR)
-
-      v_rpar = 0.0_DP
-      v_rpar(VPOS_RADIUS) = r
-      v_rpar(VPOS_X:VPOS_X+2) = x
-      v_rpar(VPOS_VB:VPOS_VB+2) = vec3
-      v_ipar = 0
-      v_ipar(VPOS_TYPE) = vtype
-      handle = gg%add_vertex(v_ipar, v_rpar)
-    end subroutine add_vertex
-
-  end program atom_test
-
-
-  pure logical function select_edge(this, e)
-    use graph_mod, only : edge_t, graph_t
-    implicit none (type, external)
-    class(graph_t), intent(in) :: this
-    type(edge_t), intent(in) :: e
-    if (this%is_directed()) continue ! just avoid "unused argument"
-    select_edge = e%ipar(1)==1 ! just to avouid "unused argument warning"
-    select_edge = .true.
-   !select_edge = .false.
-  end function
-
-
-  pure logical function select_vertex(this, v)
-    use graph_mod, only : vertex_t, graph_t
-    implicit none (type, external)
-    class(graph_t), intent(in) :: this
-    type(vertex_t), intent(in) :: v
-    if (this%is_directed()) continue ! just avoid "unused argument"
-    select_vertex = v%ipar(1)==1 ! just to avouid "unused argument warning"
-    select_vertex = .true.
-  end function
+  end program vtuio_test
