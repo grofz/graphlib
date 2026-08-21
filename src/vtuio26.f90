@@ -240,7 +240,7 @@ integer, parameter :: MASK_RADIUS=1, MASK_POSITION=2, MASK_POINT_TYPE=3, MASK_CE
 !
 ! TODO this information should be moved to module level
 ! Mesh - points are points
-!      - cells are cells (triangles or tetrahedra)      
+!      - cells are cells (triangles or tetrahedra)
 !      - vertex data become cell data
 !      - edge data is ignored
 !
@@ -253,13 +253,8 @@ integer, parameter :: MASK_RADIUS=1, MASK_POSITION=2, MASK_POINT_TYPE=3, MASK_CE
       class is (mesh_t)
         npoints = graph%npoints
         ncells = graph%ncells
-        if (graph%ncells /= graph%nvertices) error stop &
-            'vtuio_write - npoints == nvertices required'
-        ! TODO (implementation progress note)
-        ! Required at this moment.
-        ! In future version also the presence of "non-mesh" vertices
-        ! will be supported (e.g. ghost cells). 
-        ! The requirement will be graph%ncells <= graph%nvertices
+        if (graph%ncells > graph%nvertices) error stop &
+            'vtuio_write - cell are linked to vertices, but not enough vertices present'
       class default
         npoints = graph%nvertices
         ncells = graph%nedges
@@ -550,7 +545,7 @@ end subroutine
         ! npoints / ncells - depending on the exported data source
       integer, allocatable :: idata(:,:)
       real(dp), allocatable :: rdata(:,:)
-      integer :: i, j
+      integer :: i, j, k
 
       if (.not. present(vtudata)) return
       if (.not. allocated(vtudata%meta)) return
@@ -576,7 +571,7 @@ end subroutine
             ! data marked as point data exported from vertices to CellData block
             mode_export = META_IS_POINT
           class default
-            ! data marked as cell data exported from edges to CellData block 
+            ! data marked as cell data exported from edges to CellData block
             mode_export = META_IS_CELL
           end select
         case default
@@ -594,7 +589,15 @@ end subroutine
               select case(mode_export)
               case(META_IS_POINT)
                 do j=1,nitems
-                  rdata(:,j) = graph%vertices(j)%rpar(m%start:m%start+m%ncomp-1)
+                  select type (graph)
+                  class is (mesh_t)
+                    k = graph%cells(j)%dual_vertex%get_index_to_map(graph%graph_t)
+                    if (k<1 .or. k>graph%nvertices) error stop &
+                       'export_and_write_data - vertex linked to cell not present'
+                  class default
+                    k = j
+                  end select
+                  rdata(:,j) = graph%vertices(k)%rpar(m%start:m%start+m%ncomp-1)
                 end do
               case(META_IS_CELL)
                 do j=1,nitems
@@ -613,7 +616,15 @@ end subroutine
               select case(mode_export)
               case(META_IS_POINT)
                 do j=1,nitems
-                  idata(:,j) = graph%vertices(j)%ipar(m%start:m%start+m%ncomp-1)
+                  select type (graph)
+                  class is (mesh_t)
+                    k = graph%cells(j)%dual_vertex%get_index_to_map(graph%graph_t)
+                    if (k<1 .or. k>graph%nvertices) error stop &
+                       'export_and_write_data - vertex linked to cell not present'
+                  class default
+                    k = j
+                  end select
+                  idata(:,j) = graph%vertices(k)%ipar(m%start:m%start+m%ncomp-1)
                 end do
               case(META_IS_CELL)
                 do j=1,nitems

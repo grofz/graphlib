@@ -14,7 +14,7 @@ vpath %.f90 src:testsrc
 JDIR = include
 
 # compiler flags
-COMMON_FLAGS = -Wall -Wextra -pedantic -std=gnu -fimplicit-none -fbacktrace -fPIC -fmax-errors=5 -cpp -MMD
+COMMON_FLAGS = -Wall -Wextra -Wno-compare_reals -pedantic -std=gnu -fimplicit-none -fbacktrace -fPIC -fmax-errors=5 -cpp -MMD
 # to provide debugging executable, run
 #   $ make clean
 #   $ make DEBUG=yes

@@ -1,5 +1,5 @@
   program vtuio_test
-    use iso_fortran_env, only : DP=>real64, output_unit, I1=>int8
+    use iso_fortran_env, only : SP=>real32, DP=>real64, output_unit, I1=>int8
     use vtuio_mod, only : vtuio_write, vtuio_read, vtuio_data_t, META_IS_CELL, &
       META_IS_POINT, META_IS_INT, META_IS_REAL
     use graph_mod, only : graph_t, graph_handle_t=>handle_t, edge_t
@@ -29,10 +29,15 @@
       integer :: i
       integer, allocatable :: connections(:,:)
 
+      e_rpar = 420.0
+      e_ipar = 69
+      v_rpar = 3.1415
+      v_ipar = 77
+
       allocate(v_handles(5), e_handles(4))
 
       ! graph attributes
-      vtype = [1, 1, 1, 2, 2] 
+      vtype = [1, 1, 1, 2, 2]
       vrad = [0.75_DP, 0.25_DP, 0.10_DP, 0.05_DP, 0.05_DP]
       vpos = reshape( [                 &
           1.0_DP,    0.0_DP,    0.0_DP, &
@@ -131,6 +136,195 @@
     print *, '*** big file ***'
     call vtuio_read('big', gbig, position_id=VPOS_X, vtudata=vtudata)
     call vtuio_write('big_copy', gbig, position_id=VPOS_X)
+
+    ! A two-dimensional mesh
+    block
+      integer :: i, j
+
+      call mold%initialize(is_3d=.false.)
+      allocate(p_handles(11))
+      p_handles(1) =mold%add_point(real([1.0, 0.0, 0.0],dp))
+      p_handles(2) =mold%add_point(real([3.0, 0.0, 0.0],dp))
+      p_handles(3) =mold%add_point(real([5.0, 0.0, 0.0],dp))
+      p_handles(4) =mold%add_point(real([7.0, 0.0, 0.0],dp))
+      p_handles(5) =mold%add_point(real([2.0, 1.0, 0.0],dp))
+      p_handles(6) =mold%add_point(real([4.0, 1.0, 0.0],dp))
+      p_handles(7) =mold%add_point(real([6.0, 1.0, 0.0],dp))
+      p_handles(8) =mold%add_point(real([1.0, 2.0, 0.0],dp))
+      p_handles(9) =mold%add_point(real([3.0, 2.0, 0.0],dp))
+      p_handles(10)=mold%add_point(real([5.0, 2.0, 0.0],dp))
+      p_handles(11)=mold%add_point(real([7.0, 2.0, 0.0],dp))
+      allocate(c_handles(10))
+      c_handles(1) =mold%add_cell( &
+          [p_handles(1), p_handles(2), p_handles(5), p_handles(1)])
+      c_handles(2) =mold%add_cell( &
+          [p_handles(2), p_handles(3), p_handles(6), p_handles(1)])
+      c_handles(3) =mold%add_cell( &
+          [p_handles(7), p_handles(3), p_handles(4), p_handles(1)])
+      c_handles(4) =mold%add_cell( &
+          [p_handles(1), p_handles(5), p_handles(8), p_handles(1)])
+      c_handles(5) =mold%add_cell( &
+          [p_handles(5), p_handles(6), p_handles(2), p_handles(1)])
+      c_handles(6) =mold%add_cell( &
+          [p_handles(5), p_handles(8), p_handles(9), p_handles(1)])
+      c_handles(7) =mold%add_cell( &
+          [p_handles(5), p_handles(6), p_handles(9), p_handles(1)])
+      c_handles(8) =mold%add_cell( &
+          [p_handles(6), p_handles(9), p_handles(10),p_handles(1)])
+      c_handles(9) =mold%add_cell( &
+          [p_handles(10),p_handles(11),p_handles(7), p_handles(1)])
+      c_handles(10)=mold%add_cell( &
+          [p_handles(4), p_handles(11),p_handles(7), p_handles(1)])
+
+      vtype = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      if (allocated(vvelo)) deallocate(vvelo)
+      allocate(vvelo(3,mold%ncells))
+      call random_number(vvelo)
+      vvelo = real(real(vvelo,sp),dp) ! decrease precision
+
+      do i=1, mold%ncells
+        j = c_handles(i)%get_index_to_map(mold)
+        mold%vertices(mold%cells(j)%dual_vertex%get_index_to_map(mold%graph_t))% &
+            ipar(VPOS_TYPE) = vtype(i)
+        mold%vertices(mold%cells(j)%dual_vertex%get_index_to_map(mold%graph_t))% &
+            rpar(VPOS_VB:VPOS_VB+2) = vvelo(:,i)
+      end do
+    end block
+
+    ! Write mesh
+    call vtudata%free()
+    call vtudata%add_item('velocity', VPOS_VB, META_IS_POINT+META_IS_REAL, 3, 4)
+    call vtudata%add_item('vtype', VPOS_TYPE, META_IS_POINT+META_IS_INT, 1, 1)
+      ! META_IS_CELL are here just to be ignored and not written to VTIU file
+    call vtudata%add_item('ctype', EPOS_TYPE, META_IS_CELL+META_IS_INT, 1, 1)
+    call vtudata%add_item('flow', EPOS_FLOW, META_IS_CELL+META_IS_REAL, 1, 8)
+
+    call vtuio_write('mesh', mold, vtudata=vtudata)
+
+    ! Read mesh
+    call vtuio_read('mesh', mnew, vtudata=vtudata)
+
+    ! Compare mnew/mold and source data
+    block
+      integer :: k, j
+      logical :: match1, match2
+
+      call utest%assert(mold%npoints, mnew%npoints, 'number of points match')
+      call utest%assert(mold%ncells, mnew%ncells, 'number of cells match')
+      call utest%assert(mold%is_3d(), mnew%is_3d(), '2D / 3D flag match' )
+      call utest%assert(.true., &
+          all(real(mold%points(1:mold%npoints)%position(1)) == &
+              real(mnew%points(1:mnew%npoints)%position(1))), 'position x match')
+      call utest%assert(.true., &
+          all(real(mold%points(1:mold%npoints)%position(2)) == &
+              real(mnew%points(1:mnew%npoints)%position(2))), 'position y match')
+      call utest%assert(.true., &
+          all(real(mold%points(1:mold%npoints)%position(3)) == &
+              real(mnew%points(1:mnew%npoints)%position(3))), 'position z match')
+
+      match1 = .true.
+      match2 = .true.
+      do j=1,mnew%ncells
+        k = mnew%cells(j)%dual_vertex%get_index_to_map(mnew%graph_t)
+        match1 = match1 .and. &
+            all(mnew%vertices(k)%rpar(VPOS_VB:VPOS_VB+2)==vvelo(:,j))
+        match2 = match2 .and. mnew%vertices(k)%ipar(VPOS_TYPE)==vtype(j)
+      end do
+      call utest%assert(match1,.true.,'read velocity match')
+      call utest%assert(match2,.true.,'read type match')
+    end block
+#ifdef DEBUG
+    print '("vvv  MOLD  vvv")'
+    call mold%print(output_unit)
+    print '("^^^  MOLD  ^^^",/)'
+    print '("vvv  MNEW  vvv")'
+    call mnew%print(output_unit)
+    print '("^^^  MNEW  ^^^")'
+#endif
+
+    ! A 3D-mesh
+    block
+      real(dp) :: v_rpar(VSIZE_RPAR)
+      integer ::  v_ipar(VSIZE_IPAR), i, j
+      type(graph_handle_t) :: vhandle
+
+      v_rpar = 3.1415
+      v_ipar = 77
+
+      if (allocated(p_handles)) deallocate(p_handles)
+      if (allocated(c_handles)) deallocate(c_handles)
+      allocate(p_handles(6), c_handles(3))
+      call mold%initialize(is_3d=.true.)
+
+      p_handles(1)= mold%add_point([1.0_DP,0.0_DP,0.0_DP])
+      p_handles(2)= mold%add_point([0.0_DP,1.0_DP,0.0_DP])
+      p_handles(3)= mold%add_point([1.0_DP,1.0_DP,0.0_DP])
+      p_handles(4)= mold%add_point([0.5_DP,0.5_DP,0.9_DP])
+      p_handles(5)= mold%add_point([-0.5_DP,-0.5_DP,-0.5_DP])
+
+      ! add cells and some dummy vertices to challenge writer
+      c_handles(1) = mold%add_cell( &
+        [p_handles(1),p_handles(2),p_handles(3),p_handles(4)])
+      vhandle = mold%add_vertex(v_ipar, v_rpar)
+      c_handles(2) = mold%add_cell( &
+        [p_handles(1),p_handles(2),p_handles(3),p_handles(5)])
+      c_handles(3) = mold%add_cell( &
+        [p_handles(1),p_handles(2),p_handles(4),p_handles(5)])
+      vhandle = mold%add_vertex(v_ipar, v_rpar)
+      vtype = [10, 20, 30]
+
+      do i=1, mold%ncells
+print *, i, mold%ncells
+print *, c_handles(i)%get_index_to_map()
+print *, c_handles(i)%get_index_to_map(mold)
+        j = c_handles(i)%get_index_to_map(mold)
+        mold%vertices(mold%cells(j)%dual_vertex%get_index_to_map(mold%graph_t))% &
+            ipar(VPOS_TYPE) = vtype(i)
+      end do
+    end block
+
+    ! Write 3d-mesh
+    call vtudata%free()
+    call vtudata%add_item('vtype', VPOS_TYPE, META_IS_POINT+META_IS_INT, 1, 1)
+
+    call vtuio_write('mesh3d', mold, vtudata=vtudata)
+
+    ! Read mesh
+    call vtuio_read('mesh3d', mnew, vtudata=vtudata)
+
+    ! Compare mnew/mold and source data
+    block
+      integer :: k, j
+      logical :: match
+
+      call utest%assert(mold%npoints, mnew%npoints, '3d: number of points match')
+      call utest%assert(mold%ncells, mnew%ncells, '3d: number of cells match')
+      call utest%assert(mold%is_3d(), mnew%is_3d(), '3d: 2D / 3D flag match' )
+      call utest%assert(.true., &
+          all(real(mold%points(1:mold%npoints)%position(1)) == &
+              real(mnew%points(1:mnew%npoints)%position(1))), 'position x match')
+      call utest%assert(.true., &
+          all(real(mold%points(1:mold%npoints)%position(2)) == &
+              real(mnew%points(1:mnew%npoints)%position(2))), 'position y match')
+      call utest%assert(.true., &
+          all(real(mold%points(1:mold%npoints)%position(3)) == &
+              real(mnew%points(1:mnew%npoints)%position(3))), 'position z match')
+
+      match = .true.
+      do j=1,mnew%ncells
+        k = mnew%cells(j)%dual_vertex%get_index_to_map(mnew%graph_t)
+        match = match .and. mnew%vertices(k)%ipar(VPOS_TYPE)==vtype(j)
+      end do
+      call utest%assert(match,.true.,'3d - read type match')
+    end block
+#ifdef DEBUG
+    print '("vvv  3D MOLD  vvv")'
+    call mold%print(output_unit)
+    print '("^^^  3D MOLD  ^^^",/)'
+    print '("vvv  3D MNEW  vvv")'
+    call mnew%print(output_unit)
+    print '("^^^  3D MNEW  ^^^")'
+#endif
 
     ! test summary
     call utest%summarize()
