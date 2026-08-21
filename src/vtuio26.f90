@@ -783,8 +783,9 @@ end subroutine
       integer :: fid, npoints, ncells, ios, i, npoints_per_cell
       integer :: offset_points, offset_connectivity, offset_offsets, offset_types
       integer, allocatable :: offset_meta(:), pos_meta(:)
-      integer :: time_pos(2), binary_start
+      integer :: time_pos(2), binary_start, binary_end
       integer(HEADERTYPE_KIND) :: nblock   ! change KIND if error (!) TODO improve doc
+      integer(HEADERTYPE_KIND) :: max_offset, last_nblock
       real(DP) :: time0
       type(object_t), target :: root
       type(object_t), pointer :: grid, piece, opoints, ocells
@@ -951,14 +952,49 @@ end subroutine
 #endif
           exit
         end do
+        binary_end = data_pos(2)
       end block
+
+      max_offset = -1
+      last_nblock = 0
 
       ! First value in each data block is a header indicating the number of
       ! bytes for the datablock. Header can be 4 or 8 bytes integer.
       !
       ! 8 bytes headers read into 4 byte "nblock" will pass validation, but
-      ! imported data will be shifted by 1 byte (!!!)
-! TODO better validation???
+      ! imported data will be shifted by 1 byte.
+      !
+      ! To detect header size we utilize that "write_connectivity" writes
+      ! data blocks in the following order:
+      !   connectivity -> offsets -> types
+      ! Therefore,
+      !   offset_types = offset_offsets + size_header + size_offsets
+      HDETECT: block
+        integer(HEADERTYPE_KIND) :: est_hsize
+        if (offset_types < offset_offsets) then
+          ! types are written before offsets, probably by an external writer
+          ! skip the detection
+          print '("vtuio_read WARNING - external VTU file writer used, unable to detect header size")'
+          exit HDETECT
+        end if
+        est_hsize = offset_types - offset_offsets &
+          - int(ncells*CONNECTIONS_SIZE, HEADERTYPE_KIND)
+        print '("header size detection: estimated = ",i0,"  expected = ",i0)', &
+          est_hsize, HEADERTYPE_SIZE
+        if (est_hsize > 8) then
+          ! difference is not sane
+          print '("vtuio_read WARNING - header size detection unreliable")'
+          exit HDETECT
+        else if (est_hsize /= HEADERTYPE_SIZE) then
+          print '(a)', repeat('-',77)
+          print '("It seems VTU file uses ",i0,"-byte header size, while ",i0,&
+            & "-byte headers are expected.")', est_hsize, HEADERTYPE_SIZE
+
+          print '("Please change constants in source file and recompile library.")'
+          print '(a)', repeat('-',77)
+          error stop 'vtuio_read - incompatible header size detected'
+        end if
+      end block HDETECT
 
       99 format(2x,a,": nblock = ",i0,"  expected = ",i0)
 
@@ -971,6 +1007,10 @@ end subroutine
         if (expected/=nblock) error stop &
             'vtuio_read - validation fails, header size 32/64 mismatch?'
       end associate
+      if (offset_points > max_offset) then
+        max_offset = offset_points
+        last_nblock = nblock
+      end if
 
       ! validate offsets
       read(fid, pos=binary_start+offset_offsets) nblock
@@ -981,6 +1021,10 @@ end subroutine
         if (expected/=nblock) error stop &
             'vtuio_read - validation fails, header size 32/64 mismatch?'
       end associate
+      if (offset_offsets > max_offset) then
+        max_offset = offset_offsets
+        last_nblock = nblock
+      end if
 
       ! validate connectivity and for mesh_t decide if mesh is 2D or 3D
       read(fid, pos=binary_start+offset_connectivity) nblock
@@ -1008,6 +1052,10 @@ end subroutine
             'vtuio_read - validation fails, refs_per_cell=3 or 4 expected for meshat_'
         end if
       end block
+      if (offset_connectivity > max_offset) then
+        max_offset = offset_connectivity
+        last_nblock = nblock
+      end if
 
       ! validate types
       block
@@ -1015,7 +1063,7 @@ end subroutine
 
         read(fid, pos=binary_start+offset_types) nblock
 !       associate(item=>int(nblock)/ncells, check=>mod(int(nblock),ncells))
-        associate(expected=>int(ncells*CELLTYPE_SIZE,kind=HEADERTYPE_SIZE))
+        associate(expected=>int(ncells*CELLTYPE_SIZE,kind=HEADERTYPE_KIND))
 #ifdef DEBUG
           print 99, 'types', nblock, expected
 #endif
@@ -1043,6 +1091,10 @@ end subroutine
           error stop 'vtuio_read - npoints_per_cell invalid (internal error)'
         end select
       end block
+      if (offset_types > max_offset) then
+        max_offset = offset_types
+        last_nblock = nblock
+      end if
 
       ! validate PointData/CellData
       block
@@ -1088,7 +1140,33 @@ end subroutine
 #endif
             end if
           end associate
+          if (offset_meta(i) > max_offset) then
+            max_offset = offset_meta(i)
+            last_nblock = nblock
+          end if
         end do
+      end block
+
+      ! Validate no block exceeds AppendedData
+      block
+        integer(HEADERTYPE_KIND) :: binary_required
+        binary_required = binary_start + max_offset + HEADERTYPE_SIZE + last_nblock
+#ifdef DEBUG
+        print '("kast required = ",i0,"  last_available = ",i0)', &
+            binary_required, binary_end
+#endif
+        if (binary_required > binary_end) then
+#ifndef DEBUG
+        print '("kast required = ",i0,"  last_available = ",i0)', &
+            binary_required, binary_end
+#endif
+          error stop &
+            'vtuio_read - data block exceeds file size'
+        end if
+! the actual gap between binary_required / binary_end is 2
+if (binary_end-binary_required /= 2) then
+  print *, 'WARNING - something does not match, but it may work'
+end if
       end block
 
 
