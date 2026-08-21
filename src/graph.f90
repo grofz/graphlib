@@ -630,7 +630,13 @@
 ! component of the handle.
 !
       if (present(graph)) then
-        id = graph%index_from_handle(this)
+        select type(graph)
+        type is (graph_t)
+          id = graph%index_from_handle(this)
+        class default
+          error stop &
+            'get_index_to_map - graph must be of graph_t type, not of its child class type '
+        end select
       else
         id = this%index_to_map
       end if
