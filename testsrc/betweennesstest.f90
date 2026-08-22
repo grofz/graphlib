@@ -5,8 +5,7 @@ program betweeness
   use testutils_mod, only : testsample_t, parse_lines
   use parse_mod, only : string_t, read_strings
   use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR
-  use map_mod, only : VTUIO_MASK, POS_COST=>EPOS_WEIGHT, EPOS_EB, VPOS_VB, &
-    VPOS_TYPE
+  use map_mod, only : POS_COST=>EPOS_WEIGHT, EPOS_EB, VPOS_VB, VPOS_TYPE, VPOS_X
   use graph_mod, only : graph_t, handle_t
   use iso_fortran_env, only : dp=>real64, output_unit
   use vtuio_mod, only : vtuio_read, vtuio_write, vtuio_data_t
@@ -51,7 +50,7 @@ program betweeness
         position_eb=EPOS_EB, &
         position_vb=VPOS_VB )
     write(numstr,'(i2.2)') k
-    call vtuio_write('betweennesssample'//numstr, ts%g, VTUIO_MASK, vtudata=vtudata)
+    call vtuio_write('betweennesssample'//numstr, ts%g, position_id=VPOS_X, vtudata=vtudata)
     k = k+1
 
     call utest%assert( .true., all(almost_equal( &

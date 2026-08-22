@@ -77,14 +77,6 @@
       module procedure parse_value1, parse_value2
     end interface
 
-! temporary to keep old interface available
-interface vtuio_write
-  module procedure vtuio_write1, vtuio_write2
-end interface
-interface vtuio_read
-  module procedure vtuio_read1, vtuio_read2
-end interface
-
 ! -----------------------------------------------------------------------------
 ! TUNING THE BINARY FORMAT FOR vtuio_write
 !
@@ -127,10 +119,6 @@ end interface
     integer, parameter :: MAX_BUFFER_LEN=400
     character(len=1), parameter :: LF=char(10) ! end-of-line
     character(len=*), parameter :: SUFFIX = '.vtu'
-
-!TODO to be removedd
-    ! legend for items in "mask" array argument
-integer, parameter :: MASK_RADIUS=1, MASK_POSITION=2, MASK_POINT_TYPE=3, MASK_CELL_TYPE=4
 
   contains
 
@@ -266,35 +254,8 @@ integer, parameter :: MASK_RADIUS=1, MASK_POSITION=2, MASK_POINT_TYPE=3, MASK_CE
     ! -----------------------------
     ! Writing the Unstructured Grid
     ! -----------------------------
-! temporary old interface
-subroutine vtuio_write2(file, graph, mask, time, vtudata)
-  character(len=*), intent(in) :: file
-  class(graph_t), intent(in) :: graph
-  integer, intent(in) :: mask(4)
-    !! mask(1) - index pointing to "radius" in "vertex%rpar" array
-    !! mask(2) - index pointing to the first "position" component in "vertex%rpar" array
-    !! mask(3) - index pointing to "type" in "vertex%ipar" array
-    !! mask(4) - index pointing to "type" in "edge%ipar" array
-  real(DP), intent(in), optional :: time
-  type(vtuio_data_t), optional :: vtudata
-  type(vtuio_data_t) :: vtudata0
 
-  print *, 'WARNING - using obsolete vtuio_write interface'
-  if (present(vtudata)) then
-    call vtudata%add_item('radius', mask(MASK_RADIUS), int(META_IS_REAL+META_IS_POINT), 1, 4)
-    call vtudata%add_item('type', mask(MASK_POINT_TYPE), int(META_IS_INT+META_IS_POINT), 1, 1)
-    call vtudata%add_item('con t', mask(MASK_CELL_TYPE), int(META_IS_INT+META_IS_CELL), 1, 1)
-    call vtuio_write1(file, graph, mask(MASK_POSITION), time, vtudata)
-  else
-    call vtudata0%add_item('radius', mask(MASK_RADIUS), int(META_IS_REAL+META_IS_POINT), 1, 4)
-    call vtudata0%add_item('type', mask(MASK_POINT_TYPE), int(META_IS_INT+META_IS_POINT), 1, 1)
-    call vtudata0%add_item('con t', mask(MASK_CELL_TYPE), int(META_IS_INT+META_IS_CELL), 1, 1)
-    call vtuio_write1(file, graph, mask(MASK_POSITION), time, vtudata0)
-  end if
-end subroutine
-
-!TODO to be renamed to vtuio_write
-    subroutine vtuio_write1(file, graph, position_id, time, vtudata)
+    subroutine vtuio_write(file, graph, position_id, time, vtudata)
       !* Write Unstructured Grid - vertices and edges
       character(len=*), intent(in) :: file
         !! file name without .vtu suffix
@@ -375,7 +336,7 @@ end subroutine
 
       print '("VTU write: ",i0," points and ",i0," cells written&
           & to """,a,"""")', npoints, ncells, trim(file)//SUFFIX
-    end subroutine vtuio_write1
+    end subroutine vtuio_write
 
 
     subroutine write_points(fid, graph, npoints, positions_id, offset)
@@ -745,34 +706,8 @@ end subroutine
     ! -----------------------------
     ! Reading the Unstructured Grid
     ! -----------------------------
-subroutine vtuio_read2(file, graph, mask, time, vtudata)
-  character(len=*), intent(in) :: file
-  class(graph_t), intent(inout) :: graph
-  integer, intent(in) :: mask(4)
-    !! mask(1) - index pointing to "radius" in "vertex%rpar" array
-    !! mask(2) - index pointing to the first "position" component in "vertex%rpar" array
-    !! mask(3) - index pointing to "type" in "vertex%ipar" array
-    !! mask(4) - index pointing to "type" in "edge%ipar" array
-  real(DP), intent(out), optional :: time
-  type(vtuio_data_t), optional :: vtudata
-  type(vtuio_data_t) :: vtudata0
 
-  print *, 'WARNING - using obsolete vtuio_read interface'
-  if (present(vtudata)) then
-    call vtudata%add_item('radius', mask(MASK_RADIUS), int(META_IS_REAL+META_IS_POINT), 1, 4)
-    call vtudata%add_item('type', mask(MASK_POINT_TYPE), int(META_IS_INT+META_IS_POINT), 1, 1)
-    call vtudata%add_item('con t', mask(MASK_CELL_TYPE), int(META_IS_INT+META_IS_CELL), 1, 1)
-    call vtuio_read1(file, graph, mask(MASK_POSITION), time, vtudata)
-  else
-    call vtudata0%add_item('radius', mask(MASK_RADIUS), int(META_IS_REAL+META_IS_POINT), 1, 4)
-    call vtudata0%add_item('type', mask(MASK_POINT_TYPE), int(META_IS_INT+META_IS_POINT), 1, 1)
-    call vtudata0%add_item('con t', mask(MASK_CELL_TYPE), int(META_IS_INT+META_IS_CELL), 1, 1)
-    call vtuio_read1(file, graph, mask(MASK_POSITION), time, vtudata0)
-  end if
-end subroutine
-
-!TODO rename to vtuio_read
-    subroutine vtuio_read1(file, graph, position_id, time, vtudata)
+    subroutine vtuio_read(file, graph, position_id, time, vtudata)
       character(len=*), intent(in) :: file
       class(graph_t), intent(inout) :: graph
       integer, intent(in), optional :: position_id
@@ -984,8 +919,10 @@ end subroutine
         est_hsize = int(offset_types, kind=HEADERTYPE_KIND) &
             - int(offset_offsets, kind=HEADERTYPE_KIND) &
             - int(ncells*CONNECTIONS_SIZE, kind=HEADERTYPE_KIND)
+#ifdef DEBUG
         print '("header size detection: estimated = ",i0,"  expected = ",i0)', &
           est_hsize, HEADERTYPE_SIZE
+#endif
         if (est_hsize > 8) then
           ! difference is too large
           print '("vtuio_read WARNING - Header size detection unreliable", &
@@ -1326,7 +1263,7 @@ end subroutine
       print '("VTU read: points = ",i0,"  cells = ",i0,"  points per cell = ",i0)', &
           npoints, ncells, npoints_per_cell
       if (present(time)) print '("VTU read: time = ",f8.2)', time
-    end subroutine vtuio_read1
+    end subroutine vtuio_read
 
 
     subroutine inspect_dataarray(obj, name, type, ncomp, offset)

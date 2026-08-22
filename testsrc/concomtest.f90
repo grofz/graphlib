@@ -14,7 +14,7 @@ program test_connected_components
   ! ==================
   ! Test #1 a 2D plane
   ! ==================
-  call vtuio_read('smallsample', g, VTUIO_MASK)
+  call vtuio_read('smallsample', g, VPOS_X)
 
   g%vertices(1:g%nvertices)%ipar(VPOS_COMP) = -2
   call g%connected_components( &
@@ -32,7 +32,7 @@ program test_connected_components
   end block
 
   call vtudata%add_item('conlab', start=VPOS_COMP, iclass=0, ncomp=1, nbytes=4)
-  call vtuio_write('a', g, VTUIO_MASK, vtudata=vtudata)
+  call vtuio_write('a', g, VPOS_X, vtudata=vtudata)
 
   ! ==========================
   ! Test #2 - undirected graph

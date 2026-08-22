@@ -2,7 +2,7 @@
     use iso_fortran_env, only : DP=>real64, output_unit, I1=>int8
     use vtuio_mod, only : vtuio_write, vtuio_read, vtuio_data_t
     use graph_mod, only : graph_t, handle_t, MAXFLOW_DINIC, MAXFLOW_EDMOND_KARP
-    use map_mod, only : EPOS_WEIGHT, EPOS_FLOW, VPOS_TYPE, VTUIO_MASK
+    use map_mod, only : EPOS_WEIGHT, EPOS_FLOW, VPOS_TYPE, VPOS_X
     use testutils_mod, only : testsample_t, parse_lines
     use parse_mod, only : string_t, read_strings
     use utest_mod, only : utest_t
@@ -137,7 +137,7 @@
           ! write to file for Paraview inspection
           call vtuio_write( &
               'maxflowsample'//numstr//typestr, &
-              ts%g, VTUIO_MASK, vtudata=vtudata)
+              ts%g, position_id=VPOS_X, vtudata=vtudata)
 
           k=k+1
 #ifdef DEBUG

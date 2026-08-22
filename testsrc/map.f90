@@ -32,7 +32,4 @@
     integer, parameter :: EPOS_FLOW   = 3  ! flow
     integer, parameter :: EPOS_RTMP   = 4  ! temporary working space
 
-    ! Mask for vtuio read/write operation
-    integer, parameter :: &
-        VTUIO_MASK(*) = [VPOS_RADIUS, VPOS_X, VPOS_TYPE, EPOS_TYPE]
   end module map_mod
