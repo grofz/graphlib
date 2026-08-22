@@ -29,9 +29,8 @@
     use graph_user_mod, only : VSIZE_RPAR, VSIZE_IPAR, ESIZE_RPAR, ESIZE_IPAR
     use mesh_mod, only : mesh_t, point_t, cell_t, mesh_handle_t
     use vtuio_tree_mod, only : object_t, vtuio_tree_read
-    use iso_fortran_env, only : &
-    &   SP=>real32, DP=>real64, I4B=>int32, I8B=>int64, I1B=>int8, &
-    &   error_unit
+    use iso_fortran_env, only :  SP=>real32, DP=>real64, &
+        I4B=>int32, I8B=>int64, I1B=>int8
     implicit none
     private
     public vtuio_write, vtuio_read
@@ -57,12 +56,12 @@
     integer(I1B), parameter, public :: &
         META_IS_INT   = 0, META_IS_REAL  = 2, & ! 00_binary or 10_binary
         META_IS_POINT = 0, META_IS_CELL  = 1    ! 00_binary or 01_binary
-      ! sum of INT/REAL and POINT/CELL options gives 0,1,2,3
+      !! sum of INT/REAL and POINT/CELL options gives 0,1,2,3
 
     type, public :: vtuio_data_t
-      !! 1. Call `add_item` to add additional data fields
-      !! 2. Call vtuio_write
-      !! 3. Call `finalize`
+      !! 1. Call `add_item()` to add data field descriptor
+      !! 2. Use as an argument to vtuio_write/vtuio_read
+      !! 3. Call `free()` (optional)
       type(vtuio_meta_t), allocatable :: meta(:)
     contains
       generic :: add_item => meta_add_item1, meta_add_item2
@@ -119,8 +118,10 @@ end interface
 ! TYPE OF CELLS (all cells have the same type)
     integer, parameter :: CELLTYPE_KIND=I1B, CELLTYPE_SIZE=1
     character(len=*), parameter :: CELLTYPE_TEXT='"UInt8"'
-    integer, parameter :: VTK_LINE = 3, VTK_TRIANGLE = 5, VTK_TETRA = 10
 ! -----------------------------------------------------------------------------
+
+    ! VTK cell types
+    integer, parameter :: VTK_LINE = 3, VTK_TRIANGLE = 5, VTK_TETRA = 10
 
     integer, parameter :: DATAARRAY_NOT_FOUND=-1
     integer, parameter :: MAX_BUFFER_LEN=400
@@ -786,17 +787,17 @@ end subroutine
       integer :: time_pos(2), binary_start, binary_end
       integer(HEADERTYPE_KIND) :: nblock   ! change KIND if error (!) TODO improve doc
       integer(HEADERTYPE_KIND) :: max_offset, last_nblock
-      real(DP) :: time0
       type(object_t), target :: root
-      type(object_t), pointer :: grid, piece, opoints, ocells
+      type(object_t), pointer :: grid, piece
       character(len=1) :: ch
       type(graph_handle_t), allocatable :: graph_points(:), graph_cells(:)
       type(mesh_handle_t), allocatable :: mesh_points(:), mesh_cells(:)
 
-      ! PART 0
+      ! PART ZERO
+      ! Argument checks
       select type(graph)
       class is (mesh_t)
-        npoints_per_cell = 3 ! or 4
+        npoints_per_cell = 3 ! or 4 (will be detected later)
         if (present(position_id)) error stop &
             'vtuio_read = position_id should not be present for mesh_t'
       class default
@@ -808,67 +809,62 @@ end subroutine
       end select
 
       ! PART ONE
-      ! read and analyze the vtk-tree
+      ! Read and analyze the vtk-tree
       call vtuio_tree_read(file//SUFFIX, root)
 
       grid => root%findtag('UnstructuredGrid')
       if (.not. associated(grid)) error stop &
-          'vtuio_read - tag "UnstructuredGrid" not found'
+          'vtuio_read - "UnstructuredGrid" not found'
 
       piece => grid%findtag('Piece')
-      if (.not. associated(piece)) error stop &
-          'vtuio_read - tag "Piece" not found'
+      if (.not. associated(piece)) error stop 'vtuio_read - "Piece" not found'
 
-      ! get "npoints" and "ncells"
+      ! Get "npoints" and "ncells"
       npoints = parse_value(piece, 'NumberOfPoints', 'npoints')
       ncells = parse_value(piece, 'NumberOfCells', 'ncells')
-      if (npoints<=0) error stop 'vtuio_read - positive value of npoints required'
-      if (ncells<0) error stop 'vtuio_read - ncells is negative'
-      if (ncells==0) error stop 'vtuio_read - zero ncells not supported'
-        ! reject empty graphs/meshes for now, to support it later, division
-        ! by zero must be resolved in code below
+      if (npoints <= 0) error stop &
+          'vtuio_read - positive value of npoints required'
+      if (ncells < 0) error stop 'vtuio_read - ncells is negative'
+      if (ncells == 0) error stop 'vtuio_read - zero ncells not supported'
+        ! Reject empty graphs/meshes for now. To support them later,
+        ! division by zero must be resolved in code below
 
-      ! get offsets for points and connections
-      opoints => piece%findtag('Points')
-      if (.not. associated(opoints)) error stop &
-          'vtuio_read - tag "Points" not found'
-      offset_points = parse_value(opoints, 'offset', 'offset_points')
-
-      ocells => piece%findtag('Cells')
-      if (.not. associated(ocells)) error stop &
-          'vtuio_read - tag "Cells" not found'
-      offset_connectivity = parse_value(ocells, &
-          'Name', 'connectivity', 'offset', 'offset_connectivity')
-      offset_offsets = parse_value(ocells, &
-          'Name', 'offsets', 'offset', 'offset_offsets')
-      offset_types = parse_value(ocells, &
-          'Name', 'types', 'offset', 'offset_types')
-
-      ! is timevalue present?
+      ! Get offsets for points and connections
       block
-        character(len=:), allocatable :: text
-        logical :: was_found
-        time_pos = 0
-        text = grid%findval('Name','TimeValue','format', was_found)
-        if (was_found) then
-          time_pos = grid%findraw()
-        end if
-#ifdef DEBUG
-        print '("time_pos ",i0,1x,i0)', time_pos
-#endif
+        type(object_t), pointer :: opoints, ocells
+
+        opoints => piece%findtag('Points')
+        if (.not. associated(opoints)) error stop &
+            'vtuio_read - "Points" not found'
+        offset_points = parse_value(opoints, 'offset', 'offset_points')
+
+        ocells => piece%findtag('Cells')
+        if (.not. associated(ocells)) error stop &
+            'vtuio_read - "Cells" not found'
+
+        offset_connectivity = parse_value(ocells, &
+            'Name', 'connectivity', 'offset', 'offset_connectivity')
+        offset_offsets = parse_value(ocells, &
+            'Name', 'offsets', 'offset', 'offset_offsets')
+        offset_types = parse_value(ocells, &
+            'Name', 'types', 'offset', 'offset_types')
+
+        if (offset_points < 0 .or. offset_connectivity < 0 .or. &
+            offset_offsets < 0 .or. offset_types < 0) error stop &
+            'vtuio_read - negative offset value'
       end block
 
-      ! get offsets for PointData / CellData
+      ! Get offsets for point/cell data
       block
         type(object_t), pointer :: block_read
         character(len=:), allocatable :: type
-        integer :: ncomp, n_meta
+        integer :: ncomp
 
-        n_meta = 0
         if (present(vtudata)) then
-          if (allocated(vtudata%meta)) n_meta = size(vtudata%meta)
+          if (allocated(vtudata%meta)) &
+              allocate(offset_meta(size(vtudata%meta)), source=DATAARRAY_NOT_FOUND)
         end if
-        allocate(offset_meta(n_meta), source=DATAARRAY_NOT_FOUND)
+        if (.not. allocated(offset_meta)) allocate(offset_meta(0))
 
         do i=1, size(offset_meta)
           associate(m=>vtudata%meta(i))
@@ -886,8 +882,8 @@ end subroutine
               select type(graph)
               class is (mesh_t)
                 ! cell data for edge arrays are ignored in mesh_t objects
-                print '("WARNING - vtudata label ",a, &
-                    &": cell data ignored in mesh_t objects")', trim(m%label)
+                print '("WARNING vtuio - cell data block ",a, &
+                    &" ignored during import to mesh_t")', trim(m%label)
                 cycle
               class default
                 ! cell data for edge arrays imported from CellData block
@@ -897,26 +893,41 @@ end subroutine
               error stop 'vtuio_read - invalid meta%iclass value'
             end select
 
-            if(associated(block_read)) then
-              call inspect_dataarray(block_read, trim(m%label), type, ncomp, &
-                  offset_meta(i))
-            end if
+            call inspect_dataarray(block_read, trim(m%label), type, ncomp, &
+                offset_meta(i))
             if (offset_meta(i)==DATAARRAY_NOT_FOUND) then
-              print '("WARNING vtudata label ",a,": not found in file")', &
+              print '("WARNING vtuio - block ",a," not found in file")', &
                   trim(m%label)
             else
               if (ncomp /= m%ncomp .or. type /= get_data_text(2*(m%iclass/2),m%nbytes)) then
                 offset_meta(i) = DATAARRAY_NOT_FOUND
-                print '("WARNING vtudata label ",a,": attribute mismatch, skipping data block")', trim(m%label)
-                print '("  NumberOfComponents ",i0," (expected ",i0,") and type ",a," (expected ",a,")" )', &
+                print '("WARNING vtuio - skipping block ",a," due to attribute mismatch:")', &
+                    trim(m%label)
+                print '("  NumberOfComponents ",i0," (expected ",i0,")&
+                    & and type ",a," (expected ",a,")" )', &
                     ncomp, m%ncomp, type, get_data_text(2*(m%iclass/2),m%nbytes)
               end if
             end if
 #ifdef DEBUG
-            print '("label ",a,": offset = ",i0)', trim(m%label), offset_meta(i)
+            print '("  (data) ",a,": offset = ",i0)', trim(m%label), offset_meta(i)
 #endif
           end associate
         end do
+      end block
+
+      ! Is TimeValue block present?
+      block
+        character(len=:), allocatable :: text
+        logical :: was_found
+        time_pos = 0
+        text = grid%findval('Name','TimeValue','format', was_found)
+!TODO need more usefull function as not interessed in text/format
+        if (was_found) then
+          time_pos = grid%findraw()
+        end if
+#ifdef DEBUG
+        print '("time_pos ",i0,1x,i0)', time_pos
+#endif
       end block
 
 
@@ -926,14 +937,14 @@ end subroutine
       ! and verify it matches with the expected value.
       open(newunit=fid, file=file//SUFFIX, status='old', access='stream')
 
-      ! Where binary data start?
+      ! Where binary data start and end?
       block
         integer :: data_pos(2)
         type(object_t), pointer :: data_root
 
         data_root => root%findtag('AppendedData')
         if (.not. associated(data_root)) error stop &
-          & 'vtuio_read - tag "AppendedData" not found'
+          & 'vtuio_read - "AppendedData" not found'
         data_pos = data_root%findraw()
 #ifdef DEBUG
         print '("data_pos ",i0,1x,i0)', data_pos
@@ -946,66 +957,67 @@ end subroutine
             cycle
           end if
           if (ch /= '_') error stop 'vtuio_read - could not find appended data'
-          binary_start = data_pos(1) + 1
-#ifdef DEBUG
-          print '("binary start ",i0)', binary_start
-#endif
           exit
         end do
+        binary_start = data_pos(1) + 1
         binary_end = data_pos(2)
+#ifdef DEBUG
+        print '("binary start = ",i0,"  end = ",i0)', binary_start, binary_end
+#endif
       end block
-
-      max_offset = -1
-      last_nblock = 0
 
       ! First value in each data block is a header indicating the number of
       ! bytes for the datablock. Header can be 4 or 8 bytes integer.
       !
-      ! 8 bytes headers read into 4 byte "nblock" will pass validation, but
-      ! imported data will be shifted by 1 byte.
-      !
       ! To detect header size we utilize that "write_connectivity" writes
-      ! data blocks in the following order:
-      !   connectivity -> offsets -> types
+      ! binary data in the following order:  connectivity -> offsets -> types
       ! Therefore,
       !   offset_types = offset_offsets + size_header + size_offsets
       HDETECT: block
         integer(HEADERTYPE_KIND) :: est_hsize
         if (offset_types < offset_offsets) then
-          ! types are written before offsets, probably by an external writer
-          ! skip the detection
-          print '("vtuio_read WARNING - external VTU file writer used, unable to detect header size")'
+          ! Types written before offsets, probably by an external writer.
+          print '("WARNING vtuio - Unable detect header size.",/,&
+              &   "                Possibly an external VTU write tool used.")'
           exit HDETECT
         end if
-        est_hsize = offset_types - offset_offsets &
-          - int(ncells*CONNECTIONS_SIZE, HEADERTYPE_KIND)
+        est_hsize = int(offset_types, kind=HEADERTYPE_KIND) &
+            - int(offset_offsets, kind=HEADERTYPE_KIND) &
+            - int(ncells*CONNECTIONS_SIZE, kind=HEADERTYPE_KIND)
         print '("header size detection: estimated = ",i0,"  expected = ",i0)', &
           est_hsize, HEADERTYPE_SIZE
         if (est_hsize > 8) then
-          ! difference is not sane
-          print '("vtuio_read WARNING - header size detection unreliable")'
-          exit HDETECT
+          ! difference is too large
+          print '("vtuio_read WARNING - Header size detection unreliable", &
+              &   "                     Possibly an external VTU write tool used.")'
         else if (est_hsize /= HEADERTYPE_SIZE) then
           print '(a)', repeat('-',77)
           print '("It seems VTU file uses ",i0,"-byte header size, while ",i0,&
             & "-byte headers are expected.")', est_hsize, HEADERTYPE_SIZE
-
           print '("Please change constants in source file and recompile library.")'
           print '(a)', repeat('-',77)
           error stop 'vtuio_read - incompatible header size detected'
         end if
       end block HDETECT
 
+      max_offset = -1
+      last_nblock = 0
+
       99 format(2x,a,": nblock = ",i0,"  expected = ",i0)
+
+      ! Offsets validation:
+      ! Read header at detected offset and compare it with expected value.
+      ! 8 bytes headers read into 4 byte "nblock" will pass validation, but
+      ! imported data will be shifted by 1 byte.
 
       ! validate positions
       read(fid, pos=binary_start+offset_points) nblock
-      associate(expected=>int(3*npoints*POSITIONS_SIZE,kind=HEADERTYPE_KIND))
+      associate(expected=>int(npoints,kind=HEADERTYPE_KIND)*3*POSITIONS_SIZE)
 #ifdef DEBUG
         print 99, 'points', nblock, expected
 #endif
         if (expected/=nblock) error stop &
-            'vtuio_read - validation fails, header size 32/64 mismatch?'
+            'vtuio_read - points offset validation failure'
       end associate
       if (offset_points > max_offset) then
         max_offset = offset_points
@@ -1014,12 +1026,12 @@ end subroutine
 
       ! validate offsets
       read(fid, pos=binary_start+offset_offsets) nblock
-      associate(expected=>int(ncells*CONNECTIONS_SIZE,kind=HEADERTYPE_KIND))
+      associate(expected=>int(ncells,kind=HEADERTYPE_KIND)*CONNECTIONS_SIZE)
 #ifdef DEBUG
         print 99, 'offsets', nblock, expected
 #endif
         if (expected/=nblock) error stop &
-            'vtuio_read - validation fails, header size 32/64 mismatch?'
+            'vtuio_read - offsets offset validation failure'
       end associate
       if (offset_offsets > max_offset) then
         max_offset = offset_offsets
@@ -1030,7 +1042,7 @@ end subroutine
       read(fid, pos=binary_start+offset_connectivity) nblock
       block
         integer(HEADERTYPE_KIND) :: size_per_ref, refs_per_cell, check
-        size_per_ref = int(ncells*CONNECTIONS_SIZE,kind=HEADERTYPE_KIND)
+        size_per_ref = int(ncells,kind=HEADERTYPE_KIND)*CONNECTIONS_SIZE
         refs_per_cell = nblock/size_per_ref
         check = mod(nblock,size_per_ref)
 #ifdef DEBUG
@@ -1039,7 +1051,7 @@ end subroutine
             nblock, size_per_ref, refs_per_cell
 #endif
         if (check/=0) error stop &
-            'vtuio_read - validation fails, header size 32/64 mismatch?'
+            'vtuio_read - connectivity offset validation failure'
         if (npoints_per_cell == 2) then
           if (refs_per_cell/=2) error stop &
             'vtuio_read - validation fails, refs_per_cell=2 expected for graph_t'
@@ -1060,22 +1072,24 @@ end subroutine
       ! validate types
       block
         integer(CELLTYPE_KIND), allocatable :: celltypes(:)
+        character(len=8) :: text3(3)=['line    ', 'triangle', 'tetra   ']
 
         read(fid, pos=binary_start+offset_types) nblock
-!       associate(item=>int(nblock)/ncells, check=>mod(int(nblock),ncells))
-        associate(expected=>int(ncells*CELLTYPE_SIZE,kind=HEADERTYPE_KIND))
+        associate(expected=>int(ncells,kind=HEADERTYPE_KIND)*CELLTYPE_SIZE)
 #ifdef DEBUG
           print 99, 'types', nblock, expected
 #endif
           if (nblock/=expected) error stop &
-              'vtuio_read - validation fails, header size 32/64 mismatch?'
+            'vtuio_read - types offset validation failure'
         end associate
         allocate(celltypes(ncells))
         read(fid) celltypes
 #ifdef DEBUG
-        if (ncells>0) print &
-            '("  vtk_type:  (line/triangle/tetra)  ",l1,"/",l1,"/",l1)', &
-            celltypes(1)==[VTK_LINE, VTK_TRIANGLE, VTK_TETRA]
+        if (ncells>0) then
+          associate(f=>findloc(celltypes(1)==[VTK_LINE, VTK_TRIANGLE, VTK_TETRA],.true.,dim=1))
+            if (f>0) print '("  vtk_type = ",a)', trim(text3(f))
+          end associate
+        end if
 #endif
         select case(npoints_per_cell)
         case(2)
@@ -1096,7 +1110,7 @@ end subroutine
         last_nblock = nblock
       end if
 
-      ! validate PointData/CellData
+      ! validate point/cell data offsets
       block
         integer :: items_expected
         integer(HEADERTYPE_KIND) :: expected
@@ -1120,7 +1134,7 @@ end subroutine
               select type(graph)
               class is (mesh_t)
                 ! cell data for edge arrays are ignored in mesh_t objects
-                error stop 'vtuio_read - offset should be -1 here (iternal error)'
+                error stop 'vtuio_read - offset should be -1 here (internal error)'
               class default
                 ! cell data for edge arrays imported from CellData block
                 items_expected = ncells * m%ncomp
@@ -1149,24 +1163,27 @@ end subroutine
 
       ! Validate no block exceeds AppendedData
       block
-        integer(HEADERTYPE_KIND) :: binary_required
-        binary_required = binary_start + max_offset + HEADERTYPE_SIZE + last_nblock
+        integer(HEADERTYPE_KIND) :: binary_req
+        binary_req = binary_start + max_offset + HEADERTYPE_SIZE + last_nblock
 #ifdef DEBUG
         print '("kast required = ",i0,"  last_available = ",i0)', &
-            binary_required, binary_end
+            binary_req, binary_end
 #endif
-        if (binary_required > binary_end) then
+        if (binary_req > binary_end) then
 #ifndef DEBUG
         print '("kast required = ",i0,"  last_available = ",i0)', &
-            binary_required, binary_end
+            binary_req, binary_end
 #endif
           error stop &
             'vtuio_read - data block exceeds file size'
         end if
-! the actual gap between binary_required / binary_end is 2
-if (binary_end-binary_required /= 2) then
-  print *, 'WARNING - something does not match, but it may work'
-end if
+
+       ! the actual gap is 2 (a space and LF put by vtuio_read)
+       ! print warning if otherwise
+       if (binary_end-binary_req /= 2)  print &
+          '("WARNING vtuio - Gap ",i0," bytes at the end of binary data block",/&
+          & "  indicates a possible use of external VTU wirter tool.")',&
+          binary_end-binary_req
       end block
 
 
@@ -1286,34 +1303,34 @@ end if
       ! PART FIVE
       ! Read time component
       block
+        real(DP) :: time0
         character(len=:), allocatable :: val
+
         if (all(time_pos>0)) then
-          if (allocated(val)) deallocate(val)
           allocate(character(len=time_pos(2)-time_pos(1)) :: val)
           read(fid, pos=time_pos(1)) val
           read(val,*,iostat=ios) time0
           if (ios/=0) error stop 'vtuio_read - error reading time value'
+          if (present(time)) time = time0
         else
-          time0 = 0.0
-          if (present(time)) &
-              print '("WARNING - time component not found in VTU file")'
+          if (present(time)) then
+            print '("WARNING - time component not found in VTU file")'
+            time = 0.0_dp
+          end if
         end if
       end block
 
 
       ! THE END
-      print '("VTU file read: points=",i0," cells=",i0)', npoints, ncells
       close(fid)
-
-      if (present(time)) then
-        time = time0
-        print '("VTU file read: time=",f8.2)', time
-      end if
+      print '("VTU read: points = ",i0,"  cells = ",i0,"  points per cell = ",i0)', &
+          npoints, ncells, npoints_per_cell
+      if (present(time)) print '("VTU read: time = ",f8.2)', time
     end subroutine vtuio_read1
 
 
     subroutine inspect_dataarray(obj, name, type, ncomp, offset)
-      type(object_t), intent(in), target :: obj
+      type(object_t), intent(in), pointer :: obj
       character(len=*), intent(in) :: name
       character(len=:), allocatable, intent(out) :: type
       integer, intent(out) :: ncomp, offset
@@ -1326,11 +1343,20 @@ end if
 !     -> warn and return ncomp with 1
 !   - offset attribute not found - data attachment method not supported
 !     -> error
+!   - NumberOfComponents or offset invalid value
+!     -> error
 !
       character(len=MAX_BUFFER_LEN) :: text
       type(object_t), pointer :: dataarray
       logical :: was_found
       integer :: ios
+
+      ! initialize output variables
+      offset = DATAARRAY_NOT_FOUND
+      ncomp = 1
+      allocate(character(len=0)::type)
+
+      if (.not. associated(obj)) return
 
       if (trim(name)=='') then
         dataarray => obj%findtag('DataArray')
@@ -1340,22 +1366,20 @@ end if
 ! TODO need more convenient function, not interessed in type/text here
       end if
 
-      if (.not. associated(dataarray)) then
-        allocate(character(len=0)::type)
-        ncomp = 1
-        offset = DATAARRAY_NOT_FOUND
-        return
-      end if
+      if (.not. associated(dataarray)) return
 
+      ! The requested DataArray object exists and was found
+      ! Get "type"
       text = dataarray%findval('type', was_found)
       if (was_found) then
+        deallocate(type)
         allocate(character(len=len_trim(text)+2) :: type)
         type = '"'//trim(text)//'"'
       else
-        allocate(character(len=0) :: type)
         print '("WARNING - type attribute not found in DataArray ",a)', name
       end if
 
+      ! Get "ncomp"
       text = dataarray%findval('NumberOfComponents', was_found)
       if (was_found) then
         read(text,*,iostat=ios) ncomp
@@ -1364,17 +1388,21 @@ end if
         if (ncomp < 1) error stop &
             'inspect_dataarray - NumberOfComponents must be a positive number'
       else
-        print '("WARNING - NumberOfComponents not present in ",a,&
+        print '("WARNING vtuio - NumberOfComponents not present in block ",a,&
             & ". Assuming 1")', name
         ncomp = 1
       end if
 
+      ! Get "offset"
       text = dataarray%findval('offset', was_found)
       ios = 0
       if (was_found) read(text,*,iostat=ios) offset
-      if (ios/=0 .or. .not. was_found) &
+      if (ios/=0 .or. .not. was_found) then
         error stop &
           'inspect_dataarray - a compulsory offset could not be find/read'
+      else if (offset < 0) then
+        error stop 'inspect_dataarray - negative offset detected'
+      end if
     end subroutine inspect_dataarray
 
 
