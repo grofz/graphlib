@@ -3,7 +3,7 @@
 ! assertions that passed/failed. A summary is generated at the end.
 !
   module utest_mod
-    use iso_fortran_env, only : dp=>real64
+    use iso_fortran_env, only : dp=>real64, sp=>real32
     implicit none
     private
 
@@ -15,13 +15,13 @@
       type(assert_line_t), pointer :: last => null()
     contains
       generic :: assert => assert_equals_integer, assert_equals_logical, &
-          assert_equals_dp, &
+          assert_equals_dp, assert_equals_sp, &
           assert_equals_integer_arr, assert_equals_integer_4arr
       procedure :: summarize
       procedure :: all_passed
       final :: utest_finalize
       procedure, private :: assert_equals_integer, assert_equals_logical, &
-          assert_equals_dp, &
+          assert_equals_dp, assert_equals_sp, &
           assert_equals_integer_arr, assert_equals_integer_4arr
     end type utest_t
 
@@ -253,6 +253,14 @@
       end if
       call add_assertline(this, line)
     end subroutine assert_equals_logical
+
+
+    subroutine assert_equals_sp(this, a, b, msg1)
+      class(utest_t), intent(inout) :: this
+      real(sp), intent(in) :: a, b
+      character(len=*), intent(in) :: msg1
+      call assert_equals_dp(this, real(a,dp), real(b,dp), msg1)
+    end subroutine assert_equals_sp
 
 
     subroutine assert_equals_dp(this, a, b, msg1)

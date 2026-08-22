@@ -1,5 +1,5 @@
   program vtuio_test
-    use iso_fortran_env, only : DP=>real64, output_unit, I1=>int8
+    use iso_fortran_env, only : SP=>real32, DP=>real64, output_unit, I1=>int8
     use vtuio_mod, only : vtuio_write, vtuio_read, vtuio_data_t, META_IS_CELL, &
       META_IS_POINT, META_IS_INT, META_IS_REAL
     use graph_mod, only : graph_t, graph_handle_t=>handle_t, edge_t
@@ -15,7 +15,8 @@
     type(mesh_handle_t), allocatable :: p_handles(:), c_handles(:)
     type(vtuio_data_t) :: vtudata
     type(utest_t) :: utest
-    real(DP) :: time
+    real(SP) :: time
+    real(SP), parameter :: time0 = 123.45
     real(dp), allocatable :: vpos(:,:), vrad(:), vvelo(:,:), eflow(:)
     integer, allocatable :: vtype(:), etype(:)
 
@@ -81,13 +82,18 @@
     call vtudata%add_item('ctype', EPOS_TYPE, META_IS_CELL+META_IS_INT, 1, 1)
     call vtudata%add_item('vtype', VPOS_TYPE, META_IS_POINT+META_IS_INT, 1, 1)
     call vtudata%add_item('flow', EPOS_FLOW, META_IS_CELL+META_IS_REAL, 1, 8)
-    call vtuio_write('test_graph', gold, position_id=VPOS_X, time=123.0_DP, vtudata=vtudata)
+    call vtuio_write('test_graph', gold, position_id=VPOS_X, time=real(time0,dp), vtudata=vtudata)
 
     ! Read graph
-    call vtuio_read('test_graph', gnew, position_id=VPOS_X, time=time, vtudata=vtudata)
+    block
+      real(dp) :: timeDP
+      call vtuio_read('test_graph', gnew, position_id=VPOS_X, time=timeDP, vtudata=vtudata)
+      time = real(timeDP)
+    end block
 
     ! Compare gold and gnew
     block
+      call utest%assert(time0, time, 'writing / reading time to VTU file works')
       call utest%assert(gold%nvertices, gnew%nvertices, 'number of vertices match')
       call utest%assert(gold%nedges, gnew%nedges, 'number of edges match')
       call utest%assert(.true., &
