@@ -600,6 +600,12 @@
             if (.not. (this%vertices(id)%handle==handle)) id = MAP_NULL
           end if
         end if
+#ifdef DEBUG
+        if (id /= MAP_NULL) then
+          if (id<1 .or. id>this%nvertices) error stop &
+              'graph_index_from_handle - vertex index out of bounds (internal error)'
+        end if
+#endif
       case(EDGE_HANDLE_TYPE)
         if (handle%index_to_map > 0 .and. handle%index_to_map <= size(this%emap)) then
           id = this%emap(handle%index_to_map)
@@ -608,6 +614,12 @@
             if (.not. (this%edges(id)%handle==handle)) id = MAP_NULL
           end if
         end if
+#ifdef DEBUG
+        if (id /= MAP_NULL) then
+          if (id<1 .or. id>this%nedges) error stop &
+              'graph_index_from_handle - edge index out of bounds (internal error)'
+        end if
+#endif
       case default
         error stop 'index_from_handle: unknown handle_type'
       end select

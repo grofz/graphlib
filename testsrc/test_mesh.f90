@@ -49,6 +49,22 @@ program test_mesh
   call grid%print(output_unit)
   call vtuio_write('mesh', grid, vtudata=vtuio)
 
+  ! Now test removing some cells
+  call grid%remove_cell(carr(6))
+  call grid%remove_cell(carr(5))
+  call grid%remove_cell(carr(2))
+  call grid%remove_cell(carr(7))
+  call grid%remove_cell(carr(9))
+  call grid%remove_cell(carr(1))
+  call grid%remove_cell(carr(4))
+  call grid%remove_cell(carr(8))
+  call grid%remove_cell(carr(3))
+  call grid%remove_cell(carr(10))
+  print *, 'removed ok'
+  call grid%print(output_unit)
+  call vtuio_write('mesh1', grid, vtudata=vtuio)
+  stop 1
+
   deallocate(parr, carr)
   call grid3d%initialize(is_3d=.true.)
   allocate(parr(6))

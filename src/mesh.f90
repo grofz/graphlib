@@ -25,18 +25,17 @@
     use conts_mod, only : queue_t, stack_t, INTEGER_MOLD
     implicit none (type, external)
     private
-! temporary just for debugging
-public order_point_indices
 
     ! Named local constants
     integer, parameter :: DEFAULT_CCAPACITY = 10, DEFAULT_PCAPACITY = 5
 
-    ! Used for a 2D-grid only to define the positive orientation points order,
-    ! all points should lie bellow the reference point.
+    ! Reference point used for 2D-grid only to define the positive orientation
+    ! based on ordering the points.
+    ! All point positions must be bellow the reference point.
     real(dp), parameter :: &
         ORIENTATION_2D_REFPOINT(3) = real([0.0, 0.0, 10.0], dp)
 
-    ! Extending enumerators for graph_handle_t
+    ! Extending enumerators for "graph_handle_t"
     ! - type=1 for vertices and type=2 for edges in "src/graph.f90"
     integer(I1B), parameter :: POINT_HANDLE_TYPE = 3_I1B, &
         CELL_HANDLE_TYPE = 4_I1B, INVALID_HANDLE_TYPE= 0_I1B
@@ -73,14 +72,15 @@ public order_point_indices
       ! these procedures override procedures from graph_t class (note)
       procedure :: initialize => mesh_initialize
       procedure :: index_from_handle => mesh_index_from_handle
+      procedure :: print => mesh_print
 ! TODO - override these or make them non-overridable in graph_t
      !procedure :: copy
      !procedure :: build_selection_masks
-      procedure :: print => mesh_print
       procedure, non_overridable :: find_cell_id => mesh_find_cell_id
       procedure, non_overridable :: add_point => mesh_add_point
       procedure, non_overridable :: add_cell => mesh_add_cell
-      procedure :: npoints_per_cell => mesh_npoints_per_cell
+      procedure, non_overridable :: remove_cell => mesh_remove_cell
+      procedure, non_overridable :: npoints_per_cell => mesh_npoints_per_cell
       procedure, non_overridable :: is_3d => mesh_is_3d
     end type mesh_t
 
@@ -93,7 +93,7 @@ public order_point_indices
 !
 ! Return position of a point/cell in array using handle. If handle refers to
 ! the point/cell that is no longer in array, MAP_NULL is returned.
-! If handle refers to vertex or edge, method of a parent class is used
+! If handle refers to vertex or edge, method of a parent class is used.
 !
       id = MAP_NULL
       index_to_map = handle%get_index_to_map()
@@ -106,6 +106,12 @@ public order_point_indices
             if (.not. (this%points(id)%handle==handle)) id = MAP_NULL
           end if
         end if
+#ifdef DEBUG
+        if (id /= MAP_NULL) then
+          if (id<1 .or. id>this%npoints) error stop &
+              'mesh_index_from_handle - point index out of bounds (internal error)'
+        end if
+#endif
       case(CELL_HANDLE_TYPE)
         if (index_to_map > 0 .and. index_to_map <= size(this%cmap)) then
           id = this%cmap(index_to_map)
@@ -114,6 +120,12 @@ public order_point_indices
             if (.not. (this%cells(id)%handle==handle)) id = MAP_NULL
           end if
         end if
+#ifdef DEBUG
+        if (id /= MAP_NULL) then
+          if (id<1 .or. id>this%ncells) error stop &
+              'mesh_index_from_handle - cell index out of bounds (internal error)'
+        end if
+#endif
       case default
         ! delegate to parent class
         id = this%graph_t%index_from_handle(handle)
@@ -308,7 +320,9 @@ public order_point_indices
       class(mesh_t), intent(inout) :: this
       real(dp), intent(in) :: position(3)
       type(graph_handle_t) :: handle
-
+!
+! Add point to the mesh.
+!
       if (.not. this%is_initialized()) then
         error stop 'mesh_add_point - not initialized'
       end if
@@ -327,8 +341,29 @@ public order_point_indices
         new_point%handle = handle
       end associate
       this%pmap(handle%get_index_to_map()) = this%npoints
-print '("Point added. Handle is ",i0)', this%index_from_handle(handle)
+
     end function mesh_add_point
+
+
+    subroutine relocate_point(this, handle, newid)
+      class(mesh_t), intent(inout) :: this
+      type(graph_handle_t), intent(in) :: handle
+      integer, intent(in) :: newid
+
+      integer :: oldid
+
+      if (handle%get_handle_type() /= POINT_HANDLE_TYPE) &
+          error stop 'relocate_point - wrong handle type'
+      oldid = this%index_from_handle(handle)
+      if (oldid == MAP_NULL) &
+          error stop 'relocate_point - point no more exists'
+      if (newid < 1 .or. newid > this%npoints) &
+          error stop 'relocate_point - newid out of bounds'
+
+      ! copy point and update record in "pmap"
+      this%points(newid) = this%points(oldid)
+      this%pmap(handle%get_index_to_map()) = newid
+    end subroutine relocate_point
 
 
     function mesh_add_cell(this, point_handles) result(handle)
@@ -336,7 +371,8 @@ print '("Point added. Handle is ",i0)', this%index_from_handle(handle)
       type(graph_handle_t), intent(in) :: point_handles(4)
       type(graph_handle_t) :: handle
 !
-! Add mesh cell. Also add a dual vertex and edges between neighbouring vertices.
+! Add mesh cell. Dual vertex and edges connecting neighbouring vertices are
+! also added.
 !
       integer :: n, i, j, pids(4), ngb_pids(4)
       integer, allocatable :: found_cids(:)
@@ -397,7 +433,7 @@ print '("Point added. Handle is ",i0)', this%index_from_handle(handle)
           found_cids = this%find_cell_id([pids(1:i-1), pids(i+1:n)])
           select case (size(found_cids))
           case(0)
-            ! no oposote cell accros point "i" / explicitly set to null
+            ! no oposite cell accros point "i" / explicitly set to null
             new_cell%ngbcells(i) = &
               graph_handle_t(id=MAP_NULL, type=CELL_HANDLE_TYPE, version=1)
 print '("Point ",i0," - no ngb across")', this%index_from_handle(new_cell%points(i))
@@ -460,6 +496,114 @@ print '("Point ",i0," - across is cell ",i0)', this%index_from_handle(new_cell%p
 print '("Cell added. Handle is ",i0)', this%index_from_handle(handle)
 
     end function mesh_add_cell
+
+
+    subroutine mesh_remove_cell(this, handle)
+      class(mesh_t), intent(inout) :: this
+      class(graph_handle_t), intent(in) :: handle
+!
+! TODO Documentation
+!
+      integer :: icell, pids(4), i, n
+
+      if (handle%get_handle_type()/=CELL_HANDLE_TYPE) error stop &
+          'mesh_remove_cell - invalid handle type, cell type expected'
+
+      icell = this%index_from_handle(handle)
+      if (icell == MAP_NULL) error stop &
+          'mesh_remove_cell - cell no longer exists'
+
+      n = this%npoints_per_cell()
+
+      ! Remove cell refrence from list(s) of its points.
+      ! It is ok if a point no longer exist, but if it exists, the
+      ! reference to the cell must be present in its list.
+      pids = this%cells(icell)%point_indices(this)
+      do i=1, n
+        if (pids(i) /= MAP_NULL) &
+            call this%points(pids(i))%depending_cells%remove(icell)
+      end do
+
+      ! Remove dual-vertex (and associated edges)
+      call this%remove_vertex(this%cells(icell)%dual_vertex)
+
+      ! Unlink removed cell from neighbouring cells
+      block
+        integer :: ngbid, ngb_pids(4), j
+
+        do i=1, this%npoints_per_cell()
+          ngbid = this%index_from_handle(this%cells(icell)%ngbcells(i))
+          if (ngbid==MAP_NULL) cycle
+          associate(ngb_cell => this%cells(ngbid))
+            ! which node in neigbouring cell is accross the removed cell?
+            ngb_pids = ngb_cell%point_indices(this)
+            do j=1, n
+              if (all(pids(1:n)/=ngb_pids(j))) exit
+            end do
+            if (j==n+1) error stop &
+                'mesh_remove_cell - opposite point in ngb cell not found (internal error)'
+            ! verify that handle, we are about to clear, points to icell
+            if (this%index_from_handle(ngb_cell%ngbcells(j))/=icell) &
+                error stop 'mesh_remove_cell - unexpected connection link (internal error)'
+            ! unlink the connection back
+            ngb_cell%ngbcells(j) = &
+                graph_handle_t(id=MAP_NULL, type=CELL_HANDLE_TYPE, version=1)
+          end associate
+        end do
+      end block
+
+      ! Nullify cmap entry and reuse the handle
+      this%cmap(handle%get_index_to_map()) = MAP_NULL
+      call return_mesh_handle(this, handle)
+
+      ! Relocate the last cell to the "hole" after removed cell 
+      if (icell /= this%ncells) then
+        call relocate_cell(this, this%cells(this%ncells)%handle, icell)
+      end if
+      this%ncells = this%ncells - 1
+      
+    end subroutine mesh_remove_cell
+
+
+    subroutine relocate_cell(this, handle, newid)
+      class(mesh_t), intent(inout) :: this
+      type(graph_handle_t), intent(in) :: handle
+      integer, intent(in) :: newid
+
+      integer :: oldid, i, pids(4)
+
+      if (handle%get_handle_type() /= CELL_HANDLE_TYPE) &
+          error stop 'relocate_cell - wrong handle type'
+      oldid = this%index_from_handle(handle)
+      if (oldid == MAP_NULL) &
+          error stop 'relocate_cell - cell no more exists'
+      if (newid < 1 .or. newid > this%ncells) &
+          error stop 'relocate_cell - newid out of bounds'
+
+      ! copy cell and update record in "cmap"
+      this%cells(newid) = this%cells(oldid)
+      this%cmap(handle%get_index_to_map()) = newid
+
+      ! update depending cells lists of respective points
+      pids = this%cells(newid)%point_indices(this)
+      do i=1, this%npoints_per_cell()
+        if (pids(i)/=MAP_NULL) call update_list(this%points(pids(i))%depending_cells)
+      end do
+
+    contains
+      subroutine update_list(list) ! internal procedure
+        type(adjlist_t), intent(inout) :: list
+
+        type(iterator_t) :: found_oldid
+        if (list%contains(newid)) &
+            error stop 'relocate cell - newid present in list would lead to duplicity'
+        found_oldid = list%find(oldid)
+        if (.not. list%has_next(found_oldid)) &
+            error stop 'relocate cell - oldid not found in list'
+        call list%remove(oldid, found_oldid)
+        call list%add(newid, skip_duplicity_check=.true.)
+      end subroutine
+    end subroutine relocate_cell
 
 
     subroutine mesh_print(this, fid)
