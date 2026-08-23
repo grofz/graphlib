@@ -49,7 +49,7 @@
     type, public :: cell_t
       type(graph_handle_t) :: points(4)
         ! ordered array of point handles
-      type(graph_handle_t) :: ngbcells(4)
+      type(graph_handle_t) :: ngb_cells(4)
         ! array of cell handles to neighbouring cells
       type(graph_handle_t) :: dual_vertex
         ! handle to vertex in graph_t parent object
@@ -92,41 +92,40 @@
       type(graph_handle_t), intent(in) :: handle
       integer id, index_to_map
 !
-! Return position of a point/cell in array using handle. If handle refers to
-! the point/cell that is no longer in array, MAP_NULL is returned.
-! If handle refers to vertex or edge, method of a parent class is used.
+! Given an object handle, return a valid[*] array position of the object,
+! or MAP_NULL if handle refers to an object no longer present in the array.
+! Points and cells are processed here; handles refering to vertices or
+! edges are processed by the parent class method graph_index_from_handle().
+!
+! [*]  Post-call validation that the returned index is within the active
+!      object array is unnecessary.
 !
       id = MAP_NULL
       index_to_map = handle%get_index_to_map()
+
       select case(handle%get_handle_type())
       case(POINT_HANDLE_TYPE)
         if (index_to_map > 0 .and. index_to_map <= size(this%pmap)) then
           id = this%pmap(index_to_map)
           if (id/=MAP_NULL) then
-            ! verify version matches the stored one
+            ! Verify that the given handle matches the stored one.
+            if (id < 1 .or. id > this%npoints) error stop &
+                'mesh_index_from_handle - point index out of bounds (internal error)'
             if (.not. (this%points(id)%handle==handle)) id = MAP_NULL
           end if
         end if
-#ifdef DEBUG
-        if (id /= MAP_NULL) then
-          if (id<1 .or. id>this%npoints) error stop &
-              'mesh_index_from_handle - point index out of bounds (internal error)'
-        end if
-#endif
+
       case(CELL_HANDLE_TYPE)
         if (index_to_map > 0 .and. index_to_map <= size(this%cmap)) then
           id = this%cmap(index_to_map)
           if (id/=MAP_NULL) then
-            ! verify version matches the stored one
+            ! Verify that the given handle matches the stored one.
+            if (id < 1 .or. id > this%ncells) error stop &
+                'mesh_index_from_handle - cell index out of bounds (internal error)'
             if (.not. (this%cells(id)%handle==handle)) id = MAP_NULL
           end if
         end if
-#ifdef DEBUG
-        if (id /= MAP_NULL) then
-          if (id<1 .or. id>this%ncells) error stop &
-              'mesh_index_from_handle - cell index out of bounds (internal error)'
-        end if
-#endif
+
       case default
         ! delegate to parent class
         id = this%graph_t%index_from_handle(handle)
@@ -188,7 +187,7 @@
     pure logical function mesh_is_3d(this) result(is)
       class(mesh_t), intent(in) :: this
       is = this%is_3d_mesh
-    end function mesh_is_3D
+    end function mesh_is_3d
 
 
     subroutine mesh_initialize(this, vcapacity, ecapacity, is_directed_graph, &
@@ -479,13 +478,12 @@
           select case (size(found_cids))
           case(0)
             ! no oposite cell accros point "i" / explicitly set to null
-            new_cell%ngbcells(i) = &
+            new_cell%ngb_cells(i) = &
               graph_handle_t(id=MAP_NULL, type=CELL_HANDLE_TYPE, version=1)
-print '("Point ",i0," - no ngb across")', this%index_from_handle(new_cell%points(i))
           case(1)
             ! set connection
             associate(ngb_cell => this%cells(found_cids(1)))
-              new_cell%ngbcells(i) = ngb_cell%handle
+              new_cell%ngb_cells(i) = ngb_cell%handle
 
               ! which node in neigbouring cell is accross the added cell?
               ngb_pids = ngb_cell%point_indices(this)
@@ -495,11 +493,10 @@ print '("Point ",i0," - no ngb across")', this%index_from_handle(new_cell%points
               if (j==n+1) error stop &
                   'mesh_add_cell - opposite point in ngb cell not found (internal error)'
               ! verify that handle, we are about to set, points to null
-              if (ngb_cell%ngbcells(j)%get_index_to_map()/=MAP_NULL) &
+              if (ngb_cell%ngb_cells(j)%get_index_to_map()/=MAP_NULL) &
                   error stop 'mesh_add_cell - a connection exists (internal error)'
               ! set the connection back
-              ngb_cell%ngbcells(j) = handle
-print '("Point ",i0," - across is cell ",i0)', this%index_from_handle(new_cell%points(i)), this%index_from_handle(ngb_cell%handle)
+              ngb_cell%ngb_cells(j) = handle
             end associate
           case default
             error stop 'mesh_add_cell - more than one neighbouring cell found (internal error)'
@@ -511,7 +508,7 @@ print '("Point ",i0," - across is cell ",i0)', this%index_from_handle(new_cell%p
         if (.not. this%is_3d_mesh) then
           new_cell%points(4) = &
               graph_handle_t(id=MAP_NULL, type=POINT_HANDLE_TYPE, version=1)
-          new_cell%ngbcells(4) = &
+          new_cell%ngb_cells(4) = &
               graph_handle_t(id=MAP_NULL, type=CELL_HANDLE_TYPE, version=1)
         end if
 
@@ -524,7 +521,7 @@ print '("Point ",i0," - across is cell ",i0)', this%index_from_handle(new_cell%p
 
           new_cell%dual_vertex = this%add_vertex(v_ipar, v_rpar)
           do i=1, n
-            ngb_id = this%index_from_handle(new_cell%ngbcells(i))
+            ngb_id = this%index_from_handle(new_cell%ngb_cells(i))
             if (ngb_id==MAP_NULL) cycle
             edge = this%add_edge(new_cell%dual_vertex, &
                 this%cells(ngb_id)%dual_vertex, e_ipar, e_rpar)
@@ -538,16 +535,17 @@ print '("Point ",i0," - across is cell ",i0)', this%index_from_handle(new_cell%p
       do i = 1, n
         call this%points(pids(i))%depending_cells%add(this%ncells)
       end do
-print '("Cell added. Handle is ",i0)', this%index_from_handle(handle)
 
     end function mesh_add_cell
 
 
     subroutine mesh_remove_cell(this, handle)
       class(mesh_t), intent(inout) :: this
-      class(graph_handle_t), intent(in) :: handle
+      type(graph_handle_t), intent(in) :: handle
 !
-! TODO Documentation
+! Remove cell from the mesh. The underlying graph that represents cells
+! connectivity is updated accordingly and the vertex dual to the cell is
+! also removed.
 !
       integer :: icell, pids(4), i, n
 
@@ -560,7 +558,7 @@ print '("Cell added. Handle is ",i0)', this%index_from_handle(handle)
 
       n = this%npoints_per_cell()
 
-      ! Remove cell refrence from list(s) of its points.
+      ! Remove cell reference from list(s) of its points.
       ! It is ok if a point no longer exist, but if it exists, the
       ! reference to the cell must be present in its list.
       pids = this%cells(icell)%point_indices(this)
@@ -577,7 +575,7 @@ print '("Cell added. Handle is ",i0)', this%index_from_handle(handle)
         integer :: ngbid, ngb_pids(4), j
 
         do i=1, this%npoints_per_cell()
-          ngbid = this%index_from_handle(this%cells(icell)%ngbcells(i))
+          ngbid = this%index_from_handle(this%cells(icell)%ngb_cells(i))
           if (ngbid==MAP_NULL) cycle
           associate(ngb_cell => this%cells(ngbid))
             ! which node in neigbouring cell is accross the removed cell?
@@ -588,10 +586,10 @@ print '("Cell added. Handle is ",i0)', this%index_from_handle(handle)
             if (j==n+1) error stop &
                 'mesh_remove_cell - opposite point in ngb cell not found (internal error)'
             ! verify that handle, we are about to clear, points to icell
-            if (this%index_from_handle(ngb_cell%ngbcells(j))/=icell) &
+            if (this%index_from_handle(ngb_cell%ngb_cells(j))/=icell) &
                 error stop 'mesh_remove_cell - unexpected connection link (internal error)'
             ! unlink the connection back
-            ngb_cell%ngbcells(j) = &
+            ngb_cell%ngb_cells(j) = &
                 graph_handle_t(id=MAP_NULL, type=CELL_HANDLE_TYPE, version=1)
           end associate
         end do
@@ -704,7 +702,7 @@ print '("Cell added. Handle is ",i0)', this%index_from_handle(handle)
         write(fid,'(/,"--connected with cells")',advance='no')
         do j=1, this%npoints_per_cell()
           write(fid,'(1x,i0)',advance='no') &
-            this%cells(i)%ngbcells(j)%get_index_to_map()
+            this%cells(i)%ngb_cells(j)%get_index_to_map()
         end do
         write(fid,'(/,"--dual with V-",i0)') &
           this%cells(i)%dual_vertex%get_index_to_map()
@@ -867,7 +865,11 @@ print '("Cell added. Handle is ",i0)', this%index_from_handle(handle)
         ! d determines the side of the plane on which p4/p_ref lies
         d = dot_product(axb, c)
         ! tolerance for the signed volume calculation
-        tol = eps*max(1.0_dp, maxval(abs(a))*maxval(abs(b))*maxval(abs(c)))
+        ! (based on mean term contributing to the determinant)
+        tol = eps/6 * &
+            (abs(a(1)*b(2)*c(3)) + abs(a(1)*b(3)*c(2)) + &
+             abs(a(2)*b(1)*c(3)) + abs(a(2)*b(3)*c(1)) + &
+             abs(a(3)*b(1)*c(2)) + abs(a(3)*b(2)*c(1)))
       end block
 
       if (abs(d)<tol) then
