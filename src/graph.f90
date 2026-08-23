@@ -103,6 +103,8 @@
         ! .true. = directed graph (one-way edges)
         ! .false. = undirected graph (edge direction does not matter)
       type(queue_t), private :: free_vhandles, free_ehandles
+      integer, private :: unique_id
+        ! first version of object handles become "unique_id"
     contains
       procedure :: initialize => graph_initialize
       procedure :: index_from_handle => graph_index_from_handle
@@ -135,6 +137,7 @@
       procedure, non_overridable :: select_vertices => graph_select_vertices
       procedure, non_overridable :: select_edges => graph_select_edges
       procedure, non_overridable :: is_directed => graph_is_directed
+      procedure, non_overridable :: get_unique_id => graph_get_unique_id
     end type graph_t
 
 
@@ -582,7 +585,6 @@
 
 
     elemental function graph_index_from_handle(this, handle) result(id)
-   !pure function graph_index_from_handle(this, handle) result(id)
       class(graph_t), intent(in) :: this
       type(handle_t), intent(in) :: handle
       integer id
@@ -680,6 +682,7 @@
       if (allocated(this%emap)) deallocate(this%emap)
       allocate(this%emap(0))
 
+      call generate_unique_id(this)
       this%nvertices = 0
       this%nedges = 0
 
@@ -727,6 +730,29 @@
     end function graph_npoints_per_cell
 
 
+    pure integer function graph_get_unique_id(this) result (unique_id)
+      class(graph_t), intent(in) :: this
+      unique_id = this%unique_id
+    end function graph_get_unique_id
+
+
+    subroutine generate_unique_id(this)
+      class(graph_t), intent(inout) :: this
+!
+! All handles associated with graph object will use version = unique_id as
+! a starting value.
+!
+      real(dp) :: x
+      integer, parameter :: RANGE_DENOM=2
+
+      call random_number(x)
+      this%unique_id = 1 + int(x * real(huge(this%unique_id)/RANGE_DENOM, dp))
+#ifdef DEBUG
+      print '("Graph unique_id = ",i0)', this%unique_id
+#endif
+    end subroutine generate_unique_id
+
+
     subroutine increase_vertices_capacity(this, new_capacity)
       class(graph_t), intent(inout) :: this
       integer, intent(in), optional :: new_capacity
@@ -758,7 +784,7 @@
         type(handle_t) :: new_handle
         do i=old_capacity+1, new_capacity0
           new_handle%index_to_map = i
-          new_handle%version = 1
+          new_handle%version = this%get_unique_id()
           new_handle%handle_type = VERTEX_HANDLE_TYPE
           call this%free_vhandles%enqueue(transfer(new_handle, INTEGER_MOLD))
         end do
@@ -797,7 +823,7 @@
         type(handle_t) :: new_handle
         do i=old_capacity+1, new_capacity0
           new_handle%index_to_map = i
-          new_handle%version = 1
+          new_handle%version = this%get_unique_id()
           new_handle%handle_type = EDGE_HANDLE_TYPE
           call this%free_ehandles%enqueue(transfer(new_handle, INTEGER_MOLD))
         end do

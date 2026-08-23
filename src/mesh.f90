@@ -272,7 +272,8 @@
         integer :: i
         type(graph_handle_t) :: new_handle
         do i=old_capacity+1, new_capacity0
-          new_handle = graph_handle_t(id=i, version=1, type=POINT_HANDLE_TYPE)
+          new_handle = graph_handle_t( &
+              id=i, version=this%get_unique_id(), type=POINT_HANDLE_TYPE)
           call this%free_phandles%enqueue(transfer(new_handle, INTEGER_MOLD))
         end do
       end block
@@ -309,7 +310,8 @@
         integer :: i
         type(graph_handle_t) :: new_handle
         do i=old_capacity+1, new_capacity0
-          new_handle = graph_handle_t(id=i, version=1, type=CELL_HANDLE_TYPE)
+          new_handle = graph_handle_t( &
+              id=i, version=this%get_unique_id(), type=CELL_HANDLE_TYPE)
           call this%free_chandles%enqueue(transfer(new_handle, INTEGER_MOLD))
         end do
       end block
