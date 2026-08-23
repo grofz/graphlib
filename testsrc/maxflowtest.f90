@@ -37,12 +37,26 @@
           numstr//' mincut')
 
       ! Test 2 - S and T lists are correct
-      call utest%assert( &
-          s_list(:)%get_index_to_map(ts%g), &
-          t_list(:)%get_index_to_map(ts%g), &
-          ts%expected_s, &
-          ts%expected_t, &
-          numstr//' ST-lists')
+      block
+        integer :: m
+        integer, allocatable :: sindex(:), tindex(:)
+        allocate(sindex(size(s_list)), tindex(size(t_list)))
+        do m=1, size(s_list)
+          sindex(m) = ts%g%index_from_handle(s_list(m))
+        end do
+        do m=1, size(t_list)
+          tindex(m) = ts%g%index_from_handle(t_list(m))
+        end do
+       !call utest%assert( &
+       !    s_list(:)%get_index_to_map(ts%g), &
+       !    t_list(:)%get_index_to_map(ts%g), &
+       !    ts%expected_s, &
+       !    ts%expected_t, &
+       !    numstr//' ST-lists')
+       ! TODO return to this simple form as soon as index_from_handle() accepts array
+        call utest%assert( sindex, tindex, ts%expected_s, ts%expected_t, &
+            numstr//' ST-lists')
+      end block
 
       k = k + 1
 #ifdef DEBUG

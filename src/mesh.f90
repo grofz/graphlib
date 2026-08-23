@@ -45,7 +45,6 @@ public order_point_indices
     ! type, no additional components are needed.
     type, extends(graph_handle_t), public :: mesh_handle_t
     contains
-      procedure :: get_index_to_map => mhandle_get_index_to_map
     end type mesh_handle_t
 
     type, public :: point_t
@@ -126,23 +125,6 @@ public order_point_indices
         id = this%graph_t%index_from_handle(handle)
       end select
     end function mesh_index_from_handle
-
-
-    elemental integer function mhandle_get_index_to_map(this, graph) result(id)
-      class(mesh_handle_t), intent(in) :: this
-      class(graph_t), intent(in), optional :: graph
-      if (present(graph)) then
-        select type(graph)
-        class is (mesh_t)
-          id = graph%index_from_handle(this%graph_handle_t)
-        class default
-          error stop 'mhandle_get_index_to_map - mesh_handle_t object must be used with mesh_t object only'
-        end select
-      else
-        ! delegate to the getter from the parent class
-        id = this%graph_handle_t%get_index_to_map()
-      end if
-    end function mhandle_get_index_to_map
 
 
     subroutine borrow_mesh_handle(this, handle_type, handle)
@@ -352,7 +334,7 @@ public order_point_indices
         new_point%handle = handle
       end associate
       this%pmap(handle%get_index_to_map()) = this%npoints
-print '("Point added. Handle is ",i0)', handle%get_index_to_map(this)
+print '("Point added. Handle is ",i0)', this%index_from_handle(handle%graph_handle_t)
     end function mesh_add_point
 
 
@@ -376,9 +358,12 @@ print '("Point added. Handle is ",i0)', handle%get_index_to_map(this)
 
       ! All points must exist and be unique
       block
-        integer :: pids0(4)
+        integer :: pids0(4), k
         logical :: unique
-        pids0(1:n) = point_handles(1:n)%get_index_to_map(this)
+        do k=1,n
+          pids0(k) = this%index_from_handle(point_handles(k)%graph_handle_t)
+        end do
+!TODO to be updated when index_from_handle() accepts arrays
         if (any(pids0(1:n)==MAP_NULL)) &
             error stop 'mesh_add_cell - a point not present (invalid handle)'
         unique = .true. ! innocent until found guilty
@@ -424,7 +409,7 @@ print '("Point added. Handle is ",i0)', handle%get_index_to_map(this)
             ! no oposote cell accros point "i" / explicitly set to null
             new_cell%ngbcells(i)%graph_handle_t = &
               graph_handle_t(id=MAP_NULL, type=CELL_HANDLE_TYPE, version=1)
-print '("Point ",i0," - no ngb across")', new_cell%points(i)%get_index_to_map(this)
+print '("Point ",i0," - no ngb across")', this%index_from_handle(new_cell%points(i)%graph_handle_t)
           case(1)
             ! set connection
             associate(ngb_cell => this%cells(found_cids(1)))
@@ -442,7 +427,7 @@ print '("Point ",i0," - no ngb across")', new_cell%points(i)%get_index_to_map(th
                   error stop 'mesh_add_cell - a connection exists (internal error)'
               ! set the connection back
               ngb_cell%ngbcells(j) = handle
-print '("Point ",i0," - across is cell ",i0)', new_cell%points(i)%get_index_to_map(this), ngb_cell%handle%get_index_to_map(this)
+print '("Point ",i0," - across is cell ",i0)', this%index_from_handle(new_cell%points(i)%graph_handle_t), this%index_from_handle(ngb_cell%handle%graph_handle_t)
             end associate
           case default
             error stop 'mesh_add_cell - more than one neighbouring cell found (internal error)'
@@ -467,7 +452,7 @@ print '("Point ",i0," - across is cell ",i0)', new_cell%points(i)%get_index_to_m
 
           new_cell%dual_vertex = this%add_vertex(v_ipar, v_rpar)
           do i=1, n
-            ngb_id = new_cell%ngbcells(i)%get_index_to_map(this)
+            ngb_id = this%index_from_handle(new_cell%ngbcells(i)%graph_handle_t)
             if (ngb_id==MAP_NULL) cycle
             edge = this%add_edge(new_cell%dual_vertex, &
                 this%cells(ngb_id)%dual_vertex, e_ipar, e_rpar)
@@ -481,7 +466,7 @@ print '("Point ",i0," - across is cell ",i0)', new_cell%points(i)%get_index_to_m
       do i = 1, n
         call this%points(pids(i))%depending_cells%add(this%ncells)
       end do
-print '("Cell added. Handle is ",i0)', handle%get_index_to_map(this)
+print '("Cell added. Handle is ",i0)', this%index_from_handle(handle%graph_handle_t)
 
     end function mesh_add_cell
 
@@ -647,7 +632,7 @@ print '("Cell added. Handle is ",i0)', handle%get_index_to_map(this)
       real(dp), parameter :: eps = 10 * epsilon(1.0_dp)
       real(dp), parameter :: p_ref(3) = ORIENTATION_2D_REFPOINT
       real(dp) :: d, tol
-      integer :: n, itmp
+      integer :: n, itmp, k
       type(mesh_handle_t) :: points0(4), ptmp
 
       n = this%npoints_per_cell()
@@ -670,7 +655,10 @@ print '("Cell added. Handle is ",i0)', handle%get_index_to_map(this)
       end associate
 
       ! Point indices in the actual mesh
-      pids = points0%get_index_to_map(this)
+      do k=1,n
+        pids(k) = this%index_from_handle(points0(k)%graph_handle_t)
+!TODO update as soon as index_from_handle() accepts arrays
+      end do
       if (any(pids(1:n)<1 .or. any(pids(1:n)>this%npoints))) error stop &
           'order_point_indices - point indices out of bounds (internal error)'
 
@@ -678,6 +666,9 @@ print '("Cell added. Handle is ",i0)', handle%get_index_to_map(this)
       ! For 2d mesh, an arbitrary reference point is used instead of p4
       block
         real(dp) :: a(3), b(3), axb(3), c(3)
+
+        ! 2D-mesh: although not used, p4 must be associated with valid item
+        if (.not. this%is_3d_mesh) pids(4) = pids(1)
         associate( &
           p1=>this%points(pids(1))%position, &
           p2=>this%points(pids(2))%position, &

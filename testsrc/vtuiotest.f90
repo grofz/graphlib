@@ -189,10 +189,10 @@
       vvelo = real(real(vvelo,sp),dp) ! decrease precision
 
       do i=1, mold%ncells
-        j = c_handles(i)%get_index_to_map(mold)
-        mold%vertices(mold%cells(j)%dual_vertex%get_index_to_map(mold%graph_t))% &
+        j = mold%index_from_handle(c_handles(i)%graph_handle_t)
+        mold%vertices(mold%index_from_handle(mold%cells(j)%dual_vertex))% &
             ipar(VPOS_TYPE) = vtype(i)
-        mold%vertices(mold%cells(j)%dual_vertex%get_index_to_map(mold%graph_t))% &
+        mold%vertices(mold%index_from_handle(mold%cells(j)%dual_vertex))% &
             rpar(VPOS_VB:VPOS_VB+2) = vvelo(:,i)
       end do
     end block
@@ -233,7 +233,7 @@
       match1 = .true.
       match2 = .true.
       do j=1,mnew%ncells
-        k = mnew%cells(j)%dual_vertex%get_index_to_map(mnew%graph_t)
+        k = mnew%index_from_handle(mnew%cells(j)%dual_vertex)
         match1 = match1 .and. &
             all(mnew%vertices(k)%rpar(VPOS_VB:VPOS_VB+2)==vvelo(:,j))
         match2 = match2 .and. mnew%vertices(k)%ipar(VPOS_TYPE)==vtype(j)
@@ -282,8 +282,8 @@
       vtype = [10, 20, 30]
 
       do i=1, mold%ncells
-        j = c_handles(i)%get_index_to_map(mold)
-        mold%vertices(mold%cells(j)%dual_vertex%get_index_to_map(mold%graph_t))% &
+        j = mold%index_from_handle(c_handles(i)%graph_handle_t)
+        mold%vertices(mold%index_from_handle(mold%cells(j)%dual_vertex))% &
             ipar(VPOS_TYPE) = vtype(i)
       end do
     end block
@@ -319,7 +319,7 @@
 
       match = .true.
       do j=1,mnew%ncells
-        k = mnew%cells(j)%dual_vertex%get_index_to_map(mnew%graph_t)
+        k = mnew%index_from_handle(mnew%cells(j)%dual_vertex)
         match = match .and. mnew%vertices(k)%ipar(VPOS_TYPE)==vtype(j)
       end do
       call utest%assert(match,.true.,'3d: read type match (with ghost vertices)')

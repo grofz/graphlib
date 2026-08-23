@@ -619,27 +619,12 @@
     end function handle_get_handle_type
 
 
-    elemental integer function handle_get_index_to_map(this, graph) result(id)
+    elemental integer function handle_get_index_to_map(this) result(id)
       class(handle_t), intent(in) :: this
-      class(graph_t), intent(in), optional :: graph
 !
-! If graph_t is provided - call "index_from_handle" to return the actual array
-! index in graph or MAP_NULL
+! Just a getter to a private component of handle_t
 !
-! If graph_t is not provided - the function is just a getter to a private
-! component of the handle.
-!
-      if (present(graph)) then
-        select type(graph)
-        type is (graph_t)
-          id = graph%index_from_handle(this)
-        class default
-          error stop &
-            'get_index_to_map - graph must be of graph_t type, not of its child class type '
-        end select
-      else
-        id = this%index_to_map
-      end if
+      id = this%index_to_map
     end function
 
 
