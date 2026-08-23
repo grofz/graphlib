@@ -1,5 +1,5 @@
-# A dumb Makefile
-# 2024
+# Makefile graphlib
+# 2026
 #
 .SUFFIXES:
 
@@ -46,6 +46,7 @@ MAIN3 = build_test/betweennesstest.o
 MAIN4 = build_test/concomtest.o
 MAIN5 = build_test/scctest.o
 MAIN6 = build_test/contstest.o
+MAIN7 = build_test/handletest.o
 MAIN_EXAMPLE = build_test/example.o
 
 # output library
@@ -58,6 +59,7 @@ ifdef OS
 	EXE4 = test_concom.exe
 	EXE5 = test_scc.exe
 	EXE6 = test_conts.exe
+	EXE7 = test_handle.exe
 	EXE_EXAMPLE = example.exe
 else
 	EXE1 = $(BINDIR)/test_vtuio
@@ -66,12 +68,13 @@ else
 	EXE4 = $(BINDIR)/test_concom
 	EXE5 = $(BINDIR)/test_scc
 	EXE6 = $(BINDIR)/test_conts
+	EXE7 = $(BINDIR)/test_handle
 	EXE_EXAMPLE = $(BINDIR)/example
 endif
 
 # default goal and dependencies
 all: directories $(OUTLIB)
-test: directories $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(EXE_EXAMPLE) $(OUTLIB)
+test: directories $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(EXE7) $(EXE_EXAMPLE) $(OUTLIB)
 
 # Ensure directories exist before compilation begins
 directories:
@@ -88,6 +91,8 @@ $(EXE4) : $(MODOBJECTS) $(TESTUTILS) $(MAIN4)
 $(EXE5) : $(MODOBJECTS) $(TESTUTILS) $(MAIN5)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
 $(EXE6) : $(MODOBJECTS) $(TESTUTILS) $(MAIN6)
+	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
+$(EXE7) : $(MODOBJECTS) $(TESTUTILS) $(MAIN7)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
 $(EXE_EXAMPLE) : $(MODOBJECTS) $(MAIN_EXAMPLE)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
@@ -114,7 +119,7 @@ $(DIR)/%.o : src/%.f90
 
 # phony clean-up target
 clean :
-	-rm -f $(DIR)/*.o build_test/*.o build_test/*.mod build_test/*.smod $(JDIR)/*.mod $(JDIR)/*.smod $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(EXE_EXAMPLE) $(OUTLIB)
+	-rm -f $(DIR)/*.o build_test/*.o build_test/*.mod build_test/*.smod $(JDIR)/*.mod $(JDIR)/*.smod $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(EXE7) $(EXE_EXAMPLE) $(OUTLIB)
 
 # Include the generated dependency files if they exist
 -include $(MODOBJECTS:.o=.d) $(TESTUTILS:.o=.d)
