@@ -3,7 +3,7 @@
     use vtuio_mod, only : vtuio_write, vtuio_read, vtuio_data_t, META_IS_CELL, &
       META_IS_POINT, META_IS_INT, META_IS_REAL
     use graph_mod, only : graph_t, graph_handle_t=>handle_t, edge_t
-    use mesh_mod, only : mesh_t, mesh_handle_t
+    use mesh_mod, only : mesh_t
     use graph_user_mod, only : ESIZE_RPAR, ESIZE_IPAR, VSIZE_IPAR, VSIZE_RPAR
     use map_mod
     use utest_mod, only : utest_t
@@ -11,8 +11,8 @@
 
     type(graph_t) :: gold, gnew, gbig
     type(mesh_t) :: mold, mnew
-    type(graph_handle_t), allocatable :: v_handles(:), e_handles(:)
-    type(mesh_handle_t), allocatable :: p_handles(:), c_handles(:)
+    type(graph_handle_t), allocatable :: &
+        v_handles(:), e_handles(:), p_handles(:), c_handles(:)
     type(vtuio_data_t) :: vtudata
     type(utest_t) :: utest
     real(SP) :: time
@@ -189,7 +189,7 @@
       vvelo = real(real(vvelo,sp),dp) ! decrease precision
 
       do i=1, mold%ncells
-        j = mold%index_from_handle(c_handles(i)%graph_handle_t)
+        j = mold%index_from_handle(c_handles(i))
         mold%vertices(mold%index_from_handle(mold%cells(j)%dual_vertex))% &
             ipar(VPOS_TYPE) = vtype(i)
         mold%vertices(mold%index_from_handle(mold%cells(j)%dual_vertex))% &
@@ -282,7 +282,7 @@
       vtype = [10, 20, 30]
 
       do i=1, mold%ncells
-        j = mold%index_from_handle(c_handles(i)%graph_handle_t)
+        j = mold%index_from_handle(c_handles(i))
         mold%vertices(mold%index_from_handle(mold%cells(j)%dual_vertex))% &
             ipar(VPOS_TYPE) = vtype(i)
       end do

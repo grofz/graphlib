@@ -1,13 +1,14 @@
 program test_mesh
   use iso_fortran_env, only : dp=>real64, output_unit
-  use mesh_mod, only : mesh_t, mesh_handle_t
+  use graph_mod, only : graph_handle_t => handle_t
+  use mesh_mod, only : mesh_t
   use vtuio_mod, only : vtuio_write, vtuio_data_t, vtuio_read
   use map_mod, only : VPOS_TYPE, VPOS_X
   implicit none (type, external)
 
   type(vtuio_data_t) :: vtuio
   type(mesh_t) :: grid, grid3d, grid_read, grid3d_read
-  type(mesh_handle_t), allocatable :: parr(:), carr(:)
+  type(graph_handle_t), allocatable :: parr(:), carr(:)
   integer :: i
 
 

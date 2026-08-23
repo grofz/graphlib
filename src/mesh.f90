@@ -36,31 +36,25 @@ public order_point_indices
     real(dp), parameter :: &
         ORIENTATION_2D_REFPOINT(3) = real([0.0, 0.0, 10.0], dp)
 
-    ! type=1 for vertices and type=2 for edges in "src/graph.f90"
+    ! Extending enumerators for graph_handle_t
+    ! - type=1 for vertices and type=2 for edges in "src/graph.f90"
     integer(I1B), parameter :: POINT_HANDLE_TYPE = 3_I1B, &
         CELL_HANDLE_TYPE = 4_I1B, INVALID_HANDLE_TYPE= 0_I1B
 
-
-    ! Points and cells use "mesh_handle_t". This is just to have distinct
-    ! type, no additional components are needed.
-    type, extends(graph_handle_t), public :: mesh_handle_t
-    contains
-    end type mesh_handle_t
-
     type, public :: point_t
       type(adjlist_t) :: depending_cells
-      type(mesh_handle_t) :: handle
+      type(graph_handle_t) :: handle
       real(dp) :: position(3) = 0.0_dp
     end type point_t
 
     type, public :: cell_t
-      type(mesh_handle_t) :: points(4)
+      type(graph_handle_t) :: points(4)
         ! ordered array of point handles
-      type(mesh_handle_t) :: ngbcells(4)
+      type(graph_handle_t) :: ngbcells(4)
         ! array of cell handles to neighbouring cells
       type(graph_handle_t) :: dual_vertex
         ! handle to vertex in graph_t parent object
-      type(mesh_handle_t) :: handle
+      type(graph_handle_t) :: handle
     contains
       procedure :: point_indices => cell_point_indices
     end type cell_t
@@ -130,7 +124,7 @@ public order_point_indices
     subroutine borrow_mesh_handle(this, handle_type, handle)
       class(mesh_t), intent(inout) :: this
       integer(i1b), intent(in) :: handle_type
-      type(mesh_handle_t), intent(out) :: handle
+      type(graph_handle_t), intent(out) :: handle
 
       select case(handle_type)
       case(POINT_HANDLE_TYPE)
@@ -142,16 +136,17 @@ public order_point_indices
         if (this%free_chandles%size()==0) error stop 'borrow_mesh_handle - no more C-handles available'
         handle = transfer(this%free_chandles%dequeue(), handle)
       case default
-        error stop 'borrow_mesh_handle: invalid handle_type'
+        error stop &
+            'borrow_mesh_handle: invalid handle type, expecting point/cell type only'
       end select
     end subroutine borrow_mesh_handle
 
 
     subroutine return_mesh_handle(this, handle)
       class(mesh_t), intent(inout) :: this
-      type(mesh_handle_t), intent(in) :: handle
+      type(graph_handle_t), intent(in) :: handle
 
-      type(mesh_handle_t) :: reused_handle
+      type(graph_handle_t) :: reused_handle
 
       reused_handle = handle
       call reused_handle%advance_version()
@@ -217,7 +212,7 @@ public order_point_indices
       this%ncells = 0
 
       block ! initialize queues of free handles
-        type(mesh_handle_t) :: handle
+        type(graph_handle_t) :: handle
         call this%free_phandles%initialize(chunksize=size(transfer(handle,INTEGER_MOLD)))
         call this%free_chandles%initialize(chunksize=size(transfer(handle,INTEGER_MOLD)))
       end block
@@ -263,10 +258,9 @@ public order_point_indices
 
       block ! create fresh handles
         integer :: i
-        type(mesh_handle_t) :: new_handle
+        type(graph_handle_t) :: new_handle
         do i=old_capacity+1, new_capacity0
-          new_handle%graph_handle_t = &
-              graph_handle_t(id=i, version=1, type=POINT_HANDLE_TYPE)
+          new_handle = graph_handle_t(id=i, version=1, type=POINT_HANDLE_TYPE)
           call this%free_phandles%enqueue(transfer(new_handle, INTEGER_MOLD))
         end do
       end block
@@ -301,10 +295,9 @@ public order_point_indices
 
       block ! create fresh handles
         integer :: i
-        type(mesh_handle_t) :: new_handle
+        type(graph_handle_t) :: new_handle
         do i=old_capacity+1, new_capacity0
-          new_handle%graph_handle_t = &
-              graph_handle_t(id=i, version=1, type=CELL_HANDLE_TYPE)
+          new_handle = graph_handle_t(id=i, version=1, type=CELL_HANDLE_TYPE)
           call this%free_chandles%enqueue(transfer(new_handle, INTEGER_MOLD))
         end do
       end block
@@ -314,7 +307,7 @@ public order_point_indices
     function mesh_add_point(this, position) result(handle)
       class(mesh_t), intent(inout) :: this
       real(dp), intent(in) :: position(3)
-      type(mesh_handle_t) :: handle
+      type(graph_handle_t) :: handle
 
       if (.not. this%is_initialized()) then
         error stop 'mesh_add_point - not initialized'
@@ -334,14 +327,14 @@ public order_point_indices
         new_point%handle = handle
       end associate
       this%pmap(handle%get_index_to_map()) = this%npoints
-print '("Point added. Handle is ",i0)', this%index_from_handle(handle%graph_handle_t)
+print '("Point added. Handle is ",i0)', this%index_from_handle(handle)
     end function mesh_add_point
 
 
     function mesh_add_cell(this, point_handles) result(handle)
       class(mesh_t), intent(inout) :: this
-      type(mesh_handle_t), intent(in) :: point_handles(4)
-      type(mesh_handle_t) :: handle
+      type(graph_handle_t), intent(in) :: point_handles(4)
+      type(graph_handle_t) :: handle
 !
 ! Add mesh cell. Also add a dual vertex and edges between neighbouring vertices.
 !
@@ -361,7 +354,7 @@ print '("Point added. Handle is ",i0)', this%index_from_handle(handle%graph_hand
         integer :: pids0(4), k
         logical :: unique
         do k=1,n
-          pids0(k) = this%index_from_handle(point_handles(k)%graph_handle_t)
+          pids0(k) = this%index_from_handle(point_handles(k))
         end do
 !TODO to be updated when index_from_handle() accepts arrays
         if (any(pids0(1:n)==MAP_NULL)) &
@@ -407,9 +400,9 @@ print '("Point added. Handle is ",i0)', this%index_from_handle(handle%graph_hand
           select case (size(found_cids))
           case(0)
             ! no oposote cell accros point "i" / explicitly set to null
-            new_cell%ngbcells(i)%graph_handle_t = &
+            new_cell%ngbcells(i) = &
               graph_handle_t(id=MAP_NULL, type=CELL_HANDLE_TYPE, version=1)
-print '("Point ",i0," - no ngb across")', this%index_from_handle(new_cell%points(i)%graph_handle_t)
+print '("Point ",i0," - no ngb across")', this%index_from_handle(new_cell%points(i))
           case(1)
             ! set connection
             associate(ngb_cell => this%cells(found_cids(1)))
@@ -427,7 +420,7 @@ print '("Point ",i0," - no ngb across")', this%index_from_handle(new_cell%points
                   error stop 'mesh_add_cell - a connection exists (internal error)'
               ! set the connection back
               ngb_cell%ngbcells(j) = handle
-print '("Point ",i0," - across is cell ",i0)', this%index_from_handle(new_cell%points(i)%graph_handle_t), this%index_from_handle(ngb_cell%handle%graph_handle_t)
+print '("Point ",i0," - across is cell ",i0)', this%index_from_handle(new_cell%points(i)), this%index_from_handle(ngb_cell%handle)
             end associate
           case default
             error stop 'mesh_add_cell - more than one neighbouring cell found (internal error)'
@@ -437,9 +430,9 @@ print '("Point ",i0," - across is cell ",i0)', this%index_from_handle(new_cell%p
 
         ! Make sure handles at unused position are set to null in 2D-meshes
         if (.not. this%is_3d_mesh) then
-          new_cell%points(4)%graph_handle_t = &
+          new_cell%points(4) = &
               graph_handle_t(id=MAP_NULL, type=POINT_HANDLE_TYPE, version=1)
-          new_cell%ngbcells(4)%graph_handle_t = &
+          new_cell%ngbcells(4) = &
               graph_handle_t(id=MAP_NULL, type=CELL_HANDLE_TYPE, version=1)
         end if
 
@@ -452,7 +445,7 @@ print '("Point ",i0," - across is cell ",i0)', this%index_from_handle(new_cell%p
 
           new_cell%dual_vertex = this%add_vertex(v_ipar, v_rpar)
           do i=1, n
-            ngb_id = this%index_from_handle(new_cell%ngbcells(i)%graph_handle_t)
+            ngb_id = this%index_from_handle(new_cell%ngbcells(i))
             if (ngb_id==MAP_NULL) cycle
             edge = this%add_edge(new_cell%dual_vertex, &
                 this%cells(ngb_id)%dual_vertex, e_ipar, e_rpar)
@@ -466,7 +459,7 @@ print '("Point ",i0," - across is cell ",i0)', this%index_from_handle(new_cell%p
       do i = 1, n
         call this%points(pids(i))%depending_cells%add(this%ncells)
       end do
-print '("Cell added. Handle is ",i0)', this%index_from_handle(handle%graph_handle_t)
+print '("Cell added. Handle is ",i0)', this%index_from_handle(handle)
 
     end function mesh_add_cell
 
@@ -617,14 +610,15 @@ print '("Cell added. Handle is ",i0)', this%index_from_handle(handle%graph_handl
 
       if (.not. mesh%is_3d_mesh) ids(4) = MAP_NULL
       do i=1, mesh%npoints_per_cell()
-        ids(i) = mesh%index_from_handle(this%points(i)%graph_handle_t)
+        ids(i) = mesh%index_from_handle(this%points(i))
       end do
+!TODO update when index_from_handle() accepts arrays
     end function cell_point_indices
 
 
     pure function order_point_indices(this, points) result(pids)
       class(mesh_t), intent(in) :: this
-      type(mesh_handle_t), intent(in) :: points(4)
+      type(graph_handle_t), intent(in) :: points(4)
       integer :: pids(4)
 !
 ! Order points for positive orientation.
@@ -633,7 +627,7 @@ print '("Cell added. Handle is ",i0)', this%index_from_handle(handle%graph_handl
       real(dp), parameter :: p_ref(3) = ORIENTATION_2D_REFPOINT
       real(dp) :: d, tol
       integer :: n, itmp, k
-      type(mesh_handle_t) :: points0(4), ptmp
+      type(graph_handle_t) :: points0(4), ptmp
 
       n = this%npoints_per_cell()
 
@@ -656,7 +650,7 @@ print '("Cell added. Handle is ",i0)', this%index_from_handle(handle%graph_handl
 
       ! Point indices in the actual mesh
       do k=1,n
-        pids(k) = this%index_from_handle(points0(k)%graph_handle_t)
+        pids(k) = this%index_from_handle(points0(k))
 !TODO update as soon as index_from_handle() accepts arrays
       end do
       if (any(pids(1:n)<1 .or. any(pids(1:n)>this%npoints))) error stop &

@@ -69,7 +69,7 @@
     use graph_mod, only : graph_t, graph_handle_t=>handle_t, edge_t, vertex_t, &
         MAP_NULL
     use graph_user_mod, only : VSIZE_RPAR, VSIZE_IPAR, ESIZE_RPAR, ESIZE_IPAR
-    use mesh_mod, only : mesh_t, point_t, cell_t, mesh_handle_t
+    use mesh_mod, only : mesh_t, point_t, cell_t
     use vtuio_tree_mod, only : object_t, vtuio_tree_read
     use iso_fortran_env, only :  SP=>real32, DP=>real64, &
         I4B=>int32, I8B=>int64, I1B=>int8
@@ -774,8 +774,8 @@
       integer(HEADERTYPE_KIND) :: max_offset, last_nblock
       type(object_t), target :: root
       type(object_t), pointer :: grid, piece
-      type(graph_handle_t), allocatable :: graph_points(:), graph_cells(:)
-      type(mesh_handle_t), allocatable :: mesh_points(:), mesh_cells(:)
+      type(graph_handle_t), allocatable :: &
+          graph_points(:), graph_cells(:), mesh_points(:), mesh_cells(:)
 
       ! PART ZERO
       ! Argument checks
