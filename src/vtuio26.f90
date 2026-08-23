@@ -18,11 +18,53 @@
 
 ! CONTENT (only public procedures are listed)
 ! module vtuio_mod
-!   subroutine vtuio_write(file, graph, mask, time, vtudata)
-!   subroutine vtuio_read(file, graph, mask, time)
+!   type vtuio_data_t
+!   subroutine vtuio_write(file, graph, position_id, vtudata, time)
+!   subroutine vtuio_read(file, graph, position_id, vtudata, time)
 !
-! THIS IS A MODIFIED VERSION (July 2026)
-
+! INTRODUCTION
+!   The writer / reader supports the following file structure:
+! =============================================================================
+! <VTKFile type="UnstructuredGrid" ... >
+! <UnstructuredGrid>
+! ---oprional time--- (in FieldData container)
+! <Piece NumberOfPoints="..." NumberOfCells="...">
+!   <PointData>
+!     ---optional data arrays---
+!   </PointData>
+!   <CellData>
+!     ---optional data arrays---
+!   </CellData>
+!   <Points>
+!     <DataArray type="..." format="appended" offset="..." />
+!   </Points>
+!   <Cells>
+!     <DataArray type="..." Name="connectivity" format="appended" offset="..." />
+!     <DataArray type="..." Name="offsets" format="appended" offset="..." />
+!     <DataArray type="..." Name="types" format="appended" offset="..." />
+!   </Cells>
+! </Piece>
+! </UnstructuredGrid>
+! <AppendedData encoding="raw">
+!   _ + ---binary data---
+! </AppendedData>
+! </VTKFile>
+! =============================================================================
+!
+! For graphs (graph_t objects):
+! - Vertices are "points".
+! - Vertices ipar/rpar arrays are "point data".
+! - Edges are "cells" represented as lines.
+! - Edges ipar/rpar arrays are "cell data".
+!
+! For meshes (medh_t objects):
+! - Points are "points" and no "point data" are written/read.
+! - Cells are "cells" represented as triangles/tetras in 2D/3D meshes.
+! - Arrays ipar/rpar of vertices that are linked to cells (via dual_vertex
+!   handle) are "cell data". However, in the context of vtudata_t variables,
+!   these data points are classified with META_IS_POINT flag.
+! - Edges and edges ipar/rpar arrays are not written/read to/from file.
+!
   module vtuio_mod
     use graph_mod, only : graph_t, graph_handle_t=>handle_t, edge_t, vertex_t, &
         MAP_NULL
@@ -180,7 +222,7 @@
           error stop 'get_data_kind - 1 4 8 bytes for int data'
         end select
       case default
-        error stop 'gey_data_kind - int_or_real value invalid'
+        error stop 'get_data_kind - int_or_real value invalid'
       end select
     end function get_data_kind
 
@@ -227,7 +269,6 @@
       class(graph_t), intent(in) :: graph
       integer, intent(out) :: npoints, ncells
 !
-! TODO this information should be moved to module level
 ! Mesh - points are points
 !      - cells are cells (triangles or tetrahedra)
 !      - vertex data become cell data
@@ -255,18 +296,27 @@
     ! Writing the Unstructured Grid
     ! -----------------------------
 
-    subroutine vtuio_write(file, graph, position_id, time, vtudata)
-      !* Write Unstructured Grid - vertices and edges
+    subroutine vtuio_write(file, graph, position_id, vtudata, time)
       character(len=*), intent(in) :: file
-        !! file name without .vtu suffix
       class(graph_t), intent(in) :: graph
-        !! contains vertices/points and edges/cells
       integer, intent(in), optional :: position_id
-      real(DP), intent(in), optional :: time
       type(vtuio_data_t), optional :: vtudata
-        !! data structure for additional data
+      real(DP), intent(in), optional :: time
 !
-! TODO Documentation Block
+! Export graph_t or mesh_t as an unstructured grid (binary VTU file).
+! Writes vertices/edges (lines), or points/cells (triangles/tetras).
+!
+!   file  - file name without .vtu suffix. Existing file will be overwritten.
+!   graph - graph or mesh
+!   position_id - Determines where vertex position (x,y,z) is stored:
+!                   - x is in vertices(...)%rpar(position_id)
+!                   - y is in vertices(...)%rpar(position_id+1)
+!                   - z is in vertices(...)%rpar(position_id+2)
+!                 Optional argument must be provided for graph_t object and
+!                 must not be provided for mesh_t object.
+!   vtudata - Optional descriptor, specifies which items from ipar/rpar arrays
+!             are saved in point data and cell data sections.
+!   time    - Optional value stored to VTU file.
 !
       character(len=MAX_BUFFER_LEN/2) :: text1, text2
       integer :: npoints, ncells, fid, offset
@@ -329,7 +379,7 @@
       call write_connectivity(fid, graph, ncells)
 
       ! Closing tags
-      write(fid) ' ', LF
+      write(fid) ' ', LF ! results to a 2 byte gap (as noted in vtuio_read)
       write(fid) '</AppendedData>', LF
       write(fid) '</VTKFile>'
       close(fid)
@@ -553,7 +603,7 @@
                 do j=1,nitems
                   select type (graph)
                   class is (mesh_t)
-                    k = graph%cells(j)%dual_vertex%get_index_to_map(graph%graph_t)
+                    k = graph%index_from_handle(graph%cells(j)%dual_vertex)
                     if (k<1 .or. k>graph%nvertices) error stop &
                        'export_and_write_data - vertex linked to cell not present'
                   class default
@@ -580,7 +630,7 @@
                 do j=1,nitems
                   select type (graph)
                   class is (mesh_t)
-                    k = graph%cells(j)%dual_vertex%get_index_to_map(graph%graph_t)
+                    k = graph%index_from_handle(graph%cells(j)%dual_vertex)
                     if (k<1 .or. k>graph%nvertices) error stop &
                        'export_and_write_data - vertex linked to cell not present'
                   class default
@@ -707,24 +757,23 @@
     ! Reading the Unstructured Grid
     ! -----------------------------
 
-    subroutine vtuio_read(file, graph, position_id, time, vtudata)
+    subroutine vtuio_read(file, graph, position_id, vtudata, time)
       character(len=*), intent(in) :: file
       class(graph_t), intent(inout) :: graph
       integer, intent(in), optional :: position_id
       type(vtuio_data_t), intent(in), optional :: vtudata
       real(DP), intent(out), optional :: time
 !
-! Read from VTU file
+! Construct graph or mesh by reading from VTU file.
 !
       integer :: fid, npoints, ncells, ios, i, npoints_per_cell
       integer :: offset_points, offset_connectivity, offset_offsets, offset_types
       integer, allocatable :: offset_meta(:), pos_meta(:)
       integer :: time_pos(2), binary_start, binary_end
-      integer(HEADERTYPE_KIND) :: nblock   ! change KIND if error (!) TODO improve doc
+      integer(HEADERTYPE_KIND) :: nblock  ! kind must match the actual header size used
       integer(HEADERTYPE_KIND) :: max_offset, last_nblock
       type(object_t), target :: root
       type(object_t), pointer :: grid, piece
-      character(len=1) :: ch
       type(graph_handle_t), allocatable :: graph_points(:), graph_cells(:)
       type(mesh_handle_t), allocatable :: mesh_points(:), mesh_cells(:)
 
@@ -856,7 +905,7 @@
         logical :: was_found
         time_pos = 0
         text = grid%findval('Name','TimeValue','format', was_found)
-!TODO need more usefull function as not interessed in text/format
+!TODO - need better function as not interessed in text here
         if (was_found) then
           time_pos = grid%findraw()
         end if
@@ -874,6 +923,7 @@
 
       ! Where binary data start and end?
       block
+        character(len=1) :: ch
         integer :: data_pos(2)
         type(object_t), pointer :: data_root
 
@@ -998,7 +1048,7 @@
           npoints_per_cell = 4
         else
           error stop &
-            'vtuio_read - validation fails, refs_per_cell=3 or 4 expected for meshat_'
+            'vtuio_read - validation fails, refs_per_cell=3 or 4 expected for mesh_t'
         end if
       end block
       if (offset_connectivity > max_offset) then
@@ -1103,23 +1153,23 @@
         integer(HEADERTYPE_KIND) :: binary_req
         binary_req = binary_start + max_offset + HEADERTYPE_SIZE + last_nblock
 #ifdef DEBUG
-        print '("kast required = ",i0,"  last_available = ",i0)', &
+        print '("last required = ",i0,"  last_available = ",i0)', &
             binary_req, binary_end
 #endif
         if (binary_req > binary_end) then
 #ifndef DEBUG
-        print '("kast required = ",i0,"  last_available = ",i0)', &
+        print '("last required = ",i0,"  last_available = ",i0)', &
             binary_req, binary_end
 #endif
           error stop &
             'vtuio_read - data block exceeds file size'
         end if
 
-       ! the actual gap is 2 (a space and LF put by vtuio_read)
+       ! the actual gap is 2 (a space and LF put by vtuio_write)
        ! print warning if otherwise
        if (binary_end-binary_req /= 2)  print &
           '("WARNING vtuio - Gap ",i0," bytes at the end of binary data block",/&
-          & "  indicates a possible use of external VTU wirter tool.")',&
+          & "  indicates a possible use of external VTU writer tool.")',&
           binary_end-binary_req
       end block
 
@@ -1402,9 +1452,9 @@
                 select case(mode_read)
                 case(META_IS_POINT)
                   ! position of the j-th created cell
-                  vid = data(j)%get_index_to_map(graph)
+                  vid = graph%index_from_handle(data(j))
                   ! position of the dual vertex to the created cell
-                  vid = graph%cells(vid)%dual_vertex%get_index_to_map(graph%graph_t)
+                  vid = graph%index_from_handle(graph%cells(vid)%dual_vertex)
                   graph%vertices(vid)%rpar(m%start : m%start+m%ncomp-1) = &
                       rdata( (j-1)*m%ncomp+1 : j*m%ncomp)
                 case(META_IS_CELL)
@@ -1414,7 +1464,7 @@
 
               class default
                 ! position of the j-th created vertex/edge
-                vid = data(j)%get_index_to_map(graph)
+                vid = graph%index_from_handle(data(j))
                 select case(mode_read)
                 case(META_IS_POINT)
                   graph%vertices(vid)%rpar(m%start : m%start+m%ncomp-1) = &
@@ -1435,8 +1485,8 @@
               class is (mesh_t)
                 select case(mode_read)
                 case(META_IS_POINT)
-                  vid = data(j)%get_index_to_map(graph)
-                  vid = graph%cells(vid)%dual_vertex%get_index_to_map(graph%graph_t)
+                  vid = graph%index_from_handle(data(j))
+                  vid = graph%index_from_handle(graph%cells(vid)%dual_vertex)
                   graph%vertices(vid)%ipar(m%start : m%start+m%ncomp-1) = &
                       idata( (j-1)*m%ncomp+1 : j*m%ncomp)
                 case(META_IS_CELL)
@@ -1445,7 +1495,7 @@
                 end select
 
               class default
-                vid = data(j)%get_index_to_map(graph)
+                vid = graph%index_from_handle(data(j))
                 select case(mode_read)
                 case(META_IS_POINT)
                   graph%vertices(vid)%ipar(m%start : m%start+m%ncomp-1) = &
@@ -1590,6 +1640,8 @@
 !
 ! A wrapper allowing "iclass" be integer(4) instead of integer(1)
 !
+      if (iclass < 0 .or. iclass > 3) &
+          error stop 'meta_add_item - invalid iclass'
       call meta_add_item1(this, label, start, int(iclass,I1B), ncomp, nbytes)
     end subroutine meta_add_item2
 
@@ -1607,7 +1659,7 @@
 !   iclass - determines data context and type (see table at the top of file)
 !              *** VTUIO_META_POINT/CELL + VTUIO_META_R/I ***
 !            can be used to select iclass value
-!   ncomps - 1 for scalar ot 3 for vector data
+!   ncomps - 1 for scalar ot 3 for vector data (any positive value accepted)
 !   nbytes - determine the number of bytes per value
 !
       integer, intent(in) :: ncomp, nbytes
@@ -1618,8 +1670,8 @@
       ! validate iclass/ncomp
       if (iclass < 0 .or. iclass > 3) &
           error stop 'meta_add_item - invalid iclass'
-      if (ncomp /= 1 .and. ncomp /=3) &
-          print '("WARNING: expected scalar or 3d-vector")'
+      if (ncomp < 1) &
+          error stop '("meta_add_item - ncomp must be a positive number")'
       block
         integer :: data_kind, ubound
         ! error stops if nbytes/iclass combination is invalid
