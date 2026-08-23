@@ -861,9 +861,11 @@
         end do
       end block
 
-      ! Defensive - could be removed later
+      ! Defensive
+#ifdef DEBUG
       if (this%vertices(ivertex)%ngbs%size()>0) &
           error stop 'graph_remove_vertex - could not remove outgoing edges'
+#endif
 
       ! Nullify vmap and return handle
       this%vmap(handle%index_to_map) = MAP_NULL

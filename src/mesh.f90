@@ -79,6 +79,7 @@
       procedure, non_overridable :: find_cell_id => mesh_find_cell_id
       procedure, non_overridable :: add_point => mesh_add_point
       procedure, non_overridable :: add_cell => mesh_add_cell
+      procedure, non_overridable :: remove_point => mesh_remove_point
       procedure, non_overridable :: remove_cell => mesh_remove_cell
       procedure, non_overridable :: npoints_per_cell => mesh_npoints_per_cell
       procedure, non_overridable :: is_3d => mesh_is_3d
@@ -343,6 +344,50 @@
       this%pmap(handle%get_index_to_map()) = this%npoints
 
     end function mesh_add_point
+
+
+    subroutine mesh_remove_point(this, handle)
+      class(mesh_t), intent(inout) :: this
+      type(graph_handle_t), intent(in) :: handle
+!
+! Remove point. Cells associated with the point will be also removed.
+!
+      integer :: ipoint
+
+      if (handle%get_handle_type() /= POINT_HANDLE_TYPE) error stop &
+          'mesh_remove_point - invalid handle type, point type handle expected'
+      ipoint = this%index_from_handle(handle)
+      if (ipoint == MAP_NULL) &
+          error stop 'mesh_remove_point - point no longer present in graph'
+
+      ! Automatically remove all associated cells.
+      block
+        type(iterator_t) :: iterator
+        integer :: icell
+        do
+          iterator = iterator_t()
+          if (.not. this%points(ipoint)%depending_cells%has_next(iterator)) exit
+          call this%points(ipoint)%depending_cells%next(iterator, icell)
+          call mesh_remove_cell(this, this%cells(icell)%handle)
+        end do
+      end block
+
+      ! Defensive
+#ifdef DEBUG
+      if (this%points(ipoint)%depending_cells%size()>0) &
+          error stop 'mesh_remove_point - could not remove associated cells'
+#endif
+
+      ! Nullify pmap and return handle
+      this%pmap(handle%get_index_to_map()) = MAP_NULL
+      call return_mesh_handle(this, handle)
+
+      ! Relocate the last point to fill "hole" after removed point
+      if (ipoint /= this%npoints) then
+        call relocate_point(this, this%points(this%npoints)%handle, ipoint)
+      end if
+      this%npoints = this%npoints - 1
+    end subroutine mesh_remove_point
 
 
     subroutine relocate_point(this, handle, newid)
