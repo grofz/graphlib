@@ -581,7 +581,8 @@
     end subroutine return_handle
 
 
-    pure function graph_index_from_handle(this, handle) result(id)
+    elemental function graph_index_from_handle(this, handle) result(id)
+   !pure function graph_index_from_handle(this, handle) result(id)
       class(graph_t), intent(in) :: this
       type(handle_t), intent(in) :: handle
       integer id

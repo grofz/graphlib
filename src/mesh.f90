@@ -86,7 +86,7 @@ public order_point_indices
 
   contains
 
-    pure function mesh_index_from_handle(this, handle) result(id)
+    elemental function mesh_index_from_handle(this, handle) result(id)
       class(mesh_t), intent(in) :: this
       type(graph_handle_t), intent(in) :: handle
       integer id, index_to_map
@@ -351,12 +351,10 @@ print '("Point added. Handle is ",i0)', this%index_from_handle(handle)
 
       ! All points must exist and be unique
       block
-        integer :: pids0(4), k
+        integer :: pids0(4)
         logical :: unique
-        do k=1,n
-          pids0(k) = this%index_from_handle(point_handles(k))
-        end do
-!TODO to be updated when index_from_handle() accepts arrays
+
+        pids0(1:n) = this%index_from_handle(point_handles(1:n))
         if (any(pids0(1:n)==MAP_NULL)) &
             error stop 'mesh_add_cell - a point not present (invalid handle)'
         unique = .true. ! innocent until found guilty
@@ -612,7 +610,6 @@ print '("Cell added. Handle is ",i0)', this%index_from_handle(handle)
       do i=1, mesh%npoints_per_cell()
         ids(i) = mesh%index_from_handle(this%points(i))
       end do
-!TODO update when index_from_handle() accepts arrays
     end function cell_point_indices
 
 
@@ -626,7 +623,7 @@ print '("Cell added. Handle is ",i0)', this%index_from_handle(handle)
       real(dp), parameter :: eps = 10 * epsilon(1.0_dp)
       real(dp), parameter :: p_ref(3) = ORIENTATION_2D_REFPOINT
       real(dp) :: d, tol
-      integer :: n, itmp, k
+      integer :: n, itmp
       type(graph_handle_t) :: points0(4), ptmp
 
       n = this%npoints_per_cell()
@@ -649,10 +646,7 @@ print '("Cell added. Handle is ",i0)', this%index_from_handle(handle)
       end associate
 
       ! Point indices in the actual mesh
-      do k=1,n
-        pids(k) = this%index_from_handle(points0(k))
-!TODO update as soon as index_from_handle() accepts arrays
-      end do
+      pids(1:n) = this%index_from_handle(points0(1:n))
       if (any(pids(1:n)<1 .or. any(pids(1:n)>this%npoints))) error stop &
           'order_point_indices - point indices out of bounds (internal error)'
 
