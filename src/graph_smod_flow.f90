@@ -1105,7 +1105,8 @@
 
       ! CG solver
       call conjugate_gradient(this, x, position_conductance, is_external, &
-        emask0, iflag, rtol_l2, rtol_linf, rtol_bounds)
+        emask0, iflag, rtol_l2=rtol_l2, rtol_linf=rtol_linf, &
+        rtol_bounds=rtol_bounds)
       select case (iflag)
       case(CG_OK, CG_MAXITER)
         ! continue assuming solution of AE is good enough
@@ -1201,16 +1202,21 @@
 
 #ifdef DEBUG
     subroutine conjugate_gradient(g, x, position_conductance, &
-        is_external, emask, iflag, rtol_l2, rtol_linf, rtol_bounds)
+        is_external, emask, iflag, diag, x_old, source, &
+        rtol_l2, rtol_linf, rtol_bounds)
 #else
     pure subroutine conjugate_gradient(g, x, position_conductance, &
-        is_external, emask, iflag, rtol_l2, rtol_linf, rtol_bounds)
+        is_external, emask, iflag, diag, x_old, source, &
+        rtol_l2, rtol_linf, rtol_bounds)
 #endif
       class(graph_t), intent(in) :: g
       real(dp), intent(inout) :: x(:)
       integer, intent(in) :: position_conductance
       logical, intent(in) :: emask(:), is_external(:)
       integer, intent(out) :: iflag
+      real(dp), intent(in), optional :: diag(:)
+      real(dp), intent(in), optional :: x_old(:)
+      real(dp), intent(in), optional :: source(:)
       real(dp), intent(in), optional :: rtol_l2, rtol_linf, rtol_bounds
 !
 ! Solve A*x = b, A must be positive definite and b non-zero.
@@ -1225,6 +1231,9 @@
 !   position_conductance - position of g_ij in edges/rpar array
 !   is_external - .true. marks external nodes
 !   emask       - .true. marks selected (open for flow) edges
+!   diag        - (optional) diagonal elements contributions to A
+!   xold        - (optional) potential at the previous time-step
+!   source      - (optional) fixed size source/sink
 !   rtol_l2, rtol_linf, rtol_bounds - optional tolerance setting
 !
 ! OUT:
@@ -1238,6 +1247,18 @@
 !                   x values are out of (x_low,x_high) range
 !                 - CG_NOT_POSDEF_MATRIX if matrix is not positive definite.
 !
+! Remark:
+!   transient transport equation
+!         c_i * (x_i-xold_i)/dt + sum_j g_ij (x_i-x_j) = s_i
+!         d_i = c_i / dt
+!   then
+!         d_i*x_i + sum_j g_ij (x_i-x_j) = d_i*xold_i + s_i
+!         (d_i+sum_j g_ij)*x_i - sum_j g_ij x_j = d_i*xold_i + s_i
+!
+!         ==============================================
+!         (D+L)*x = D*xold + S + b_boundary  --> A*x = b
+!         ==============================================
+!
       real(dp), allocatable :: y(:), r(:), rnew(:), p(:), b(:)
       real(dp) :: alfa, beta, tol_linf, tol_l2, denom, b2
       integer :: k, maxiter
@@ -1248,7 +1269,8 @@
       end associate
 
       ! b-vector
-      call b_vector(g, position_conductance, is_external, emask, x, b)
+      call b_vector(g, position_conductance, is_external, emask, x, b, &
+          diag, x_old, source)
       b2 = dot_product(b, b)
       if (b2 <= tiny(1.0_dp)) then
         ! Vector b contains only zeros. This could mean no internal node has
@@ -1269,7 +1291,8 @@
       end block
 
       ! initial residual (r = b - Ax)
-      call laplacian_multiply(g, position_conductance, is_external, emask, x, y)
+      call laplacian_multiply( &
+          g, position_conductance, is_external, emask, x, y, diag)
       r = b - y
       if (dot_product(r, r) < tol_l2 .and. maxval(abs(r)) < tol_linf) then
         ! Equations seem solved already with error tolerances met.
@@ -1293,13 +1316,13 @@
         ! periodically recalculate residual to clear accumulated round-off errors
         if (mod(k,R_EXACT_FREQUENCY)==0) then
           call laplacian_multiply( &
-              g, position_conductance, is_external, emask, x, y)
+              g, position_conductance, is_external, emask, x, y, diag)
           r = b - y
         end if
 
         ! alfa = |r*r| / |p*Ap|
         call laplacian_multiply( &
-            g, position_conductance, is_external, emask, p, y)
+            g, position_conductance, is_external, emask, p, y, diag)
         denom = dot_product(p, y)
         if (denom <= 0.0_dp) then
           ! Laplacian matrix is not positive definite
@@ -1371,18 +1394,21 @@
 
 
     pure subroutine laplacian_multiply(g, position_conductance, is_external, &
-        emask, x, y)
+        emask, x, y, diag)
       class(graph_t), intent(in) :: g
       integer, intent(in) :: position_conductance
       logical, intent(in) :: is_external(:), emask(:)
       real(dp), intent(in) :: x(:)
       real(dp), intent(out) :: y(:)
+      real(dp), intent(in), optional :: diag(:)
 !
-! Multiply Laplacian matrix by vector x.
+! Multiply Laplacian + Diagonal matrix by vector x,
+!
+!   y = (L+D) * x
 !
 ! OUTPUT
 !   i is internal node
-!     y_i = sum_j (g_ij * (x_i-x_j)) + sum_k (g_ik * x_i),
+!     y_i = sum_j (g_ij * (x_i-x_j)) + sum_k (g_ik * x_i) + (d_i * x_i),
 !     j is an internal neighbour of i,
 !     k is an external neighbour of i
 !   i is external node
@@ -1413,23 +1439,37 @@
           end if
         end associate
       end do
+      block
+        integer :: i
+        if (present(diag)) then
+          do i=1, size(y)
+            if (is_external(i)) cycle
+            y(i) = y(i) + diag(i) * x(i)
+          end do
+        end if
+      end block
     end subroutine laplacian_multiply
 
 
     pure subroutine b_vector(g, position_conductance, is_external, &
-        emask, x, b)
+        emask, x, b, diag, x_old, source)
       class(graph_t), intent(in) :: g
       integer, intent(in) :: position_conductance
       logical, intent(in) :: is_external(:), emask(:)
       real(dp), intent(in) :: x(:)
       real(dp), intent(out) :: b(:)
+      real(dp), intent(in), optional :: diag(:), x_old(:)
+      real(dp), intent(in), optional :: source(:)
 !
-! Construct the right-hand side vector. For vector x, only values of external
-! nodes are used, the values of internal nodes are ignored here.
+! Construct the right-hand side vector. Vector x supplies Dirichlet boundary
+! values of external nodes (the values of internal nodes are ignored here),
+! while an optional x_old vector supplies the previous time-step internal values.
 !
 ! OUTPUT
 !   i is internal node
 !     b_i = sum_j (g_ij * x_j), j is external neighbour of i
+!     b_i = b_i + d_i*x_old_i,  if x_old and diag are present.
+!     b_i = b_i + s_i, if source is present
 !   i is external node
 !     b_i = 0
 !
@@ -1455,6 +1495,28 @@
           end if
         end associate
       end do
+      if (present(diag) .and. present(x_old)) then
+        block
+          integer :: i
+          if (size(diag)/=size(b) .or. size(x_old)/=size(b)) error stop &
+              'b_vector - size of diag or size of x_old is invalid'
+          do i=1, size(b)
+            if (is_external(i)) cycle
+            b(i) = b(i) + diag(i)*x_old(i)
+          end do
+        end block
+      end if
+      if (present(source)) then
+        if (size(source) /= size(b)) error stop &
+            'b_vector - size of source is invalid'
+        block
+          integer :: i
+          do i=1, size(b)
+            if (is_external(i)) cycle
+            b(i) = b(i) + source(i)
+          end do
+        end block
+      end if
     end subroutine b_vector
 
 
