@@ -439,11 +439,12 @@
 !
 ! Called twice:
 !   1. with offset present: write XML header and update offset
-!   2. witout offset: write binary data 
+!   2. witout offset: write binary data
 ! The calls must be co-ordinated with calls to write_data and write_points.
 !
       integer :: i, n, pids(4), id_ubound
       character(len=MAX_BUFFER_LEN/2) :: text1
+
 
       n = graph%npoints_per_cell()
 

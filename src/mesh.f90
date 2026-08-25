@@ -73,6 +73,7 @@
       procedure :: initialize => mesh_initialize
       procedure :: index_from_handle => mesh_index_from_handle
       procedure :: print => mesh_print
+      procedure :: npoints_per_cell => mesh_npoints_per_cell
 ! TODO - override these or make them non-overridable in graph_t
      !procedure :: copy
      !procedure :: build_selection_masks
@@ -81,8 +82,8 @@
       procedure, non_overridable :: add_cell => mesh_add_cell
       procedure, non_overridable :: remove_point => mesh_remove_point
       procedure, non_overridable :: remove_cell => mesh_remove_cell
-      procedure, non_overridable :: npoints_per_cell => mesh_npoints_per_cell
       procedure, non_overridable :: is_3d => mesh_is_3d
+      procedure, non_overridable :: append_rectilinear_mesh => mesh_append_rectilinear_mesh
     end type mesh_t
 
   contains
@@ -884,5 +885,93 @@
         continue
       end if
     end function order_point_indices
+
+
+    ! -------------
+    ! Generate mesh  TODO temporarily here
+    ! -------------
+
+    subroutine mesh_append_rectilinear_mesh(this, p0, p1, p2, cell_size, &
+        rel_shift_size)
+      class(mesh_t), intent(inout) :: this
+      real(dp), intent(in) :: p0(3), p1(3), p2(3)
+      real(dp), intent(in) :: cell_size, rel_shift_size
+!
+! TODO Documentation
+!
+      real(dp) :: mesh_size(2), tile_size(2), base1(3), base2(3), shift(2)
+      integer :: ntiles(2), i, j
+      type(graph_handle_t), allocatable :: p_corners(:,:), p_mids(:,:)
+      type(graph_handle_t) :: cell
+
+      mesh_size(1) = sqrt(dot_product(p1-p0, p1-p0))
+      mesh_size(2) = sqrt(dot_product(p2-p0, p2-p0))
+      base1 = (p1-p0)/mesh_size(1)
+      base2 = (p2-p0)/mesh_size(2)
+
+      ntiles = int(mesh_size/cell_size) + 1
+      tile_size = mesh_size/ntiles
+      allocate(p_corners(ntiles(1)+1, ntiles(2)+1))
+      allocate(p_mids(ntiles(1), ntiles(2)))
+
+      ! points in the corners of rectangulars
+      do i=1, size(p_corners,1)
+        do j=1, size(p_corners,2)
+          p_corners(i,j) = this%add_point( p0 + &
+            real(i-1)*tile_size(1)*base1 + real(j-1)*tile_size(2)*base2)
+        end do
+      end do
+
+      ! points in the middle of rectangulars
+      do i=1, size(p_mids,1)
+        do j=1, size(p_mids,2)
+          associate( &
+            c1=>this%points(this%index_from_handle(p_corners(i,j)))%position, &
+            c2=>this%points(this%index_from_handle(p_corners(i+1,j)))%position, &
+            c3=>this%points(this%index_from_handle(p_corners(i,j+1)))%position, &
+            c4=>this%points(this%index_from_handle(p_corners(i+1,j+1)))%position)
+            call random_number(shift)
+            shift = (2.0*shift - 1.0) * tile_size * rel_shift_size
+
+            p_mids(i,j) = this%add_point((c1+c2+c3+c4)/4.0_dp + &
+                base1*shift(1) + base2*shift(2))
+          end associate
+        end do
+      end do
+
+      ! connect points
+      block
+        type(graph_handle_t) :: p(4)
+
+        p(4) = p_mids(1,1) ! just some valid point that will be ignored
+        do j=1, size(p_mids, 2)
+          ! cell to the left of first middle point
+          p(1:3) = [p_mids(1,j), p_corners(1,j), p_corners(1,j+1)]
+          cell = this%add_cell(p)
+
+          ! cells between middle points
+          do i=1, size(p_mids,1)-1
+            p(1:3) = [p_mids(i,j), p_corners(i+1,j), p_mids(i+1,j)]
+            cell = this%add_cell(p)
+            p(1:3) = [p_mids(i,j), p_corners(i+1,j+1), p_mids(i+1,j)]
+            cell = this%add_cell(p)
+          end do
+
+          ! cell to the right of last middle point
+          p(1:3) = [p_mids(size(p_mids,1),j), p_corners(size(p_mids,1)+1,j), p_corners(size(p_mids,1)+1,j+1)]
+          cell = this%add_cell(p)
+
+          do i=1, size(p_mids,1)
+            ! cell bellow middle point
+            p(1:3) = [p_mids(i,j), p_corners(i,j), p_corners(i+1,j)]
+            cell = this%add_cell(p)
+            ! cell above middle point
+            p(1:3) = [p_mids(i,j), p_corners(i,j+1), p_corners(i+1,j+1)]
+            cell = this%add_cell(p)
+          end do
+        end do
+      end block
+
+    end subroutine mesh_append_rectilinear_mesh
 
   end module mesh_mod
