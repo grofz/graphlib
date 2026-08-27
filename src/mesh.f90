@@ -892,62 +892,85 @@
     ! -------------
 
     subroutine mesh_append_rectilinear_mesh(this, p0, p1, p2, cell_size, &
-        rel_shift_size)
+        rel_shift_size, boundary, boundary_offset)
       class(mesh_t), intent(inout) :: this
       real(dp), intent(in) :: p0(3), p1(3), p2(3)
       real(dp), intent(in) :: cell_size, rel_shift_size
+      type(graph_handle_t), allocatable, intent(out) :: boundary(:)
+      integer, intent(out) :: boundary_offset(0:4)
 !
 ! TODO Documentation
 !
-      real(dp) :: mesh_size(2), tile_size(2), base1(3), base2(3), shift(2)
-      integer :: ntiles(2), i, j
+      real(dp) :: base1(3), base2(3), tile_size(2)
+      integer :: i, j
       type(graph_handle_t), allocatable :: p_corners(:,:), p_mids(:,:)
-      type(graph_handle_t) :: cell
+      type(queue_t) :: bitems_01, bitems_02, bitems_2c, bitems_1c
+      type(graph_handle_t) :: p(4), cell, boundary_cell, edge
+      integer :: vipar(VSIZE_IPAR), eipar(ESIZE_IPAR)
+      real(dp) :: vrpar(VSIZE_RPAR), erpar(ESIZE_RPAR)
 
-      mesh_size(1) = sqrt(dot_product(p1-p0, p1-p0))
-      mesh_size(2) = sqrt(dot_product(p2-p0, p2-p0))
-      base1 = (p1-p0)/mesh_size(1)
-      base2 = (p2-p0)/mesh_size(2)
+      block
+        integer :: ntiles(2)
+        real(dp) :: mesh_size(2)
 
-      ntiles = int(mesh_size/cell_size) + 1
-      tile_size = mesh_size/ntiles
-      allocate(p_corners(ntiles(1)+1, ntiles(2)+1))
-      allocate(p_mids(ntiles(1), ntiles(2)))
+        mesh_size(1) = sqrt(dot_product(p1-p0, p1-p0))
+        mesh_size(2) = sqrt(dot_product(p2-p0, p2-p0))
+        base1 = (p1-p0)/mesh_size(1)
+        base2 = (p2-p0)/mesh_size(2)
+        ntiles = int(mesh_size/cell_size) + 1
+        tile_size = mesh_size/ntiles
+        allocate(p_corners(ntiles(1)+1, ntiles(2)+1))
+        allocate(p_mids(ntiles(1), ntiles(2)))
 
-      ! points in the corners of rectangulars
-      do i=1, size(p_corners,1)
-        do j=1, size(p_corners,2)
-          p_corners(i,j) = this%add_point( p0 + &
-            real(i-1)*tile_size(1)*base1 + real(j-1)*tile_size(2)*base2)
+        ! points in the corners of rectangulars
+        do i=1, size(p_corners,1)
+          do j=1, size(p_corners,2)
+            p_corners(i,j) = this%add_point( p0 + &
+              real(i-1)*tile_size(1)*base1 + real(j-1)*tile_size(2)*base2)
+          end do
         end do
-      end do
+      end block
 
       ! points in the middle of rectangulars
-      do i=1, size(p_mids,1)
-        do j=1, size(p_mids,2)
-          associate( &
-            c1=>this%points(this%index_from_handle(p_corners(i,j)))%position, &
-            c2=>this%points(this%index_from_handle(p_corners(i+1,j)))%position, &
-            c3=>this%points(this%index_from_handle(p_corners(i,j+1)))%position, &
-            c4=>this%points(this%index_from_handle(p_corners(i+1,j+1)))%position)
-            call random_number(shift)
-            shift = (2.0*shift - 1.0) * tile_size * rel_shift_size
+      block
+        real(dp) :: shift(2)
 
-            p_mids(i,j) = this%add_point((c1+c2+c3+c4)/4.0_dp + &
-                base1*shift(1) + base2*shift(2))
-          end associate
+        do i=1, size(p_mids,1)
+          do j=1, size(p_mids,2)
+            associate( &
+              c1=>this%points(this%index_from_handle( &
+                  p_corners(i,j)))%position, &
+              c2=>this%points(this%index_from_handle( &
+                  p_corners(i+1,j)))%position, &
+              c3=>this%points(this%index_from_handle( &
+                  p_corners(i,j+1)))%position, &
+              c4=>this%points(this%index_from_handle( &
+                  p_corners(i+1,j+1)))%position )
+              call random_number(shift)
+              shift = (2.0*shift - 1.0) * tile_size * rel_shift_size
+
+              p_mids(i,j) = this%add_point((c1+c2+c3+c4)/4.0_dp + &
+                  base1*shift(1) + base2*shift(2))
+            end associate
+          end do
         end do
-      end do
+      end block
+
+      ! queues for handles to boundary cells
+      call bitems_01%initialize(chunksize=size(transfer(cell,INTEGER_MOLD)))
+      call bitems_02%initialize(chunksize=size(transfer(cell,INTEGER_MOLD)))
+      call bitems_1c%initialize(chunksize=size(transfer(cell,INTEGER_MOLD)))
+      call bitems_2c%initialize(chunksize=size(transfer(cell,INTEGER_MOLD)))
 
       ! connect points
       block
-        type(graph_handle_t) :: p(4)
-
         p(4) = p_mids(1,1) ! just some valid point that will be ignored
         do j=1, size(p_mids, 2)
-          ! cell to the left of first middle point
+          ! cell to the left of the first middle point
           p(1:3) = [p_mids(1,j), p_corners(1,j), p_corners(1,j+1)]
           cell = this%add_cell(p)
+          boundary_cell = this%add_vertex(vipar, vrpar)
+          edge = this%add_edge(this
 
           ! cells between middle points
           do i=1, size(p_mids,1)-1
@@ -957,8 +980,9 @@
             cell = this%add_cell(p)
           end do
 
-          ! cell to the right of last middle point
-          p(1:3) = [p_mids(size(p_mids,1),j), p_corners(size(p_mids,1)+1,j), p_corners(size(p_mids,1)+1,j+1)]
+          ! cell to the right of the last middle point
+          p(1:3) = [p_mids(size(p_mids,1),j), p_corners(size(p_mids,1)+1,j), &
+              p_corners(size(p_mids,1)+1,j+1)]
           cell = this%add_cell(p)
 
           do i=1, size(p_mids,1)
