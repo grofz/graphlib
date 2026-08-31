@@ -413,9 +413,10 @@
     end subroutine relocate_point
 
 
-    function mesh_add_cell(this, point_handles) result(handle)
+    function mesh_add_cell(this, point_handles, position_id) result(handle)
       class(mesh_t), intent(inout) :: this
       type(graph_handle_t), intent(in) :: point_handles(4)
+      integer, intent(in), optional :: position_id
       type(graph_handle_t) :: handle
 !
 ! Add mesh cell. Dual vertex and edges connecting neighbouring vertices are
@@ -423,6 +424,11 @@
 !
       integer :: n, i, j, pids(4), ngb_pids(4)
       integer, allocatable :: found_cids(:)
+
+      if (present(position_id)) then
+        if (position_id < 1 .or. position_id+2 > VSIZE_RPAR) error stop &
+          'mesh_add_cell - position_id out of bounds'
+      end if
 
       n = this%npoints_per_cell()
 
@@ -522,6 +528,16 @@
           integer :: ngb_id, v_ipar(VSIZE_IPAR), e_ipar(ESIZE_IPAR)
           real(dp) :: v_rpar(VSIZE_RPAR), e_rpar(ESIZE_RPAR)
 
+          if (present(position_id)) then
+            ! position of dual vertex is in the middle of cell (for visualizetion)
+            associate (x=>v_rpar(position_id:position_id+2))
+              x = 0.0
+              do i=1,n
+                x = x + this%points(pids(i))%position
+              end do
+              x = x / real(n)
+            end associate
+          end if
           new_cell%dual_vertex = this%add_vertex(v_ipar, v_rpar)
           do i=1, n
             ngb_id = this%index_from_handle(new_cell%ngb_cells(i))
@@ -892,32 +908,68 @@
     ! -------------
 
     subroutine mesh_append_rectilinear_mesh(this, p0, p1, p2, cell_size, &
-        rel_shift_size, boundary, boundary_offset)
+        rel_shift, position_id, boundary, boundary_offset)
       class(mesh_t), intent(inout) :: this
       real(dp), intent(in) :: p0(3), p1(3), p2(3)
-      real(dp), intent(in) :: cell_size, rel_shift_size
+      real(dp), intent(in) :: cell_size, rel_shift
+      integer, intent(in), optional :: position_id
       type(graph_handle_t), allocatable, intent(out) :: boundary(:)
       integer, intent(out) :: boundary_offset(0:4)
 !
 ! TODO Documentation
 !
+! IN
+!   this        - Mesh object
+!   p0, p1, p2  - Corners of box defining the mesh border
+!   cell_size   - Maximum length of the triangle side.
+!   rel_shift   - Randomized pertrubation of grid points
+!   position_id - (optional) To store position of dual and ghost vertices in the
+!                 underlying vertex-edge graph. Can be used for visualisation
+!                 and debugging.
+!
+! OUT
+!   boundary - Handles to ghost-vertices connected to the boundary cells of
+!              the mesh.
+!   boundary_offset - identifies which handles belong to which mesh side:
+!     side 01 - boundary( boundary_offset(0)+1 : boundary_offset(1) )
+!     side 02 - boundary( boundary_offset(1)+1 : boundary_offset(2) )
+!     side 23 - boundary( boundary_offset(2)+1 : boundary_offset(3) )
+!     side 13 - boundary( boundary_offset(3)+1 : boundary_offset(4) )
+!
+!               (3)
+!     P2 +---------------+ P3
+!        |               |
+!    (2) |               | (4)
+!        |               |
+!     P0 +---------------+ P1
+!               (1)
+!
       real(dp) :: base1(3), base2(3), tile_size(2)
       integer :: i, j
       type(graph_handle_t), allocatable :: p_corners(:,:), p_mids(:,:)
-      type(queue_t) :: bitems_01, bitems_02, bitems_2c, bitems_1c
-      type(graph_handle_t) :: p(4), cell, boundary_cell, edge
-      integer :: vipar(VSIZE_IPAR), eipar(ESIZE_IPAR)
-      real(dp) :: vrpar(VSIZE_RPAR), erpar(ESIZE_RPAR)
+      type(queue_t) :: bitems_01, bitems_02, bitems_23, bitems_13
+      type(graph_handle_t) :: p(4), cell
+      real(dp) :: bpos_01(3), bpos_02(3), bpos_23(3), bpos_13(3)
+
+      if (present(position_id)) then
+        if (position_id < 1 .or. position_id+2 > VSIZE_RPAR) error stop &
+          'mesh_append_rectilinear_mesh - position_id out of bounds'
+      end if
 
       block
         integer :: ntiles(2)
-        real(dp) :: mesh_size(2)
-
+        real(dp) :: mesh_size(2), p3(3)
+        real(dp), parameter :: beta=1.5_dp
+!TODO verify
+! - mesh_size > 0
+! - dot_produxt(p1-p0,p2-p0) > 0 (vectors are not parallel)
+! - cell_size > 0
+! - rel_shift between 0 and 0.5
         mesh_size(1) = sqrt(dot_product(p1-p0, p1-p0))
         mesh_size(2) = sqrt(dot_product(p2-p0, p2-p0))
         base1 = (p1-p0)/mesh_size(1)
         base2 = (p2-p0)/mesh_size(2)
-        ntiles = int(mesh_size/cell_size) + 1
+        ntiles = max(1, ceiling(mesh_size/cell_size))
         tile_size = mesh_size/ntiles
         allocate(p_corners(ntiles(1)+1, ntiles(2)+1))
         allocate(p_mids(ntiles(1), ntiles(2)))
@@ -929,6 +981,13 @@
               real(i-1)*tile_size(1)*base1 + real(j-1)*tile_size(2)*base2)
           end do
         end do
+
+        ! "positions" of boundary cells (ghost cells), just for visualization
+        p3 = p0 + (p1-p0) + (p2-p0)
+        bpos_01 = beta/2.0_dp*(p0 + p1) + (1.0_dp-beta)*p2
+        bpos_02 = beta/2.0_dp*(p0 + p2) + (1.0_dp-beta)*p1
+        bpos_23 = beta/2.0_dp*(p2 + p3) + (1.0_dp-beta)*p0
+        bpos_13 = beta/2.0_dp*(p1 + p3) + (1.0_dp-beta)*p0
       end block
 
       ! points in the middle of rectangulars
@@ -947,7 +1006,7 @@
               c4=>this%points(this%index_from_handle( &
                   p_corners(i+1,j+1)))%position )
               call random_number(shift)
-              shift = (2.0*shift - 1.0) * tile_size * rel_shift_size
+              shift = (2.0*shift - 1.0) * tile_size * rel_shift
 
               p_mids(i,j) = this%add_point((c1+c2+c3+c4)/4.0_dp + &
                   base1*shift(1) + base2*shift(2))
@@ -959,8 +1018,8 @@
       ! queues for handles to boundary cells
       call bitems_01%initialize(chunksize=size(transfer(cell,INTEGER_MOLD)))
       call bitems_02%initialize(chunksize=size(transfer(cell,INTEGER_MOLD)))
-      call bitems_1c%initialize(chunksize=size(transfer(cell,INTEGER_MOLD)))
-      call bitems_2c%initialize(chunksize=size(transfer(cell,INTEGER_MOLD)))
+      call bitems_13%initialize(chunksize=size(transfer(cell,INTEGER_MOLD)))
+      call bitems_23%initialize(chunksize=size(transfer(cell,INTEGER_MOLD)))
 
       ! connect points
       block
@@ -968,33 +1027,89 @@
         do j=1, size(p_mids, 2)
           ! cell to the left of the first middle point
           p(1:3) = [p_mids(1,j), p_corners(1,j), p_corners(1,j+1)]
-          cell = this%add_cell(p)
-          boundary_cell = this%add_vertex(vipar, vrpar)
-          edge = this%add_edge(this
+          cell = this%add_cell(p, position_id)
+          call add_boundary_cell(bitems_02, bpos_02, cell)
 
           ! cells between middle points
           do i=1, size(p_mids,1)-1
             p(1:3) = [p_mids(i,j), p_corners(i+1,j), p_mids(i+1,j)]
-            cell = this%add_cell(p)
+            cell = this%add_cell(p, position_id)
             p(1:3) = [p_mids(i,j), p_corners(i+1,j+1), p_mids(i+1,j)]
-            cell = this%add_cell(p)
+            cell = this%add_cell(p, position_id)
           end do
 
           ! cell to the right of the last middle point
           p(1:3) = [p_mids(size(p_mids,1),j), p_corners(size(p_mids,1)+1,j), &
               p_corners(size(p_mids,1)+1,j+1)]
-          cell = this%add_cell(p)
+          cell = this%add_cell(p, position_id)
+          call add_boundary_cell(bitems_13, bpos_13, cell)
 
           do i=1, size(p_mids,1)
             ! cell bellow middle point
             p(1:3) = [p_mids(i,j), p_corners(i,j), p_corners(i+1,j)]
-            cell = this%add_cell(p)
+            cell = this%add_cell(p, position_id)
+            if (j==1) call add_boundary_cell(bitems_01, bpos_01, cell)
+
             ! cell above middle point
             p(1:3) = [p_mids(i,j), p_corners(i,j+1), p_corners(i+1,j+1)]
-            cell = this%add_cell(p)
+            cell = this%add_cell(p, position_id)
+            if (j==size(p_mids,2)) call add_boundary_cell(bitems_23, bpos_23, cell)
           end do
         end do
       end block
+
+      ! empty queues and store ghost vertice handles to boundary
+      allocate(boundary(bitems_01%size() + bitems_02%size() + bitems_13%size() &
+          + bitems_23%size()) )
+      call consume_handles(bitems_01, i, 1)
+      call consume_handles(bitems_02, i, 2)
+      call consume_handles(bitems_23, i, 3)
+      call consume_handles(bitems_13, i, 4)
+      if (i /= size(boundary)) error stop &
+        'mesh_append_rectilinear_mesh - boundary size invalid (internal error'
+
+    contains
+
+      subroutine add_boundary_cell(queue, position, cell0)
+        type(queue_t), intent(inout) :: queue
+        real(dp), intent(in) :: position(3)
+        type(graph_handle_t), intent(in) :: cell0
+
+        integer :: vipar(VSIZE_IPAR), eipar(ESIZE_IPAR)
+        real(dp) :: vrpar(VSIZE_RPAR), erpar(ESIZE_RPAR)
+        type(graph_handle_t) :: boundary_vertex, edge
+
+        vipar = 0
+        eipar = 0
+        vrpar = 0.0_dp
+        erpar = 0.0_dp
+        if (present(position_id)) &
+            vrpar(position_id:position_id+2) = position
+        boundary_vertex = this%add_vertex(vipar, vrpar)
+        edge = this%add_edge( &
+          this%cells(this%index_from_handle(cell0))%dual_vertex, &
+          boundary_vertex, eipar, erpar)
+        call queue%enqueue(transfer(boundary_vertex, INTEGER_MOLD))
+      end subroutine add_boundary_cell
+
+      subroutine consume_handles(queue, ind, iside)
+        type(queue_t), intent(inout) :: queue
+        integer, intent(inout) :: ind
+        integer, intent(in) :: iside
+
+        if (iside==1) then
+          boundary_offset(iside-1) = 0
+          ind = 0
+        else
+          if (boundary_offset(iside-1) /= ind) error stop &
+            'mesh_append_rectilinear_mesh - internal error in consume_handles'
+        end if
+        do while(.not. queue%empty())
+          ind = ind + 1
+          boundary(ind) = transfer(queue%dequeue(),boundary(ind))
+        end do
+        boundary_offset(iside) = ind
+      end subroutine consume_handles
 
     end subroutine mesh_append_rectilinear_mesh
 
