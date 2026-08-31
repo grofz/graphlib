@@ -32,6 +32,8 @@
     implicit none (type, external)
     private
 
+    public conjugate_gradient
+
     ! Workaround to gfortran bug (procedures used by submodules)
     public other_vertex_id
 
@@ -514,6 +516,67 @@
 !
       end subroutine graph_conductance
 
+
+#ifdef DEBUG
+      module subroutine conjugate_gradient(g, x, position_conductance, &
+          is_external, emask, iflag, diag, x_old, source, &
+          rtol_l2, rtol_linf, rtol_bounds)
+#else
+      module pure subroutine conjugate_gradient(g, x, position_conductance, &
+          is_external, emask, iflag, diag, x_old, source, &
+          rtol_l2, rtol_linf, rtol_bounds)
+#endif
+        class(graph_t), intent(in) :: g
+        real(dp), intent(inout) :: x(:)
+        integer, intent(in) :: position_conductance
+        logical, intent(in) :: emask(:), is_external(:)
+        integer, intent(out) :: iflag
+        real(dp), intent(in), optional :: diag(:)
+        real(dp), intent(in), optional :: x_old(:)
+        real(dp), intent(in), optional :: source(:)
+        real(dp), intent(in), optional :: rtol_l2, rtol_linf, rtol_bounds
+!
+! Solve A*x = b, A must be positive definite and b non-zero.
+!
+! IN:
+!   g           - undirected graph
+!   x           - potential
+!               i is an external node
+!                 - boundary value of the potential (Dirichlet b.c)
+!               i is an internal node
+!                 - initial guess of unknowns
+!   position_conductance - position of g_ij in edges/rpar array
+!   is_external - .true. marks external nodes
+!   emask       - .true. marks selected (open for flow) edges
+!   diag        - (optional) diagonal elements contributions to A
+!   xold        - (optional) potential at the previous time-step
+!   source      - (optional) fixed size source/sink
+!   rtol_l2, rtol_linf, rtol_bounds - optional tolerance setting
+!
+! OUT:
+!   x           - solution for internal nodes
+!   iflag       - output flag:
+!                 - CG_OK if solved successfully
+!                 - CG_MAXITER if convergence tolerances not met after the
+!                   set maximum number of iterations.
+!                 - CG_TRIVIAL if vector b is zero (non-percolating network).
+!                 - CG_OUT_VALID_RANGE if, after leaving iteration loop, some
+!                   x values are out of (x_low,x_high) range
+!                 - CG_NOT_POSDEF_MATRIX if matrix is not positive definite.
+!
+! Remark:
+!   transient transport equation
+!         c_i * (x_i-xold_i)/dt + sum_j g_ij (x_i-x_j) = s_i
+!         d_i = c_i / dt
+!   then
+!         d_i*x_i + sum_j g_ij (x_i-x_j) = d_i*xold_i + s_i
+!         (d_i+sum_j g_ij)*x_i - sum_j g_ij x_j = d_i*xold_i + s_i
+!
+!         ==============================================
+!         (D+L)*x = D*xold + S + b_boundary  --> A*x = b
+!         ==============================================
+!
+      end subroutine conjugate_gradient
 
     end interface ! submodules
 
