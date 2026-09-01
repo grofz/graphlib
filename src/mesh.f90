@@ -19,15 +19,17 @@
   module mesh_mod
     use iso_fortran_env, only : dp=>real64, I1B=>int8
     use graph_mod, only : graph_t, graph_handle_t=>handle_t, MAP_NULL, &
-        NOT_INITIALIZED
+        NOT_INITIALIZED, is_vertex_selected, is_edge_selected, conjugate_gradient
     use graph_adjlist_mod, only : adjlist_t, iterator_t
     use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR
     use conts_mod, only : queue_t, stack_t, INTEGER_MOLD
     implicit none (type, external)
     private
+public integrate_pde, solve_3x3 ! TODO for testing temporarily
 
     ! Named local constants
     integer, parameter :: DEFAULT_CCAPACITY = 10, DEFAULT_PCAPACITY = 5
+    real(dp), parameter :: GEOMETRY_TOL_FACTOR = 1000.0_dp
 
     ! Reference point used for 2D-grid only to define the positive orientation
     ! based on ordering the points.
@@ -56,6 +58,8 @@
       type(graph_handle_t) :: handle
     contains
       procedure :: point_indices => cell_point_indices
+      procedure :: volume => cell_volume
+      procedure :: circumcenter => cell_circumcenter
     end type cell_t
 
     type, extends(graph_t), public :: mesh_t
@@ -85,6 +89,10 @@
       procedure, non_overridable :: is_3d => mesh_is_3d
       procedure, non_overridable :: append_rectilinear_mesh => mesh_append_rectilinear_mesh
     end type mesh_t
+
+   !interface circumcentre
+   !  module procedure circumcentre_circle, circumcentre_sphere
+   !end interface
 
   contains
 
@@ -528,14 +536,25 @@
           integer :: ngb_id, v_ipar(VSIZE_IPAR), e_ipar(ESIZE_IPAR)
           real(dp) :: v_rpar(VSIZE_RPAR), e_rpar(ESIZE_RPAR)
 
+          v_rpar = 0.0_dp
+          e_rpar = 0.0_dp
+          v_ipar = 0
+          e_ipar = 0
           if (present(position_id)) then
-            ! position of dual vertex is in the middle of cell (for visualizetion)
+            ! position of dual vertex (stored for visualization)
             associate (x=>v_rpar(position_id:position_id+2))
-              x = 0.0
-              do i=1,n
-                x = x + this%points(pids(i))%position
-              end do
-              x = x / real(n)
+              if (this%is_3d()) then
+                x = circumcentre_sphere( &
+                    this%points(pids(1))%position, &
+                    this%points(pids(2))%position, &
+                    this%points(pids(3))%position, &
+                    this%points(pids(4))%position )
+              else
+                x = circumcentre_circle( &
+                    this%points(pids(1))%position, &
+                    this%points(pids(2))%position, &
+                    this%points(pids(3))%position )
+              end if
             end associate
           end if
           new_cell%dual_vertex = this%add_vertex(v_ipar, v_rpar)
@@ -825,7 +844,7 @@
       integer :: pids(4)
 !
 ! Order points for positive orientation.
-! 
+!
       real(dp), parameter :: eps = 10 * epsilon(1.0_dp)
       real(dp), parameter :: p_ref(3) = ORIENTATION_2D_REFPOINT
       real(dp) :: d, tol
@@ -903,6 +922,64 @@
     end function order_point_indices
 
 
+    pure function cell_circumcenter(this, mesh) result(c)
+      class(cell_t), intent(in) :: this
+      type(mesh_t), intent(in) :: mesh
+      real(dp) :: c(3)
+!
+! TODO DOcumentatoin block
+!
+      integer :: pids(4)
+      if (any(pids(1:mesh%npoints_per_cell()) == MAP_NULL)) error stop &
+          'cell_circumcenter - points not present'
+      if (mesh%is_3d()) then
+        c = circumcentre_sphere( &
+            mesh%points(pids(1))%position, &
+            mesh%points(pids(2))%position, &
+            mesh%points(pids(3))%position, &
+            mesh%points(pids(4))%position )
+      else
+        c = circumcentre_circle( &
+            mesh%points(pids(1))%position, &
+            mesh%points(pids(2))%position, &
+            mesh%points(pids(3))%position )
+      end if
+    end function cell_circumcenter
+
+
+    pure function cell_volume(this, mesh) result(volume)
+      class(cell_t), intent(in) :: this
+      type(mesh_t), intent(in) :: mesh
+      real(dp) :: volume
+
+      real(dp) :: x1(3), x2(3), x3(3), x4(3), n(3)
+      integer :: pids(4)
+
+      pids = cell_point_indices(this, mesh)
+      if (any(pids(1:mesh%npoints_per_cell()) == MAP_NULL)) error stop &
+          'cell_volume - points not present'
+      x1 = mesh%points(pids(1))%position
+      x2 = mesh%points(pids(2))%position
+      x3 = mesh%points(pids(3))%position
+      if (mesh%is_3d()) then
+        x4 = mesh%points(pids(4))%position
+        volume = dot_product(x2-x1, vec_product(x3-x1, x4-x1)) / 6.0_dp
+      else
+        volume = triangle_area(x1, x2, x3)
+      end if
+    end function cell_volume
+
+
+    pure function triangle_area(p1, p2, p3) result(area)
+      real(dp), intent(in) :: p1(3), p2(3), p3(3)
+      real(dp) :: area
+
+      real(dp) :: n(3)
+      n = vec_product(p2-p1, p3-p1)
+      area = 0.5_dp * sqrt(dot_product(n,n))
+    end function triangle_area
+
+
     ! -------------
     ! Generate mesh  TODO temporarily here
     ! -------------
@@ -969,7 +1046,8 @@
         mesh_size(2) = sqrt(dot_product(p2-p0, p2-p0))
         base1 = (p1-p0)/mesh_size(1)
         base2 = (p2-p0)/mesh_size(2)
-        ntiles = max(1, ceiling(mesh_size/cell_size))
+        ntiles(1) = max(1, ceiling(mesh_size(1)/cell_size))
+        ntiles(2) = max(1, ceiling(mesh_size(2)/cell_size*(0.75)))
         tile_size = mesh_size/ntiles
         allocate(p_corners(ntiles(1)+1, ntiles(2)+1))
         allocate(p_mids(ntiles(1), ntiles(2)))
@@ -1112,5 +1190,244 @@
       end subroutine consume_handles
 
     end subroutine mesh_append_rectilinear_mesh
+
+
+    ! ------------------------------------------------
+    ! Transient diffusion/conduction TODO here for now
+    ! ------------------------------------------------
+    subroutine integrate_pde(this, t_start, t_end, dt_comp, dt_out, &
+        position_conductance, position_capacitance, bc_label, x_init, x_out, &
+        vmask, emask, vselector, eselector, rtol_l2, rtol_linf)
+      class(mesh_t), intent(in) :: this
+      real(dp), intent(in) :: t_start, dt_comp, dt_out
+      real(dp), intent(inout) :: t_end
+      integer, intent(in) :: position_conductance, position_capacitance
+      integer, intent(in) :: bc_label(:)
+      real(dp), intent(in) :: x_init(:)
+      real(dp), intent(out), allocatable :: x_out(:,:)
+      logical, intent(in), optional :: vmask(:), emask(:)
+      procedure(is_vertex_selected), optional :: vselector
+      procedure(is_edge_selected), optional :: eselector
+      real(dp), intent(in), optional :: rtol_l2, rtol_linf
+!
+! TODO Documentation block
+!
+      integer, parameter :: CG_OK=0, CG_MAXITER=1 ! TODO import from graph_smod_flow
+      integer, parameter :: BC_NONE = 0
+      logical, allocatable :: vmask0(:), emask0(:), is_external(:)
+      integer :: iout, iflag, icomp
+      real(dp) :: t, dt, finterpol
+      real(dp), allocatable :: x_old(:), x_new(:), tmp(:), diag(:)
+      logical :: is_out
+
+      if (this%is_directed()) error stop &
+        'integrate_pde - undirected graph required'
+      if (position_conductance < 1 .or. position_conductance > ESIZE_RPAR) &
+        error stop 'integrate_pde - position_conductance out of bounds'
+      if (position_capacitance < 1 .or. position_capacitance > VSIZE_RPAR) &
+        error stop 'integrate_pde - position_capacitance out of bounds'
+      if (size(bc_label) /= this%nvertices) error stop &
+        'integrate_pde - size of bc_label is invalid'
+      if (size(x_init) /= this%nvertices) error stop &
+        'integrate_pde - size of x_init is invalid'
+
+      call this%build_selection_masks(vmask0, emask0, vmask_provided=vmask, &
+          emask_provided=emask, vselector=vselector, eselector=eselector)
+
+      associate (nout => ceiling((t_end-t_start)/dt_out) + 1)
+        ! nout >= 2 if t_end > t_start
+        allocate(x_out(this%nvertices, nout))
+        allocate(x_old(this%nvertices), x_new(this%nvertices))
+      end associate
+      iout = 1
+      icomp = 1
+      x_out(:,iout) = x_init
+      x_old = x_init
+      t = t_start
+
+      allocate(is_external(this%nvertices), source=.true.)
+      where (vmask0 .and. bc_label==BC_NONE)
+        is_external = .false.
+      end where
+
+      block
+        integer :: icell, jvertex
+        allocate(diag(this%nvertices), source=0.0_dp)
+
+        do icell=1, this%ncells
+          jvertex = this%index_from_handle(this%cells(icell)%dual_vertex)
+          if (jvertex==MAP_NULL) error stop 'integrate_pde - could not find dual vertex'
+          diag(jvertex) = this%vertices(jvertex)%rpar(position_capacitance) * &
+              this%cells(icell)%volume(this) / dt_comp
+        end do
+      end block
+print *, 'DIAG ',diag
+
+      do
+        ! update x
+        x_new = x_old
+ print *, size(diag), size(x_old), size(is_external)
+        call conjugate_gradient(this%graph_t, x_new, position_conductance, &
+            is_external, emask0, iflag, diag=diag, x_old=x_old, &
+            rtol_l2=rtol_l2, rtol_linf=rtol_linf)
+        if (iflag/=CG_OK .and. iflag/=CG_MAXITER) then
+          print *, 'conjugate_gradient iflag = ',iflag, t
+          error stop 'integration_pde - could not solve step'
+        else if (iflag==CG_MAXITER) then
+          print *, 'conjugate_gradient WARNING tolerance not met ', t
+        end if
+        ! update time
+        t = t_start + real(icomp,dp)*dt_comp
+        icomp = icomp + 1
+        ! write output and update "iout"
+        if (t >= t_start + real(iout,dp)*dt_out) then
+          finterpol = (t - (t_start+real(iout,dp)*dt_out)) / dt_comp
+          iout = iout + 1
+          x_out(:,iout) = (1.0_dp-finterpol)*x_new + finterpol*x_old
+          is_out = .true.
+        else
+          is_out = .false.
+        end if
+        ! if end of loop, update "t_end" and write last "x_out" column
+        if (t >= t_end) then
+          t_end = t
+          if (.not. is_out) then
+            iout = iout + 1
+            if (iout /= size(x_out,2)) then
+              print *, iout, shape(x_out)
+              error stop 'integrate_pde - internal errro'
+            end if
+            x_out(:,iout) = x_new
+          end if
+          exit
+        end if
+        ! swap x_old with x_new
+        call move_alloc(x_old, tmp)
+        call move_alloc(x_new, x_old)
+        call move_alloc(tmp, x_new)
+      end do
+
+      if (iout /= size(x_out,2)) error stop &
+        'integrate_pde - not all positions written'
+
+    contains
+    end subroutine integrate_pde
+
+
+    ! ======================
+    ! Geometrical primitives
+    ! ======================
+
+    pure function vec_product(u, v) result(w)
+      real(dp), intent(in) :: u(3), v(3)
+      real(dp) :: w(3)
+      w(1) = u(2)*v(3) - u(3)*v(2)
+      w(2) = u(3)*v(1) - u(1)*v(3)
+      w(3) = u(1)*v(2) - u(2)*v(1)
+    end function vec_product
+
+
+    pure subroutine solve_3x3(A, b, x, iflag)
+      real(dp), intent(in) :: A(:,:), b(:)
+      real(dp), intent(out) :: x(:)
+      integer, intent(out) :: iflag  ! return zero if ok
+!
+! Solve a linear system A*x = b for problem size = 3
+! Return IFLAG_SINGULAR if pivot is very small indicating a degenerate system.
+!
+      integer, parameter :: IFLAG_OK = 0, IFLAG_SINGULAR = 1
+      real(dp), parameter :: RTOL = GEOMETRY_TOL_FACTOR * epsilon(1.0_dp)
+      real(dp) :: Awrk(3,3), bwrk(3), tmpA(3), tmpb, scale
+      integer :: i, j, k, n
+
+      iflag = IFLAG_SINGULAR ! to be able to just return if problem detected
+      x = 0.0_dp
+      n = size(A,1)
+      if (n/=3) error stop 'solve 3x3 - problem size 3 expected'
+      if (size(A,2)/=n .or. size(b)/=n .or. size(x)/=n) &
+          error stop 'solve_3x3 - array size inconsistent'
+      Awrk = A
+      bwrk = b
+      scale = maxval(abs(A))
+      if (scale == 0.0_dp) return
+
+      do i = 1, n
+        ! Find pivot position
+        k = maxloc(abs(Awrk(i:n,i)),dim=1)+i-1
+        ! Swap pivot with i-th row
+        if (k /= i) then
+          tmpA = Awrk(k,:)
+          Awrk(k,:) = Awrk(i,:)
+          Awrk(i,:) = tmpA
+          tmpb = bwrk(k)
+          bwrk(k) = bwrk(i)
+          bwrk(i) = tmpb
+        end if
+        ! Verify regularity
+        if (abs(Awrk(i,i)) <= RTOL * scale) return
+        ! Normalize pivot (update b before destroying pivot multiplier)
+        bwrk(i) = bwrk(i) / Awrk(i,i)
+        Awrk(i,i:n) = Awrk(i,i:n) / Awrk(i,i)
+        ! Gaussian elimination of items in i-th column
+        do j = i+1, n
+          ! bwrk must be updated first
+          bwrk(j) = bwrk(j) - Awrk(j,i) * bwrk(i)
+          Awrk(j,i:n) = Awrk(j,i:n) - Awrk(j,i) * Awrk(i,i:n)
+        end do
+      end do
+      ! Back substitution
+      do i = n, 1, -1
+        x(i) = bwrk(i)
+        do j = i-1, 1, -1
+          bwrk(j) = bwrk(j) - x(i)*Awrk(j,i)
+        end do
+      end do
+      iflag = IFLAG_OK
+    end subroutine solve_3x3
+
+
+    pure function circumcentre_circle(p1, p2, p3) result (c)
+      real(dp), intent(in) :: p1(3), p2(3), p3(3)
+      real(dp) :: c(3)
+
+      real(dp) :: u(3), v(3), w(3), unorm, vnorm, wnorm, nom(3)
+      real(dp) :: scale, tol
+
+      u = p2 - p1
+      v = p3 - p1
+      w = vec_product(u, v)
+      unorm = dot_product(u, u)
+      vnorm = dot_product(v, v)
+      wnorm = dot_product(w, w)
+      scale = max(unorm, vnorm)
+      tol = GEOMETRY_TOL_FACTOR * epsilon(1.0_dp)
+      if (unorm <= tol*scale .or. vnorm <= tol*scale .or. &
+          wnorm <= (tol*scale)**2) &
+          error stop 'circumcentre_circle - degenerate posotions'
+      nom = vnorm*vec_product(w,u) + unorm*vec_product(v,w)
+      c = p1 + nom / (2.0 * wnorm)
+    end function circumcentre_circle
+
+
+    pure function circumcentre_sphere(p1, p2, p3, p4) result(c)
+      real(dp), intent(in) :: p1(3), p2(3), p3(3), p4(3)
+      real(dp) :: c(3)
+
+      real(dp) :: u(3), v(3), w(3), A(3,3), b(3), x(3)
+      integer :: iflag
+
+      u = p2 - p1
+      v = p3 - p1
+      w = p4 - p1
+      A(1,:) = u
+      A(2,:) = v
+      A(3,:) = w
+      b(1) = 0.5_dp * dot_product(u, u)
+      b(2) = 0.5_dp * dot_product(v, v)
+      b(3) = 0.5_dp * dot_product(w, w)
+      call solve_3x3(A, b, x, iflag)
+      if (iflag /= 0) error stop 'circumcentre_sphere - degenerate positions'
+      c = p1 + x
+    end function circumcentre_sphere
 
   end module mesh_mod

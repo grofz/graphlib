@@ -33,6 +33,7 @@
     private
 
     public conjugate_gradient
+    public is_vertex_selected, is_edge_selected
 
     ! Workaround to gfortran bug (procedures used by submodules)
     public other_vertex_id
