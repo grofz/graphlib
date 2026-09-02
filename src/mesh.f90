@@ -29,7 +29,8 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
 
     ! Named local constants
     integer, parameter :: DEFAULT_CCAPACITY = 10, DEFAULT_PCAPACITY = 5
-    real(dp), parameter :: GEOMETRY_TOL_FACTOR = 1000.0_dp
+    real(dp), parameter :: GEOMETRY_TOL_FACTOR = 1000.0_dp*epsilon(1.0_dp)
+    real(dp), parameter :: NUMERICAL_TOL = 10.0_dp*epsilon(1.0_dp)
 
     ! Reference point used for 2D-grid only to define the positive orientation
     ! based on ordering the points.
@@ -58,9 +59,15 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
       type(graph_handle_t) :: handle
     contains
       procedure :: point_indices => cell_point_indices
-      procedure :: volume => cell_volume
-      procedure :: circumcenter => cell_circumcenter
+      procedure :: geometry => cell_geometry
     end type cell_t
+
+    type cell_geometry_t
+      real(dp) :: centre(3) ! circumcentre
+      real(dp) :: volume
+      real(dp) :: area_vector(3,4) ! outward face/edge area vectors
+      real(dp) :: face_distance(4) ! centre-to-face distance
+    end type cell_geometry_t
 
     type, extends(graph_t), public :: mesh_t
       type(point_t), allocatable :: points(:)
@@ -89,10 +96,6 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
       procedure, non_overridable :: is_3d => mesh_is_3d
       procedure, non_overridable :: append_rectilinear_mesh => mesh_append_rectilinear_mesh
     end type mesh_t
-
-   !interface circumcentre
-   !  module procedure circumcentre_circle, circumcentre_sphere
-   !end interface
 
   contains
 
@@ -637,12 +640,12 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
       this%cmap(handle%get_index_to_map()) = MAP_NULL
       call return_mesh_handle(this, handle)
 
-      ! Relocate the last cell to the "hole" after removed cell 
+      ! Relocate the last cell to the "hole" after removed cell
       if (icell /= this%ncells) then
         call relocate_cell(this, this%cells(this%ncells)%handle, icell)
       end if
       this%ncells = this%ncells - 1
-      
+
     end subroutine mesh_remove_cell
 
 
@@ -824,17 +827,38 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
     ! ------------
     ! Cell methods
     ! ------------
-    pure function cell_point_indices(this, mesh) result(ids)
+    pure function cell_point_indices(this, mesh, null_allowed) result(ids)
       class(cell_t), intent(in) :: this
       type(mesh_t), intent(in) :: mesh
+      logical, intent(in), optional :: null_allowed
       integer :: ids(4)
-
+!
+! Return (and optionally validate) indices of points forming the cell.
+!
+! For a 2D-mesh, ids(4) = ids(1).
+!
+! Unless "null_allowed = .true." is given, all returned indices are checked to
+! be valid (and no post-function validation is required).
+!
       integer :: i
+      logical :: null_allowed0
 
-      if (.not. mesh%is_3d_mesh) ids(4) = MAP_NULL
       do i=1, mesh%npoints_per_cell()
         ids(i) = mesh%index_from_handle(this%points(i))
       end do
+
+      ! By default, all points are expected to exist
+      null_allowed0 = .false.
+      if (present(null_allowed)) null_allowed0 = null_allowed
+      if (.not. null_allowed0) then
+        if (any(ids(1:mesh%npoints_per_cell())<1 ) .or. &
+            any(ids(1:mesh%npoints_per_cell())>mesh%npoints)) error stop &
+            'cell_point_indices - a point not in mesh'
+      end if
+
+      ! For a 2D mesh, ids(4) is usually not used
+      ! Just to have a valid index for all array items
+      if (.not. mesh%is_3d_mesh) ids(4) = ids(1)
     end function cell_point_indices
 
 
@@ -922,62 +946,148 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
     end function order_point_indices
 
 
-    pure function cell_circumcenter(this, mesh) result(c)
+    function cell_geometry(this, mesh) result(geom)
+!   pure function cell_geometry(this, mesh) result(geom)
       class(cell_t), intent(in) :: this
       type(mesh_t), intent(in) :: mesh
-      real(dp) :: c(3)
+      type(cell_geometry_t) :: geom
 !
-! TODO DOcumentatoin block
+! TODO Documentation
 !
-      integer :: pids(4)
-      if (any(pids(1:mesh%npoints_per_cell()) == MAP_NULL)) error stop &
-          'cell_circumcenter - points not present'
-      if (mesh%is_3d()) then
-        c = circumcentre_sphere( &
-            mesh%points(pids(1))%position, &
-            mesh%points(pids(2))%position, &
-            mesh%points(pids(3))%position, &
-            mesh%points(pids(4))%position )
+      logical :: is_3d
+      integer :: pids(4), n
+      real(dp) :: avec_123(3), tol
+      real(dp), target :: positions(3,4)
+      real(dp), pointer :: p1(:), p2(:), p3(:), p4(:)
+
+      ! Get point positions
+      is_3D = mesh%is_3d()
+      n = mesh%npoints_per_cell()
+      pids = this%point_indices(mesh)
+      positions(:,1) = mesh%points(pids(1))%position
+      positions(:,2) = mesh%points(pids(2))%position
+      positions(:,3) = mesh%points(pids(3))%position
+      positions(:,4) = mesh%points(pids(4))%position
+      p1 => positions(:,1)
+      p2 => positions(:,2)
+      p3 => positions(:,3)
+      p4 => positions(:,4) ! not used in a 2D mesh
+
+      ! Assert non-degenerate positions
+      tol = maxval(abs(p2-p1))
+      tol = max(tol, maxval(abs(p3-p1)))
+      tol = max(tol, maxval(abs(p4-p1)))
+      tol = tol * GEOMETRY_TOL_FACTOR
+      select case(n)
+      case(3) ! a 2D mesh
+        if (points_colinear(p1, p2, p3, tol)) error stop &
+          'vell_geometry - 2D cell is co-linear'
+      case(4) ! a 3D mesh
+        if (points_coplanar(p1, p2, p3, p4, tol)) error stop &
+          'cell_geometry - 3D cell is co-planar'
+      case default
+        error stop 'cell_geometry - invalid npoints_per_cell'
+      end select
+
+      ! Area vector of triangle base
+      avec_123 = triangle_area_vector(p1, p2, p3)
+
+      ! Cell volume
+      if (is_3d) then
+        geom%volume = dot_product(p4-p1, avec_123) / 3.0_dp
+#ifdef DEBUG
+        if (geom%volume <= 0.0_dp) error stop &
+          'cell_geometry - negative volume'
+#endif
       else
-        c = circumcentre_circle( &
-            mesh%points(pids(1))%position, &
-            mesh%points(pids(2))%position, &
-            mesh%points(pids(3))%position )
+        geom%volume = norm2(avec_123)
       end if
-    end function cell_circumcenter
 
-
-    pure function cell_volume(this, mesh) result(volume)
-      class(cell_t), intent(in) :: this
-      type(mesh_t), intent(in) :: mesh
-      real(dp) :: volume
-
-      real(dp) :: x1(3), x2(3), x3(3), x4(3), n(3)
-      integer :: pids(4)
-
-      pids = cell_point_indices(this, mesh)
-      if (any(pids(1:mesh%npoints_per_cell()) == MAP_NULL)) error stop &
-          'cell_volume - points not present'
-      x1 = mesh%points(pids(1))%position
-      x2 = mesh%points(pids(2))%position
-      x3 = mesh%points(pids(3))%position
-      if (mesh%is_3d()) then
-        x4 = mesh%points(pids(4))%position
-        volume = dot_product(x2-x1, vec_product(x3-x1, x4-x1)) / 6.0_dp
+      ! Cell centre
+      if (is_3d) then
+        geom%centre = circumcentre_sphere(p1, p2, p3, p4)
       else
-        volume = triangle_area(x1, x2, x3)
+        geom%centre = circumcentre_circle(p1, p2, p3)
       end if
-    end function cell_volume
+
+      ! Face area vectors / Face distance
+      block
+        integer :: iface
+        real(dp), target :: selected_pos(3,3)
+        real(dp) :: fopp(3)
+        real(dp), pointer :: f1(:), f2(:), f3(:)
+
+        do iface = 1, n
+          selected_pos = face_positions(positions, iface, n)
+          f1 => selected_pos(:,1)
+          f2 => selected_pos(:,2)
+          f3 => selected_pos(:,3) ! unused for a 2D grid
+          fopp = positions(:,iface)
+
+          associate(avec => geom%area_vector(:,iface), &
+              fdist => geom%face_distance(iface))
+            if (is_3d) then
+              avec = triangle_area_vector(f1, f2, f3)
+              ! vector must point outside of cell, flip direction if needed
+              if (point_plane_distance(f1,f2,f3,fopp) < 0.0_dp) avec = -avec
+
+              fdist = abs(point_plane_distance(f1, f2, f3, geom%centre))
+            else
+              avec = vec_product(f2-f1, avec_123) / norm2(avec_123)
+
+              fdist = point_line_distance(f1, f2, geom%centre)
+            end if
+          end associate
+        end do
+      end block
+
+      ! Sum of area vectors should be zero
+#ifdef DEBUG
+      block
+        real(dp), parameter :: SUM_TOL_FACTOR = 100.0_dp*epsilon(1.0_dp)
+        real(dp) :: avec_sum(3), scale
+        integer :: i
+        avec_sum = sum(geom%area_vector(:,1:n), dim=2)
+        scale = 0.0
+        do i = 1, n
+          scale = max(scale, norm2(geom%area_vector(:,i)))
+        end do
+        if (norm2(avec_sum) >= SUM_TOL_FACTOR * scale) error stop &
+          'cell_geometry - area vectors do not sum up to zero'
+      end block
+#endif
+
+    end function cell_geometry
 
 
-    pure function triangle_area(p1, p2, p3) result(area)
-      real(dp), intent(in) :: p1(3), p2(3), p3(3)
-      real(dp) :: area
+    pure function face_positions(original_x, iface, npoints_per_cell) result(x)
+      real(dp), intent(in) :: original_x(3,4)
+      integer, intent(in) :: iface
+      integer, intent(in) :: npoints_per_cell
+      real(dp) :: x(3,3)
+!
+! Helper function - return "x" with "original_x(:,iface)" removed,
+!
+!    2D mesh:                  3D mesh:
+!    iface  output             iface  output
+!        1  x(:,2), x(:,3)         1  x(:,2), x(:,3), x(:,4)
+!        2  x(:,3), x(:,1)         2  x(:,3), x(:,4), x(:,1)
+!        3  x(:,1), x(:,2)         3  x(:,4), x(:,1), x(:,2)
+!                                  4  x(:,1), x(:,2), x(:,3)
+      integer :: i, orders(4)
 
-      real(dp) :: n(3)
-      n = vec_product(p2-p1, p3-p1)
-      area = 0.5_dp * sqrt(dot_product(n,n))
-    end function triangle_area
+      if (npoints_per_cell /= 3 .and. npoints_per_cell /=4) &
+          error stop 'face_positions - npoints_per_cell 3 or 4 expected'
+      if (iface < 1 .or. iface > npoints_per_cell) &
+          error stop 'face_positions - iface is invalid'
+
+      orders = [0, 1, 2, 3]
+      orders = mod(orders+(iface-1), npoints_per_cell)
+
+      do i = 2, npoints_per_cell
+        x(:,i-1) = original_x(:,orders(i)+1)
+      end do
+    end function face_positions
 
 
     ! -------------
@@ -1252,13 +1362,17 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
 
       block
         integer :: icell, jvertex
+        type(cell_geometry_t) :: geom
         allocate(diag(this%nvertices), source=0.0_dp)
 
         do icell=1, this%ncells
           jvertex = this%index_from_handle(this%cells(icell)%dual_vertex)
           if (jvertex==MAP_NULL) error stop 'integrate_pde - could not find dual vertex'
+          geom = this%cells(icell)%geometry(this)
+         !diag(jvertex) = this%vertices(jvertex)%rpar(position_capacitance) * &
+         !    this%cells(icell)%volume(this) / dt_comp
           diag(jvertex) = this%vertices(jvertex)%rpar(position_capacitance) * &
-              this%cells(icell)%volume(this) / dt_comp
+              geom%volume / dt_comp
         end do
       end block
 print *, 'DIAG ',diag
@@ -1336,8 +1450,7 @@ print *, 'DIAG ',diag
 ! Return IFLAG_SINGULAR if pivot is very small indicating a degenerate system.
 !
       integer, parameter :: IFLAG_OK = 0, IFLAG_SINGULAR = 1
-      real(dp), parameter :: RTOL = GEOMETRY_TOL_FACTOR * epsilon(1.0_dp)
-      real(dp) :: Awrk(3,3), bwrk(3), tmpA(3), tmpb, scale
+      real(dp) :: Awrk(3,3), bwrk(3), tmpA(3), tmpb
       integer :: i, j, k, n
 
       iflag = IFLAG_SINGULAR ! to be able to just return if problem detected
@@ -1348,8 +1461,7 @@ print *, 'DIAG ',diag
           error stop 'solve_3x3 - array size inconsistent'
       Awrk = A
       bwrk = b
-      scale = maxval(abs(A))
-      if (scale == 0.0_dp) return
+      if (maxval(abs(A)) == 0.0_dp) return
 
       do i = 1, n
         ! Find pivot position
@@ -1364,7 +1476,7 @@ print *, 'DIAG ',diag
           bwrk(i) = tmpb
         end if
         ! Verify regularity
-        if (abs(Awrk(i,i)) <= RTOL * scale) return
+        if (abs(Awrk(i,i)) <= NUMERICAL_TOL) return
         ! Normalize pivot (update b before destroying pivot multiplier)
         bwrk(i) = bwrk(i) / Awrk(i,i)
         Awrk(i,i:n) = Awrk(i,i:n) / Awrk(i,i)
@@ -1386,12 +1498,28 @@ print *, 'DIAG ',diag
     end subroutine solve_3x3
 
 
+    pure function triangle_area_vector(p1, p2, p3) result(avec)
+      real(dp), intent(in) :: p1(3), p2(3), p3(3)
+      real(dp) :: avec(3)
+!
+! TODO Documentation
+!
+      real(dp) :: u(3), v(3)
+
+      u = p2 - p1
+      v = p3 - p1
+      avec = 0.5_dp * vec_product(u, v)
+    end function triangle_area_vector
+
+
     pure function circumcentre_circle(p1, p2, p3) result (c)
       real(dp), intent(in) :: p1(3), p2(3), p3(3)
       real(dp) :: c(3)
-
+!
+! Centre of a circle with points P1, P2 and P3 on it.
+! Points must not be colinear
+!
       real(dp) :: u(3), v(3), w(3), unorm, vnorm, wnorm, nom(3)
-      real(dp) :: scale, tol
 
       u = p2 - p1
       v = p3 - p1
@@ -1399,11 +1527,6 @@ print *, 'DIAG ',diag
       unorm = dot_product(u, u)
       vnorm = dot_product(v, v)
       wnorm = dot_product(w, w)
-      scale = max(unorm, vnorm)
-      tol = GEOMETRY_TOL_FACTOR * epsilon(1.0_dp)
-      if (unorm <= tol*scale .or. vnorm <= tol*scale .or. &
-          wnorm <= (tol*scale)**2) &
-          error stop 'circumcentre_circle - degenerate posotions'
       nom = vnorm*vec_product(w,u) + unorm*vec_product(v,w)
       c = p1 + nom / (2.0 * wnorm)
     end function circumcentre_circle
@@ -1412,7 +1535,10 @@ print *, 'DIAG ',diag
     pure function circumcentre_sphere(p1, p2, p3, p4) result(c)
       real(dp), intent(in) :: p1(3), p2(3), p3(3), p4(3)
       real(dp) :: c(3)
-
+!
+! Center of the sphere with p1, p2, p3 and p4 on its surface.
+! Points must not be co-planar.
+!
       real(dp) :: u(3), v(3), w(3), A(3,3), b(3), x(3)
       integer :: iflag
 
@@ -1429,5 +1555,106 @@ print *, 'DIAG ',diag
       if (iflag /= 0) error stop 'circumcentre_sphere - degenerate positions'
       c = p1 + x
     end function circumcentre_sphere
+
+
+    pure function point_line_distance(p1, p2, p3) result(d)
+      real(dp), intent(in) :: p1(3), p2(3), p3(3)
+      real(dp) :: d
+!
+! Shortest distance "d" of P3 from an infinite line through P1 and P2
+! P1 and P2 must not be co-incident.
+!
+! https://paulbourke.net/geometry/pointlineplane/
+!
+! 1. Assume point P on line P1-P2 that is closest to P3
+! 2. P1-P2 and P-P3 are perpendicular, i.e. (P3-P)*(P2-P1) = 0
+! 3. P = P1 + u*(P2-P1)
+! 4. Substitute [3] to [2]:
+!      (P3-P) * (P2-P1) = 0
+!      [P3 - P1 - u*(P2-P1)] * (P2-P1) = 0
+!      (P3-P1) * (P2-P1) - u*(P2-P1) * (P2-P1) = 0
+!          (P3-P1) * (P2-P1)
+!      u = -----------------
+!             |(P2-P1)|**2
+!
+      real(dp) :: u, n2, p(3), v(3)
+
+      v = p2-p1
+      n2 = dot_product(v, v)
+#ifdef DEBUG
+      if (n2 <= NUMERICAL_TOL) error stop &
+          'point_line_distance - P1 and P2 too close (NUMERICAL_TOL)'
+#endif
+      u = dot_product(p3-p1, v) / n2
+      p = p1 + u*v
+      d = norm2(p3-p)
+    end function point_line_distance
+
+
+    pure function point_plane_distance(p1, p2, p3, p4) result(d)
+      real(dp), intent(in) :: p1(3), p2(3), p3(3), p4(3)
+      real(dp) :: d
+!
+! Distance "d" of P4 from plane defined by points P1,P2,P3.
+! Sign of "d" determines on which side of the plane P4 lies.
+! Following P1->P2->P3 with the right-hand fingers, the thumb points
+! in the positive direction ("above" the plane).
+! Points P1, P2 and P3 must not be co-linear.
+!
+      real(dp) :: u(3), v(3), n(3), nnorm
+
+      u = p2 - p1
+      v = p3 - p1
+
+      n = vec_product(u, v)
+      nnorm = dot_product(n, n)
+#ifdef DEBUG
+      if (nnorm <= NUMERICAL_TOL) &
+          error stop 'point_plane_distance - P1,P2,P3 degenerate (NUMERICAL_TOL)'
+#endif
+
+      ! Vector "n" points in the normal direction of P1-P2-P3 plane.
+      ! Distance of P4 from the plane is the projection of P4-P1 onto
+      ! the normalized vector "n"
+      d = dot_product(p4-p1, n) / sqrt(nnorm)
+    end function point_plane_distance
+
+
+    pure function points_coincident(p1, p2, tol) result(is_coincident)
+      real(dp), intent(in) :: p1(3), p2(3), tol
+      logical :: is_coincident
+!
+! True if P1 and P2 are closer than "tol".
+!
+      is_coincident = dot_product(p2-p1, p2-p1) <= tol**2
+    end function points_coincident
+
+
+    pure function points_colinear(p1, p2, p3, tol) result(is_colinear)
+      real(dp), intent(in) :: p1(3), p2(3), p3(3), tol
+      logical :: is_colinear
+!
+! True if P3 closer to line P1-P2 than "tol".
+!
+      if (points_coincident(p1,p2,tol)) then
+        is_colinear = .true.
+      else
+        is_colinear = point_line_distance(p1, p2, p3) <= tol
+      end if
+    end function points_colinear
+
+
+    pure function points_coplanar(p1, p2, p3, p4, tol) result(is_coplanar)
+      real(dp), intent(in) :: p1(3), p2(3), p3(3), p4(3), tol
+      logical :: is_coplanar
+!
+! True if P4 closer than "tol" to P1-P2-P3 plane.
+!
+      if (points_colinear(p1, p2, p3, tol)) then
+        is_coplanar = .true.
+      else
+        is_coplanar = abs(point_plane_distance(p1, p2, p3, p4)) <= tol
+      end if
+    end function points_coplanar
 
   end module mesh_mod
