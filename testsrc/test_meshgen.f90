@@ -19,13 +19,17 @@
     print *, 'npoints_per_cell ', m%npoints_per_cell()
     call vtudata%add_item('conc', VPOS_C, 2, 1, 4)
 
-    p0 = 0.0
-    p1 = [10.0, 0.0, 0.0]
-    p2 = [0.0, 10.0, 0.0]
 
     block
       real(dp) :: rel_shift = 0.0_dp
-      call m%append_rectilinear_mesh(p0,p1,p2, 0.5_dp, rel_shift, VPOS_X, b, boffset)
+      real(dp) :: cell_size = 0.5_dp
+
+      p0 = 0.0
+      p1 = [10.0, 0.0, 0.0]
+      p2 = [0.0, 10.0, 0.0]
+
+      call m%append_rectilinear_mesh(p0, p1, p2, cell_size, rel_shift, VPOS_X, &
+          b, boffset)
       do i=1, m%ncells
         m%vertices(m%index_from_handle(m%cells(i)%dual_vertex))% &
             rpar(VPOS_C) = real(i)

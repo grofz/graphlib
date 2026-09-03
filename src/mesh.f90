@@ -1028,12 +1028,15 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
               fdist => geom%face_distance(iface))
             if (is_3d) then
               avec = triangle_area_vector(f1, f2, f3)
+!TODO add DEBUG test or return the previous version
+! empirically we know that for even iface, avec must be fliped
+if (mod(iface,2)==0) avec = -avec
               ! Area vector now points in the positive direction of the plane
               ! defined by f1-f2-f3 orientation. Area vector points outwards
               ! the cell, if the vertex opposite to the face is located on the
               ! negative side of the plane.
               ! Flip area vector direction if needed.
-              if (point_plane_distance(f1,f2,f3,fopp) > 0.0_dp) avec = -avec
+             !if (point_plane_distance(f1,f2,f3,fopp) > 0.0_dp) avec = -avec
 
               fdist = abs(point_plane_distance(f1, f2, f3, geom%centre))
             else
@@ -1102,22 +1105,24 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
         rel_shift, position_id, boundary, boundary_offset)
       class(mesh_t), intent(inout) :: this
       real(dp), intent(in) :: p0(3), p1(3), p2(3)
-      real(dp), intent(in) :: cell_size, rel_shift
+      real(dp), intent(in) :: cell_size
+      real(dp), intent(in), optional :: rel_shift
       integer, intent(in), optional :: position_id
       type(graph_handle_t), allocatable, intent(out) :: boundary(:)
       integer, intent(out) :: boundary_offset(0:4)
 !
-! TODO Documentation
+! Add new points and cells making a 2D rectilinear mesh.
+! The cells are as close as possible to eqilateral triangles.
 !
 ! IN
 !   this        - Mesh object
 !   p0, p1, p2  - Corners of box defining the mesh border
 !   cell_size   - Maximum length of the triangle side.
-!   rel_shift   - Randomized pertrubation of grid points
-!   position_id - (optional) To store position of dual and ghost vertices in the
-!                 underlying vertex-edge graph. Can be used for visualisation
-!                 and debugging.
-!
+!   rel_shift   - (optional) Randomized pertrubation of grid points.
+!                 Must be between 0,0 and 0,1.
+!   position_id - (optional) To store the position of dual and ghost vertices
+!                 in the underlying vertex-edge graph. Can be used for
+!                 visualisation and debugging.
 ! OUT
 !   boundary - Handles to ghost-vertices connected to the boundary cells of
 !              the mesh.
@@ -1127,13 +1132,30 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
 !     side 23 - boundary( boundary_offset(2)+1 : boundary_offset(3) )
 !     side 13 - boundary( boundary_offset(3)+1 : boundary_offset(4) )
 !
-!               (3)
-!     P2 +---------------+ P3
-!        |               |
-!    (2) |               | (4)
-!        |               |
-!     P0 +---------------+ P1
-!               (1)
+!                    (3)
+!    P2 +------------------------------+ P3
+!       \          side 23             /
+!        .                            .
+!       /                              \
+! (2)  .  side 02              side 13  .  (4)
+!       \                              /
+!        .                            .
+!       /          side 01             \
+!    P0 +------------------------------+ P1
+!                    (1)
+!
+!       o ----- o ----- o ---- o ----- o
+!         \ A / C \   /  \   /   \   /
+!           x ----- x ---- x ----- x
+!         / B \ D /   \  /   \   /   \
+!       o ----- o ----- o ---- o ----- o  --
+!         \   /   \   /  \   /   \   /     ^
+!           x ----- x ---- x ----- x       | tile(2) = sqrt(3) * tile(1)
+!         /   \   /   \  /   \   /   \     v
+!       o ----- o ----- o ---- o ----- o  --
+!                              |       |
+!                              |<----->|
+!                                tile(1)
 !
       real(dp) :: base1(3), base2(3), tile_size(2)
       integer :: i, j
@@ -1146,27 +1168,44 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
         if (position_id < 1 .or. position_id+2 > VSIZE_RPAR) error stop &
           'mesh_append_rectilinear_mesh - position_id out of bounds'
       end if
+      if (points_colinear(p0, p1, p2, tol=cell_size*0.01)) error stop &
+          'mesh_append_rectilinear_mesh - points too much colinear-like'
+      if (cell_size <= 0.0_dp) error stop &
+          'mesh_append_rectilinear_mesh - cell_size must be a positive value'
+      ! large rel_shift may lead to degenerate mesh with cell circumcenters
+      ! laying outside shells, 0.1 is a conservative limit
+      if (present(rel_shift)) then
+        if (rel_shift < 0.0_dp .or. rel_shift > 0.3_dp) error stop &
+            'mesh_append_rectilinear_mesh - rel_shift must be between 0 and 0.1'
+      end if
 
       block
         integer :: ntiles(2)
         real(dp) :: mesh_size(2), p3(3)
         real(dp), parameter :: beta=1.5_dp
-!TODO verify
-! - mesh_size > 0
-! - dot_produxt(p1-p0,p2-p0) > 0 (vectors are not parallel)
-! - cell_size > 0
-! - rel_shift between 0 and 0.5
+
         mesh_size(1) = sqrt(dot_product(p1-p0, p1-p0))
         mesh_size(2) = sqrt(dot_product(p2-p0, p2-p0))
         base1 = (p1-p0)/mesh_size(1)
         base2 = (p2-p0)/mesh_size(2)
         ntiles(1) = max(1, ceiling(mesh_size(1)/cell_size))
-        ntiles(2) = max(1, ceiling(mesh_size(2)/cell_size*(0.75)))
+        ntiles(2) = max(1, ceiling(mesh_size(2)/(cell_size*sqrt(3.0_dp))))
         tile_size = mesh_size/ntiles
-        allocate(p_corners(ntiles(1)+1, ntiles(2)+1))
-        allocate(p_mids(ntiles(1), ntiles(2)))
+        allocate(p_corners(ntiles(1)+1, ntiles(2)+1)) ! points "o"
+        allocate(p_mids(ntiles(1), ntiles(2)))        ! points "x"
 
-        ! points in the corners of rectangulars
+#ifdef DEBUG
+        print '("mesh_append_rectilinear_mesh - info")'
+        print '("  Given cell size ",g0)', cell_size
+        print '("  Mesh size ",g0," by ",g0)', mesh_size
+        print '("  Tiles ",i0," by ":,i0)', ntiles
+        print '("  Tile size X ",g0," (ideally ",g0,")")', &
+            tile_size(1), cell_size
+        print '("  Tile size Y ",g0," (ideally ",g0,")")', &
+            tile_size(2), sqrt(3.0_dp)*cell_size
+#endif
+
+        ! points in the corners of rectangulars (marked "o" above)
         do i=1, size(p_corners,1)
           do j=1, size(p_corners,2)
             p_corners(i,j) = this%add_point( p0 + &
@@ -1182,27 +1221,29 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
         bpos_13 = beta/2.0_dp*(p1 + p3) + (1.0_dp-beta)*p0
       end block
 
-      ! points in the middle of rectangulars
+      ! points in the middle of rectangulars (marked "x" above)
       block
-        real(dp) :: shift(2)
+        real(dp) :: shift(2), c1(3), c2(3), c3(3), c4(3)
 
         do i=1, size(p_mids,1)
           do j=1, size(p_mids,2)
-            associate( &
-              c1=>this%points(this%index_from_handle( &
-                  p_corners(i,j)))%position, &
-              c2=>this%points(this%index_from_handle( &
-                  p_corners(i+1,j)))%position, &
-              c3=>this%points(this%index_from_handle( &
-                  p_corners(i,j+1)))%position, &
-              c4=>this%points(this%index_from_handle( &
-                  p_corners(i+1,j+1)))%position )
+            c1 = this%points(this%index_from_handle( &
+                p_corners(i,j)))%position
+            c2 = this%points(this%index_from_handle( &
+                p_corners(i+1,j)))%position
+            c3 = this%points(this%index_from_handle( &
+                p_corners(i,j+1)))%position
+            c4 = this%points(this%index_from_handle( &
+                p_corners(i+1,j+1)))%position
+            if (present(rel_shift)) then
               call random_number(shift)
               shift = (2.0*shift - 1.0) * tile_size * rel_shift
+            else
+              shift = 0.0_dp
+            end if
 
-              p_mids(i,j) = this%add_point((c1+c2+c3+c4)/4.0_dp + &
-                  base1*shift(1) + base2*shift(2))
-            end associate
+            p_mids(i,j) = this%add_point((c1+c2+c3+c4)/4.0_dp + &
+                base1*shift(1) + base2*shift(2))
           end do
         end do
       end block
@@ -1214,41 +1255,36 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
       call bitems_23%initialize(chunksize=size(transfer(cell,INTEGER_MOLD)))
 
       ! connect points
-      block
-        p(4) = p_mids(1,1) ! just some valid point that will be ignored
-        do j=1, size(p_mids, 2)
-          ! cell to the left of the first middle point
-          p(1:3) = [p_mids(1,j), p_corners(1,j), p_corners(1,j+1)]
+      p(4) = p_mids(1,1) ! just some valid point that will be ignored
+      do j=1, size(p_mids, 2)
+
+        ! cells between middle points (marked "C" and "D" above)
+        do i=1, size(p_mids,1)-1
+          p(1:3) = [p_mids(i,j), p_corners(i+1,j), p_mids(i+1,j)]
           cell = this%add_cell(p, position_id)
-          call add_boundary_cell(bitems_02, bpos_02, cell)
-
-          ! cells between middle points
-          do i=1, size(p_mids,1)-1
-            p(1:3) = [p_mids(i,j), p_corners(i+1,j), p_mids(i+1,j)]
-            cell = this%add_cell(p, position_id)
-            p(1:3) = [p_mids(i,j), p_corners(i+1,j+1), p_mids(i+1,j)]
-            cell = this%add_cell(p, position_id)
-          end do
-
-          ! cell to the right of the last middle point
-          p(1:3) = [p_mids(size(p_mids,1),j), p_corners(size(p_mids,1)+1,j), &
-              p_corners(size(p_mids,1)+1,j+1)]
+          p(1:3) = [p_mids(i,j), p_corners(i+1,j+1), p_mids(i+1,j)]
           cell = this%add_cell(p, position_id)
-          call add_boundary_cell(bitems_13, bpos_13, cell)
-
-          do i=1, size(p_mids,1)
-            ! cell bellow middle point
-            p(1:3) = [p_mids(i,j), p_corners(i,j), p_corners(i+1,j)]
-            cell = this%add_cell(p, position_id)
-            if (j==1) call add_boundary_cell(bitems_01, bpos_01, cell)
-
-            ! cell above middle point
-            p(1:3) = [p_mids(i,j), p_corners(i,j+1), p_corners(i+1,j+1)]
-            cell = this%add_cell(p, position_id)
-            if (j==size(p_mids,2)) call add_boundary_cell(bitems_23, bpos_23, cell)
-          end do
         end do
-      end block
+
+        do i=1, size(p_mids,1)
+          ! cell bellow middle point (marked "B" above)
+          p(1:3) = [p_mids(i,j), p_corners(i,j), p_corners(i+1,j)]
+          cell = this%add_cell(p, position_id)
+          if (j==1) call add_boundary_cell(bitems_01, bpos_01, cell)
+          if (i==1) call add_boundary_cell(bitems_02, bpos_02, cell)
+          if (i==size(p_mids,1)) &
+              call add_boundary_cell(bitems_13, bpos_13, cell)
+
+          ! cell above middle point (marked "A" above)
+          p(1:3) = [p_mids(i,j), p_corners(i,j+1), p_corners(i+1,j+1)]
+          cell = this%add_cell(p, position_id)
+          if (j==size(p_mids,2)) &
+              call add_boundary_cell(bitems_23, bpos_23, cell)
+          if (i==1) call add_boundary_cell(bitems_02, bpos_02, cell)
+          if (i==size(p_mids,1)) &
+              call add_boundary_cell(bitems_13, bpos_13, cell)
+        end do
+      end do
 
       ! empty queues and store ghost vertice handles to boundary
       allocate(boundary(bitems_01%size() + bitems_02%size() + bitems_13%size() &
