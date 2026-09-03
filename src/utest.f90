@@ -17,12 +17,15 @@
       generic :: assert => assert_equals_integer, assert_equals_logical, &
           assert_equals_dp, assert_equals_sp, &
           assert_equals_integer_arr, assert_equals_integer_4arr
+      generic :: within_tolerance => &
+          within_tolerance_scalar, within_tolerance_arr
       procedure :: summarize
       procedure :: all_passed
       final :: utest_finalize
       procedure, private :: assert_equals_integer, assert_equals_logical, &
           assert_equals_dp, assert_equals_sp, &
           assert_equals_integer_arr, assert_equals_integer_4arr
+      procedure, private :: within_tolerance_scalar, within_tolerance_arr
     end type utest_t
 
     interface utest_t
@@ -287,6 +290,60 @@
       end if
       call add_assertline(this, line)
     end subroutine assert_equals_dp
+
+
+    subroutine within_tolerance_scalar(this, a, b, tol, msg1)
+      class(utest_t), intent(inout) :: this
+      real(dp), intent(in) :: a, b, tol
+      character(len=*), intent(in) :: msg1
+!
+! TODO Documentation block
+!
+      character(len=1), parameter :: LE=char(10)
+      type(assert_line_t) :: line
+      character(len=100) :: stra, strb
+
+      line % msg1 = msg1
+      write(stra,*) a
+      write(strb,*) b
+      stra = adjustl(stra)
+      strb = adjustl(strb)
+      if (abs(a-b)/max(abs(a),abs(b),tol) <= tol) then
+        line % ispass = .true.
+        line % msg2 = LE//trim(stra)//' nearly '//LE//trim(strb)
+      else
+        line % ispass = .false.
+        line % msg2 = LE//trim(stra)//' differ '//LE//trim(strb)
+      end if
+      call add_assertline(this, line)
+    end subroutine within_tolerance_scalar
+
+
+    subroutine within_tolerance_arr(this, a, b, tol, msg1)
+      class(utest_t), intent(inout) :: this
+      real(dp), intent(in) :: a(:), b(:), tol
+      character(len=*), intent(in) :: msg1
+!
+! TODO Documentation block
+!
+      character(len=1), parameter :: LE=char(10)
+      type(assert_line_t) :: line
+      character(len=100) :: stra, strb
+
+      line % msg1 = msg1
+      write(stra,'(SP,*(g0,1x))') a
+      write(strb,'(SP,*(g0,1x))') b
+      stra = adjustl(stra)
+      strb = adjustl(strb)
+      if (all(abs(a-b)/max(abs(a),abs(b),tol) <= tol)) then
+        line % ispass = .true.
+        line % msg2 = LE//'['//trim(stra)//'] nearly'//LE//'['//trim(strb)//']'
+      else
+        line % ispass = .false.
+        line % msg2 = LE//'['//trim(stra)//'] differ'//LE//'['//trim(strb)//']'
+      end if
+      call add_assertline(this, line)
+    end subroutine within_tolerance_arr
 
 
     pure logical function all_passed(this)

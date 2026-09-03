@@ -62,7 +62,7 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
       procedure :: geometry => cell_geometry
     end type cell_t
 
-    type cell_geometry_t
+    type, public :: cell_geometry_t
       real(dp) :: centre(3) ! circumcentre
       real(dp) :: volume
       real(dp) :: area_vector(3,4) ! outward face/edge area vectors
@@ -1028,8 +1028,12 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
               fdist => geom%face_distance(iface))
             if (is_3d) then
               avec = triangle_area_vector(f1, f2, f3)
-              ! vector must point outside of cell, flip direction if needed
-              if (point_plane_distance(f1,f2,f3,fopp) < 0.0_dp) avec = -avec
+              ! Area vector now points in the positive direction of the plane
+              ! defined by f1-f2-f3 orientation. Area vector points outwards
+              ! the cell, if the vertex opposite to the face is located on the
+              ! negative side of the plane.
+              ! Flip area vector direction if needed.
+              if (point_plane_distance(f1,f2,f3,fopp) > 0.0_dp) avec = -avec
 
               fdist = abs(point_plane_distance(f1, f2, f3, geom%centre))
             else

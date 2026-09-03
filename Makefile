@@ -47,6 +47,7 @@ MAIN4 = build_test/concomtest.o
 MAIN5 = build_test/scctest.o
 MAIN6 = build_test/contstest.o
 MAIN7 = build_test/handletest.o
+MAIN8 = build_test/cellgeometrytest.o
 MAIN_EXAMPLE = build_test/example.o
 
 # output library
@@ -60,6 +61,7 @@ ifdef OS
 	EXE5 = test_scc.exe
 	EXE6 = test_conts.exe
 	EXE7 = test_handle.exe
+	EXE8 = test_cellgeometry.exe
 	EXE_EXAMPLE = example.exe
 else
 	EXE1 = $(BINDIR)/test_vtuio
@@ -69,12 +71,13 @@ else
 	EXE5 = $(BINDIR)/test_scc
 	EXE6 = $(BINDIR)/test_conts
 	EXE7 = $(BINDIR)/test_handle
+	EXE8 = $(BINDIR)/test_cellgeometry
 	EXE_EXAMPLE = $(BINDIR)/example
 endif
 
 # default goal and dependencies
 all: directories $(OUTLIB)
-test: directories $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(EXE7) $(EXE_EXAMPLE) $(OUTLIB)
+test: directories $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(EXE7) $(EXE8) $(EXE_EXAMPLE) $(OUTLIB)
 
 # Ensure directories exist before compilation begins
 directories:
@@ -93,6 +96,8 @@ $(EXE5) : $(MODOBJECTS) $(TESTUTILS) $(MAIN5)
 $(EXE6) : $(MODOBJECTS) $(TESTUTILS) $(MAIN6)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
 $(EXE7) : $(MODOBJECTS) $(TESTUTILS) $(MAIN7)
+	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
+$(EXE8) : $(MODOBJECTS) $(TESTUTILS) $(MAIN8)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
 $(EXE_EXAMPLE) : $(MODOBJECTS) $(MAIN_EXAMPLE)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
@@ -119,7 +124,7 @@ $(DIR)/%.o : src/%.f90
 
 # phony clean-up target
 clean :
-	-rm -f $(DIR)/*.o build_test/*.o build_test/*.mod build_test/*.smod $(JDIR)/*.mod $(JDIR)/*.smod $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(EXE7) $(EXE_EXAMPLE) $(OUTLIB)
+	-rm -f $(DIR)/*.o build_test/*.o build_test/*.mod build_test/*.smod $(JDIR)/*.mod $(JDIR)/*.smod $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(EXE7) $(EXE8) $(EXE_EXAMPLE) $(OUTLIB)
 
 # Include the generated dependency files if they exist
 -include $(MODOBJECTS:.o=.d) $(TESTUTILS:.o=.d)
