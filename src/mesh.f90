@@ -53,7 +53,7 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
       type(graph_handle_t) :: points(4)
         ! ordered array of point handles
       type(graph_handle_t) :: ngb_cells(4)
-        ! array of cell handles to neighbouring cells
+        ! array of cell handles to neighbouring cells / or boundary vertex
       type(graph_handle_t) :: dual_vertex
         ! handle to vertex in graph_t parent object
       type(graph_handle_t) :: handle
@@ -89,6 +89,7 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
      !procedure :: copy
      !procedure :: build_selection_masks
       procedure, non_overridable :: find_cell_id => mesh_find_cell_id
+      procedure, non_overridable :: face_indices => mesh_face_indices
       procedure, non_overridable :: add_point => mesh_add_point
       procedure, non_overridable :: add_cell => mesh_add_cell
       procedure, non_overridable :: remove_point => mesh_remove_point
@@ -250,7 +251,6 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
         if (present(ccapacity)) new_capacity = ccapacity
         call increase_cells_capacity(this, new_capacity)
       end block
-
     end subroutine mesh_initialize
 
 
@@ -576,7 +576,6 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
       do i = 1, n
         call this%points(pids(i))%depending_cells%add(this%ncells)
       end do
-
     end function mesh_add_cell
 
 
@@ -645,7 +644,6 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
         call relocate_cell(this, this%cells(this%ncells)%handle, icell)
       end if
       this%ncells = this%ncells - 1
-
     end subroutine mesh_remove_cell
 
 
@@ -818,6 +816,41 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
     end function mesh_find_cell_id
 
 
+!TODO
+!   function mesh_face_indices(this, cids) result(face_indices)
+    pure function mesh_face_indices(this, cids) result(face_indices)
+      class(mesh_t), intent(in) :: this
+      integer, intent(in) :: cids(2)
+      integer :: face_indices(2)
+!
+! Providing valid indices of neighbouring cells, return "points" array indices
+! for the common face.
+!
+      integer :: i, j, n, pids(4,2)
+      logical :: on_other_side(4,2)
+
+      if (any(cids<1) .or. any(cids>this%ncells)) error stop &
+          'mesh_face_indices - invalid cell indices'
+
+      n = this%npoints_per_cell()
+      pids(:,1) = this%cells(cids(1))%point_indices(this, null_allowed=.false.)
+      pids(:,2) = this%cells(cids(2))%point_indices(this, null_allowed=.false.)
+      ! For neighbouring cells, exactly N-1 points must be common for both cells,
+      ! we are searching for the position of exactly one distinct point.
+      do i = 1, 2
+        do j = 1, n
+          on_other_side(j,i) = findloc(pids(1:n,3-i), value=pids(j,i), dim=1) /= 0
+        end do
+!print *, i, 'pids =',pids(:,i), on_other_side(:,i)
+      end do
+      if (count(.not. on_other_side(1:n,1))/=1 .or. &
+          count(.not. on_other_side(1:n,2))/=1) &
+          error stop 'mesh_face_indices - cells are probably not neighbours'
+      face_indices(1) = findloc(on_other_side(1:n,1), value=.true., dim=1)
+      face_indices(2) = findloc(on_other_side(1:n,2), value=.true., dim=1)
+    end function mesh_face_indices
+
+
    !pure function mesh_find_mirror_cell_id(this, cell, ploc) result(cid)
    !  class(mesh_t), intent(in) :: this
    !  type(cell_t), intent(in) :: cell
@@ -867,9 +900,13 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
       type(graph_handle_t), intent(in) :: points(4)
       integer :: pids(4)
 !
-! Order points for positive orientation.
+! Return point indices, ordered for a positive orientation.
 !
-      real(dp), parameter :: eps = 10 * epsilon(1.0_dp)
+! For a 2D-mesh, pids(4) = pids(1).
+!
+!TODO add points co-planarity check somewhere?
+!
+      real(dp), parameter :: EPS = 10 * epsilon(1.0_dp)
       real(dp), parameter :: p_ref(3) = ORIENTATION_2D_REFPOINT
       real(dp) :: d, tol
       integer :: n, itmp
@@ -896,6 +933,9 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
 
       ! Point indices in the actual mesh
       pids(1:n) = this%index_from_handle(points0(1:n))
+      if (any(pids(1:n)==MAP_NULL)) error stop &
+          'order_point_indices - point handle invalid (internal error)'
+!TODO  considering the index_from_handle promise, this check is not necessary
       if (any(pids(1:n)<1 .or. any(pids(1:n)>this%npoints))) error stop &
           'order_point_indices - point indices out of bounds (internal error)'
 
@@ -935,7 +975,7 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
       end block
 
       if (abs(d)<tol) then
-        error stop 'order_point_indices - degenerate positions'
+        error stop 'order_point_indices - degenerate positions (co-planar points'
       elseif (d < -tol) then
         itmp = pids(2)
         pids(2) = pids(3)
@@ -1346,12 +1386,14 @@ if (mod(iface,2)==0) avec = -avec
     ! Transient diffusion/conduction TODO here for now
     ! ------------------------------------------------
     subroutine integrate_pde(this, t_start, t_end, dt_comp, dt_out, &
-        position_conductance, position_capacitance, bc_label, x_init, x_out, &
+        position_conductivity, position_capacity, position_conductance, &
+        bc_label, x_init, x_out, &
         vmask, emask, vselector, eselector, rtol_l2, rtol_linf)
-      class(mesh_t), intent(in) :: this
+      class(mesh_t), intent(inout) :: this
       real(dp), intent(in) :: t_start, dt_comp, dt_out
       real(dp), intent(inout) :: t_end
-      integer, intent(in) :: position_conductance, position_capacitance
+      integer, intent(in) :: position_capacity, position_conductivity
+      integer, intent(in) :: position_conductance
       integer, intent(in) :: bc_label(:)
       real(dp), intent(in) :: x_init(:)
       real(dp), intent(out), allocatable :: x_out(:,:)
@@ -1362,7 +1404,8 @@ if (mod(iface,2)==0) avec = -avec
 !
 ! TODO Documentation block
 !
-      integer, parameter :: CG_OK=0, CG_MAXITER=1 ! TODO import from graph_smod_flow
+      integer, parameter :: CG_OK=0, CG_MAXITER=1
+          ! TODO import from graph_smod_flow
       integer, parameter :: BC_NONE = 0
       logical, allocatable :: vmask0(:), emask0(:), is_external(:)
       integer :: iout, iflag, icomp
@@ -1374,20 +1417,24 @@ if (mod(iface,2)==0) avec = -avec
         'integrate_pde - undirected graph required'
       if (position_conductance < 1 .or. position_conductance > ESIZE_RPAR) &
         error stop 'integrate_pde - position_conductance out of bounds'
-      if (position_capacitance < 1 .or. position_capacitance > VSIZE_RPAR) &
-        error stop 'integrate_pde - position_capacitance out of bounds'
+      if (position_conductivity < 1 .or. position_conductivity > VSIZE_RPAR) &
+        error stop 'integrate_pde - position_conductivity out of bounds'
+      if (position_capacity < 1 .or. position_capacity > VSIZE_RPAR) &
+        error stop 'integrate_pde - position_capacity out of bounds'
       if (size(bc_label) /= this%nvertices) error stop &
         'integrate_pde - size of bc_label is invalid'
       if (size(x_init) /= this%nvertices) error stop &
         'integrate_pde - size of x_init is invalid'
+      if (t_end <= t_start) error stop &
+        'integrate_pde - t_end <= t_start'
 
       call this%build_selection_masks(vmask0, emask0, vmask_provided=vmask, &
           emask_provided=emask, vselector=vselector, eselector=eselector)
 
+      allocate(x_old(this%nvertices), x_new(this%nvertices))
       associate (nout => ceiling((t_end-t_start)/dt_out) + 1)
         ! nout >= 2 if t_end > t_start
         allocate(x_out(this%nvertices, nout))
-        allocate(x_old(this%nvertices), x_new(this%nvertices))
       end associate
       iout = 1
       icomp = 1
@@ -1395,27 +1442,114 @@ if (mod(iface,2)==0) avec = -avec
       x_old = x_init
       t = t_start
 
+      ! get edge conductance and store it to "edges/rpar" array
+      ! get vertex capacitance and consturct diag(:)
+      GEOM_BLOCK: block
+        type(cell_geometry_t), allocatable :: geometry(:)
+        integer, allocatable :: cell_index(:)
+        integer :: icell, iedge, cids(2), vids(2), fids(2), itmp, ivertex, cid
+        real(dp) :: lambda_1, lambda_2, area, conductance, edis_1, edis_2
+
+        allocate(geometry(this%ncells))
+        do icell=1, this%ncells
+          geometry(icell) = this%cells(icell)%geometry(this)
+        end do
+
+        allocate(cell_index(this%nvertices), source=MAP_NULL)
+        ! cell_index links vertex with a cell in mesh, or is MAP_NULL for
+        ! ghost verices
+        do icell = 1, this%ncells
+          cell_index( &
+              this%index_from_handle(this%cells(icell)%dual_vertex)) = &
+              icell
+        end do
+
+        ! edge conductance
+        do iedge=1, this%nedges
+          if (.not. emask0(iedge)) then
+            conductance = 0.0_dp
+          else
+            vids = this%edges(iedge)%vertex_indices(this%graph_t)
+            lambda_1 = this%vertices(vids(1))%rpar(position_capacity)
+            lambda_2 = this%vertices(vids(2))%rpar(position_capacity)
+
+            cids(1) = cell_index(vids(1))
+            cids(2) = cell_index(vids(2))
+
+            if (any(cids==MAP_NULL)) then
+              ! border edge
+              if (cids(1)/=MAP_NULL) then
+                do itmp = 1, this%npoints_per_cell()
+                  if (this%index_from_handle( &
+                      this%cells(cids(1))%ngb_cells(itmp))==MAP_NULL) exit
+                  ! TODO for now, a first boundary face is selected
+                  ! multi-boundary cells will be solved later
+                end do
+                if (itmp==this%npoints_per_cell()+1) error stop &
+                  'integrate_pde - boundary face of cell 1 not found'
+                fids(1) = itmp
+                area = sqrt( dot_product( &
+                    geometry(cids(1))%area_vector(:,fids(1)), &
+                    geometry(cids(1))%area_vector(:,fids(1)) ) )
+                edis_1 = geometry(cids(1))%face_distance(fids(1))
+              else if (cids(2)/=MAP_NULL) then
+                do itmp = 1, this%npoints_per_cell()
+                  if (this%index_from_handle( &
+                      this%cells(cids(2))%ngb_cells(itmp))==MAP_NULL) exit
+                  ! TODO for now, a first boundary face is selected
+                  ! multi-boundary cells will be solved later
+                end do
+                if (itmp==this%npoints_per_cell()+1) error stop &
+                  'integrate_pde - boundary face of cell 1 not found'
+                fids(2) = itmp
+                area = sqrt( dot_product( &
+                    geometry(cids(2))%area_vector(:,fids(2)), &
+                    geometry(cids(2))%area_vector(:,fids(2)) ) )
+                edis_2 = geometry(cids(2))%face_distance(fids(2))
+                edis_1 = edis_2
+                lambda_1 = lambda_2
+              else
+                error stop 'integrate_pde - one vertex must be cell-associated'
+              end if
+              if (edis_1 <= 0.0_dp) error stop &
+                'integrate_pde - face distance to boundary must be a positive number'
+              conductance = lambda_1 * area / edis_1
+            else
+              ! regular edge
+print *, 'cids = ',cids
+              fids = this%face_indices(cids)
+print *, '... fids = ',fids
+              area = sqrt( dot_product( &
+                  geometry(cids(1))%area_vector(:,fids(1)), &
+                  geometry(cids(1))%area_vector(:,fids(1)) ) )
+              edis_1 = geometry(cids(1))%face_distance(fids(1))
+              edis_2 = geometry(cids(2))%face_distance(fids(2))
+
+              if (lambda_1 <= 0.0_dp .or. lambda_2 <= 0.0_dp) error stop &
+                  'integrate_pde - conductivity must be a positive number'
+              if (edis_1 <= 0.0_dp .or. edis_2 <= 0.0_dp) error stop &
+                  'integrate_pde - face distance must be a positive number'
+              conductance = area / (edis_1/lambda_1 + edis_2/lambda_2)
+            end if
+          end if
+          this%edges(iedge)%rpar(position_conductance) = conductance
+        end do
+
+        ! vertex capacitance
+        allocate(diag(this%nvertices), source=0.0_dp)
+        do ivertex = 1, this%nvertices
+          cid = cell_index(ivertex)
+          if (cid == MAP_NULL) cycle
+          diag(ivertex) = this%vertices(ivertex)%rpar(position_capacity) * &
+              geometry(cid)%volume / dt_comp
+        end do
+
+      end block GEOM_BLOCK
+
       allocate(is_external(this%nvertices), source=.true.)
       where (vmask0 .and. bc_label==BC_NONE)
         is_external = .false.
       end where
-
-      block
-        integer :: icell, jvertex
-        type(cell_geometry_t) :: geom
-        allocate(diag(this%nvertices), source=0.0_dp)
-
-        do icell=1, this%ncells
-          jvertex = this%index_from_handle(this%cells(icell)%dual_vertex)
-          if (jvertex==MAP_NULL) error stop 'integrate_pde - could not find dual vertex'
-          geom = this%cells(icell)%geometry(this)
-         !diag(jvertex) = this%vertices(jvertex)%rpar(position_capacitance) * &
-         !    this%cells(icell)%volume(this) / dt_comp
-          diag(jvertex) = this%vertices(jvertex)%rpar(position_capacitance) * &
-              geom%volume / dt_comp
-        end do
-      end block
-print *, 'DIAG ',diag
 
       do
         ! update x
