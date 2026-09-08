@@ -38,7 +38,7 @@ OBJ_NAMES = $(patsubst src/%.f90, %.o, $(SRC_FILES))
 # 3. Add the 'build/' directory prefix to all of them
 MODOBJECTS = $(addprefix $(DIR)/, $(OBJ_NAMES))
 
-TESTUTILS = build_test/map.o build_test/utils.o
+TESTUTILS = build_test/map.o build_test/utils.o build_test/analytical.o
 
 MAIN1 = build_test/vtuiotest.o
 MAIN2 = build_test/maxflowtest.o
@@ -48,6 +48,7 @@ MAIN5 = build_test/scctest.o
 MAIN6 = build_test/contstest.o
 MAIN7 = build_test/handletest.o
 MAIN8 = build_test/cellgeometrytest.o
+MAIN9 = build_test/meshgentest.o
 MAIN_EXAMPLE = build_test/example.o
 
 # output library
@@ -62,6 +63,7 @@ ifdef OS
 	EXE6 = test_conts.exe
 	EXE7 = test_handle.exe
 	EXE8 = test_cellgeometry.exe
+	EXE9 = test_meshgen.exe
 	EXE_EXAMPLE = example.exe
 else
 	EXE1 = $(BINDIR)/test_vtuio
@@ -72,12 +74,13 @@ else
 	EXE6 = $(BINDIR)/test_conts
 	EXE7 = $(BINDIR)/test_handle
 	EXE8 = $(BINDIR)/test_cellgeometry
+	EXE9 = $(BINDIR)/test_meshgen
 	EXE_EXAMPLE = $(BINDIR)/example
 endif
 
 # default goal and dependencies
 all: directories $(OUTLIB)
-test: directories $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(EXE7) $(EXE8) $(EXE_EXAMPLE) $(OUTLIB)
+test: directories $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(EXE7) $(EXE8) $(EXE9) $(EXE_EXAMPLE) $(OUTLIB)
 
 # Ensure directories exist before compilation begins
 directories:
@@ -99,6 +102,8 @@ $(EXE7) : $(MODOBJECTS) $(TESTUTILS) $(MAIN7)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
 $(EXE8) : $(MODOBJECTS) $(TESTUTILS) $(MAIN8)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
+$(EXE9) : $(MODOBJECTS) $(TESTUTILS) $(MAIN9)
+	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
 $(EXE_EXAMPLE) : $(MODOBJECTS) $(MAIN_EXAMPLE)
 	$(FC) $(FFLAGS) -J$(JDIR) -o $@ $^
 
@@ -106,6 +111,8 @@ $(OUTLIB) : $(MODOBJECTS)
 	$(AR) $@ $^
 
 # module dependencies (just for bootstraping)
+build_test/meshgentest.o : build_test/analytical.o
+
 build_test/vtuiotest.o : build_test/map.o
 
 $(DIR)/graph.o : $(DIR)/graph_user.o $(DIR)/graph_adjlist.o $(DIR)/conts.o
@@ -124,7 +131,7 @@ $(DIR)/%.o : src/%.f90
 
 # phony clean-up target
 clean :
-	-rm -f $(DIR)/*.o build_test/*.o build_test/*.mod build_test/*.smod $(JDIR)/*.mod $(JDIR)/*.smod $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(EXE7) $(EXE8) $(EXE_EXAMPLE) $(OUTLIB)
+	-rm -f $(DIR)/*.o build_test/*.o build_test/*.mod build_test/*.smod $(JDIR)/*.mod $(JDIR)/*.smod $(EXE1) $(EXE2) $(EXE3) $(EXE4) $(EXE5) $(EXE6) $(EXE7) $(EXE8) $(EXE9) $(EXE_EXAMPLE) $(OUTLIB)
 
 # Include the generated dependency files if they exist
 -include $(MODOBJECTS:.o=.d) $(TESTUTILS:.o=.d)

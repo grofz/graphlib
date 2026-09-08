@@ -59,6 +59,7 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
       type(graph_handle_t) :: handle
     contains
       procedure :: point_indices => cell_point_indices
+      procedure :: point_positions => cell_point_positions
       procedure :: geometry => cell_geometry
     end type cell_t
 
@@ -79,6 +80,7 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
           ! .false. = triangular mesh (cell defined from 3 points)
           ! .true. = tetrahedral mesh (cell defined from 4 points)
       type(queue_t), private :: free_phandles, free_chandles
+      integer, allocatable :: v2c_index(:)
     contains
       ! these procedures override procedures from graph_t class (note)
       procedure :: initialize => mesh_initialize
@@ -96,6 +98,7 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
       procedure, non_overridable :: remove_cell => mesh_remove_cell
       procedure, non_overridable :: is_3d => mesh_is_3d
       procedure, non_overridable :: append_rectilinear_mesh => mesh_append_rectilinear_mesh
+      procedure, non_overridable :: build_v2c_index => mesh_build_v2c_index
     end type mesh_t
 
   contains
@@ -688,6 +691,32 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
     end subroutine relocate_cell
 
 
+    pure subroutine mesh_build_v2c_index(this)
+      class(mesh_t), intent(inout) :: this
+!
+! Populate "v2c_index" array with actual indices maping vertices back to
+! their cell. MAP_NULL is used for vertices that are not asssociated with any
+! cell.
+!
+      integer :: i, j
+      ! Make sure size of "v2c_index" matches "nvertices"
+      if (allocated(this%v2c_index)) then
+        if (size(this%v2c_index)/=this%nvertices) deallocate(this%v2c_index)
+      end if
+      if (.not. allocated(this%v2c_index)) &
+          allocate(this%v2c_index(this%nvertices))
+
+      ! Rebuild the index
+      this%v2c_index = MAP_NULL
+      do i=1, this%ncells
+        j = this%index_from_handle(this%cells(i)%dual_vertex)
+        if (j==MAP_NULL) error stop &
+          'mesh_build_v2c_index - dual vertex not present'
+        this%v2c_index(j) = i
+      end do
+    end subroutine mesh_build_v2c_index
+
+
     subroutine mesh_print(this, fid)
       class(mesh_t), intent(in) :: this
       integer, intent(in) :: fid
@@ -866,17 +895,18 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
       logical, intent(in), optional :: null_allowed
       integer :: ids(4)
 !
-! Return (and optionally validate) indices of points forming the cell.
+! Return (and validate on default) indices of points forming the cell.
 !
 ! For a 2D-mesh, ids(4) = ids(1).
 !
 ! Unless "null_allowed = .true." is given, all returned indices are checked to
-! be valid (and no post-function validation is required).
+! be valid (i.e. that all points are still present).
 !
-      integer :: i
+      integer :: i, n
       logical :: null_allowed0
 
-      do i=1, mesh%npoints_per_cell()
+      n = mesh%npoints_per_cell()
+      do i=1, n
         ids(i) = mesh%index_from_handle(this%points(i))
       end do
 
@@ -884,8 +914,7 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
       null_allowed0 = .false.
       if (present(null_allowed)) null_allowed0 = null_allowed
       if (.not. null_allowed0) then
-        if (any(ids(1:mesh%npoints_per_cell())<1 ) .or. &
-            any(ids(1:mesh%npoints_per_cell())>mesh%npoints)) error stop &
+        if (any(ids(1:n)==MAP_NULL)) error stop &
             'cell_point_indices - a point not in mesh'
       end if
 
@@ -984,6 +1013,29 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
         continue
       end if
     end function order_point_indices
+
+
+    pure function cell_point_positions(this, mesh) result(positions)
+      class(cell_t), intent(in) :: this
+      type(mesh_t), intent(in) :: mesh
+      real(dp) :: positions(3,4)
+!
+! Return cell point positions:
+!   P1 -> positions(:,1)
+!   P2 -> positions(:,2)
+!   P3 -> positions(:,3)
+!   P4 -> positions(:,4)
+!
+! For a 2D cell - P4 is same as P1 (to make result defined)
+!
+      integer :: pids(4), i
+
+      pids = this%point_indices(mesh)
+      do i=1, mesh%npoints_per_cell()
+        positions(:,i) = mesh%points(pids(i))%position
+      end do
+      if (.not. mesh%is_3d()) positions(:,4) = positions(:,1)
+    end function cell_point_positions
 
 
     function cell_geometry(this, mesh) result(geom)
@@ -1446,7 +1498,7 @@ if (mod(iface,2)==0) avec = -avec
       ! get vertex capacitance and consturct diag(:)
       GEOM_BLOCK: block
         type(cell_geometry_t), allocatable :: geometry(:)
-        integer, allocatable :: cell_index(:)
+!       integer, allocatable :: cell_index(:)
         integer :: icell, iedge, cids(2), vids(2), fids(2), itmp, ivertex, cid
         real(dp) :: lambda_1, lambda_2, area, conductance, edis_1, edis_2
 
@@ -1455,14 +1507,9 @@ if (mod(iface,2)==0) avec = -avec
           geometry(icell) = this%cells(icell)%geometry(this)
         end do
 
-        allocate(cell_index(this%nvertices), source=MAP_NULL)
-        ! cell_index links vertex with a cell in mesh, or is MAP_NULL for
-        ! ghost verices
-        do icell = 1, this%ncells
-          cell_index( &
-              this%index_from_handle(this%cells(icell)%dual_vertex)) = &
-              icell
-        end do
+        ! v2c_index links vertex with a cell in mesh,
+        ! or it is MAP_NULL for ghost verices
+        call this%build_v2c_index()
 
         ! edge conductance
         do iedge=1, this%nedges
@@ -1470,11 +1517,11 @@ if (mod(iface,2)==0) avec = -avec
             conductance = 0.0_dp
           else
             vids = this%edges(iedge)%vertex_indices(this%graph_t)
-            lambda_1 = this%vertices(vids(1))%rpar(position_capacity)
-            lambda_2 = this%vertices(vids(2))%rpar(position_capacity)
+            lambda_1 = this%vertices(vids(1))%rpar(position_conductivity)
+            lambda_2 = this%vertices(vids(2))%rpar(position_conductivity)
 
-            cids(1) = cell_index(vids(1))
-            cids(2) = cell_index(vids(2))
+            cids(1) = this%v2c_index(vids(1))
+            cids(2) = this%v2c_index(vids(2))
 
             if (any(cids==MAP_NULL)) then
               ! border edge
@@ -1516,9 +1563,7 @@ if (mod(iface,2)==0) avec = -avec
               conductance = lambda_1 * area / edis_1
             else
               ! regular edge
-print *, 'cids = ',cids
               fids = this%face_indices(cids)
-print *, '... fids = ',fids
               area = sqrt( dot_product( &
                   geometry(cids(1))%area_vector(:,fids(1)), &
                   geometry(cids(1))%area_vector(:,fids(1)) ) )
@@ -1538,7 +1583,7 @@ print *, '... fids = ',fids
         ! vertex capacitance
         allocate(diag(this%nvertices), source=0.0_dp)
         do ivertex = 1, this%nvertices
-          cid = cell_index(ivertex)
+          cid = this%v2c_index(ivertex)
           if (cid == MAP_NULL) cycle
           diag(ivertex) = this%vertices(ivertex)%rpar(position_capacity) * &
               geometry(cid)%volume / dt_comp
@@ -1554,7 +1599,6 @@ print *, '... fids = ',fids
       do
         ! update x
         x_new = x_old
- print *, size(diag), size(x_old), size(is_external)
         call conjugate_gradient(this%graph_t, x_new, position_conductance, &
             is_external, emask0, iflag, diag=diag, x_old=x_old, &
             rtol_l2=rtol_l2, rtol_linf=rtol_linf)
