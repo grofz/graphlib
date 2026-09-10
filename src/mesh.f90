@@ -94,6 +94,7 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
      !procedure :: build_selection_masks
       procedure, non_overridable :: find_cell_id => mesh_find_cell_id
       procedure, non_overridable :: face_indices => mesh_face_indices
+      procedure, non_overridable :: edge_conductance => mesh_edge_conductance
       procedure, non_overridable :: add_point => mesh_add_point
       procedure, non_overridable :: add_cell => mesh_add_cell
       procedure, non_overridable :: remove_point => mesh_remove_point
@@ -882,6 +883,88 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
     end function mesh_face_indices
 
 
+!TODO - as soon as v2c_index validity is completed, we can make this pure
+! and this intent(in)
+!   pure function mesh_edge_conductance( &
+    function mesh_edge_conductance( &
+        this, geometry, position_conductivity, emask) result(conductance)
+      class(mesh_t), intent(inout) :: this
+!     class(mesh_t), intent(in) :: this
+      type(cell_geometry_t), intent(in) :: geometry(:)
+      integer, intent(in) :: position_conductivity
+      logical, intent(in) :: emask(:)
+      real(dp), allocatable :: conductance(:)
+!
+! TODO Documentation
+!
+      integer :: iedge, vids(2), cids(2), fids(2), itmp, ireg
+      real(dp) :: area, edis(2), lambda(2)
+
+      if (size(geometry) /= this%ncells) error stop &
+          'mesh_edge_conductance - geometry size invalid'
+      if (size(emask) /= this%nedges) error stop &
+          'mesh_edge_cinductance - emask size invalid'
+
+      allocate(conductance(this%nedges), source=0.0_dp)
+
+      call this%build_v2c_index() ! TODO later replace to check index is valid
+
+      do iedge=1, this%nedges
+        if (.not. emask(iedge)) cycle
+        vids = this%edges(iedge)%vertex_indices(this%graph_t)
+        lambda(1) = this%vertices(vids(1))%rpar(position_conductivity)
+        lambda(2) = this%vertices(vids(2))%rpar(position_conductivity)
+
+        cids(1) = this%v2c_index(vids(1))
+        cids(2) = this%v2c_index(vids(2))
+
+        if (any(cids==MAP_NULL)) then
+          ! border edge
+          if (cids(1)/=MAP_NULL) then
+            ireg = 1
+          else if (cids(2)/=MAP_NULL) then
+            ireg = 2
+          else
+            error stop 'edge_conductance - one vertex must be cell-associated'
+          end if
+
+          do itmp = 1, this%npoints_per_cell()
+            if (this%index_from_handle( &
+                this%cells(cids(ireg))%ngb_cells(itmp))==MAP_NULL) exit
+            ! TODO for now, a first boundary face is selected
+            ! multi-boundary cells will be solved later
+          end do
+          if (itmp==this%npoints_per_cell()+1) error stop &
+            'edge_conductance - boundary face of cell not found'
+          fids(ireg) = itmp
+          area = sqrt( dot_product( &
+              geometry(cids(ireg))%area_vector(:,fids(ireg)), &
+              geometry(cids(ireg))%area_vector(:,fids(ireg)) ) )
+          edis(ireg) = geometry(cids(ireg))%face_distance(fids(ireg))
+
+          if (edis(ireg) <= 0.0_dp) error stop &
+            'edge_conductance - face distance to the boundary must be a positive number'
+          conductance(iedge) = lambda(ireg) * area / edis(ireg)
+
+        else
+          ! regular edge
+          fids = this%face_indices(cids)
+          area = sqrt( dot_product( &
+              geometry(cids(1))%area_vector(:,fids(1)), &
+              geometry(cids(1))%area_vector(:,fids(1)) ) )
+          edis(1) = geometry(cids(1))%face_distance(fids(1))
+          edis(2) = geometry(cids(2))%face_distance(fids(2))
+
+          if (any(lambda <= 0.0_dp)) error stop &
+              'edge_conductance - conductivity must be a positive number'
+          if (any(edis <= 0.0_dp)) error stop &
+              'edge_conductance - face distance must be a positive number'
+          conductance(iedge) = area / (edis(1)/lambda(1) + edis(2)/lambda(2))
+        end if
+      end do
+    end function mesh_edge_conductance
+
+
    !pure function mesh_find_mirror_cell_id(this, cell, ploc) result(cid)
    !  class(mesh_t), intent(in) :: this
    !  type(cell_t), intent(in) :: cell
@@ -1462,10 +1545,11 @@ if (mod(iface,2)==0) avec = -avec
       integer, parameter :: BC_NONE = 0
       logical, allocatable :: vmask0(:), emask0(:), is_external(:)
       integer :: iout, iflag, icomp, ivertex
-      real(dp) :: t, dt, finterpol, diag_factor, dt_min
+      real(dp) :: t, dt, finterpol, diag_factor, dt_min_tol
       real(dp), allocatable :: x_old(:), x_new(:), tmp(:), diag(:)
       logical :: is_out, is_last
 
+      ! Verify arguments
       if (this%is_directed()) error stop &
         'integrate_pde - undirected graph required'
       if (position_conductance < 1 .or. position_conductance > ESIZE_RPAR) &
@@ -1485,12 +1569,13 @@ if (mod(iface,2)==0) avec = -avec
       if (dt_comp > dt_out) error stop &
         'integrate_pde - dt_out must not be smaller than dt_comp'
 
+      ! Mark active vertices and edges
       call this%build_selection_masks(vmask0, emask0, vmask_provided=vmask, &
           emask_provided=emask, vselector=vselector, eselector=eselector)
 
+      ! Working and output arrays
       allocate(x_old(this%nvertices), x_new(this%nvertices))
       associate (nout => ceiling((t_end-t_start)/dt_out) + 1)
-        ! nout >= 2 if t_end > t_start
         allocate(t_out(nout))
         allocate(x_out(this%nvertices, nout))
       end associate
@@ -1500,15 +1585,13 @@ if (mod(iface,2)==0) avec = -avec
       x_out(:,iout) = x_init
       x_old = x_init
       t = t_start
-      dt_min = max(1.0_dp, abs(t_start), abs(t_end)) * 10.0 * epsilon(1.0_dp)
+      dt_min_tol = max(1.0_dp,abs(t_start),abs(t_end)) * 10.0 * epsilon(1.0_dp)
 
       ! get edge conductance and store it to "edges/rpar" array
       ! get vertex capacitance and consturct diag(:)
-!TODO factor out to a separate procedure
       GEOM_BLOCK: block
         type(cell_geometry_t), allocatable :: geometry(:)
-        integer :: icell, iedge, cids(2), vids(2), fids(2), itmp, cid
-        real(dp) :: lambda_1, lambda_2, area, conductance, edis_1, edis_2
+        integer :: icell, cid
 
         allocate(geometry(this%ncells))
         do icell=1, this%ncells
@@ -1520,73 +1603,8 @@ if (mod(iface,2)==0) avec = -avec
         call this%build_v2c_index()
 
         ! edge conductance
-        do iedge=1, this%nedges
-          if (.not. emask0(iedge)) then
-            conductance = 0.0_dp
-          else
-            vids = this%edges(iedge)%vertex_indices(this%graph_t)
-            lambda_1 = this%vertices(vids(1))%rpar(position_conductivity)
-            lambda_2 = this%vertices(vids(2))%rpar(position_conductivity)
-
-            cids(1) = this%v2c_index(vids(1))
-            cids(2) = this%v2c_index(vids(2))
-
-            if (any(cids==MAP_NULL)) then
-              ! border edge
-              if (cids(1)/=MAP_NULL) then
-                do itmp = 1, this%npoints_per_cell()
-                  if (this%index_from_handle( &
-                      this%cells(cids(1))%ngb_cells(itmp))==MAP_NULL) exit
-                  ! TODO for now, a first boundary face is selected
-                  ! multi-boundary cells will be solved later
-                end do
-                if (itmp==this%npoints_per_cell()+1) error stop &
-                  'integrate_pde - boundary face of cell 1 not found'
-                fids(1) = itmp
-                area = sqrt( dot_product( &
-                    geometry(cids(1))%area_vector(:,fids(1)), &
-                    geometry(cids(1))%area_vector(:,fids(1)) ) )
-                edis_1 = geometry(cids(1))%face_distance(fids(1))
-              else if (cids(2)/=MAP_NULL) then
-                do itmp = 1, this%npoints_per_cell()
-                  if (this%index_from_handle( &
-                      this%cells(cids(2))%ngb_cells(itmp))==MAP_NULL) exit
-                  ! TODO for now, a first boundary face is selected
-                  ! multi-boundary cells will be solved later
-                end do
-                if (itmp==this%npoints_per_cell()+1) error stop &
-                  'integrate_pde - boundary face of cell 1 not found'
-                fids(2) = itmp
-                area = sqrt( dot_product( &
-                    geometry(cids(2))%area_vector(:,fids(2)), &
-                    geometry(cids(2))%area_vector(:,fids(2)) ) )
-                edis_2 = geometry(cids(2))%face_distance(fids(2))
-                edis_1 = edis_2
-                lambda_1 = lambda_2
-              else
-                error stop 'integrate_pde - one vertex must be cell-associated'
-              end if
-              if (edis_1 <= 0.0_dp) error stop &
-                'integrate_pde - face distance to boundary must be a positive number'
-              conductance = lambda_1 * area / edis_1
-            else
-              ! regular edge
-              fids = this%face_indices(cids)
-              area = sqrt( dot_product( &
-                  geometry(cids(1))%area_vector(:,fids(1)), &
-                  geometry(cids(1))%area_vector(:,fids(1)) ) )
-              edis_1 = geometry(cids(1))%face_distance(fids(1))
-              edis_2 = geometry(cids(2))%face_distance(fids(2))
-
-              if (lambda_1 <= 0.0_dp .or. lambda_2 <= 0.0_dp) error stop &
-                  'integrate_pde - conductivity must be a positive number'
-              if (edis_1 <= 0.0_dp .or. edis_2 <= 0.0_dp) error stop &
-                  'integrate_pde - face distance must be a positive number'
-              conductance = area / (edis_1/lambda_1 + edis_2/lambda_2)
-            end if
-          end if
-          this%edges(iedge)%rpar(position_conductance) = conductance
-        end do
+        this%edges(1:this%nedges)%rpar(position_conductance) = &
+           this%edge_conductance(geometry, position_conductivity, emask0)
 
         ! vertex capacitance
         allocate(diag(this%nvertices), source=0.0_dp)
@@ -1596,7 +1614,6 @@ if (mod(iface,2)==0) avec = -avec
           diag(ivertex) = this%vertices(ivertex)%rpar(position_capacity) * &
               geometry(cid)%volume / dt_comp
         end do
-
       end block GEOM_BLOCK
 
       allocate(is_external(this%nvertices), source=.true.)
@@ -1604,20 +1621,19 @@ if (mod(iface,2)==0) avec = -avec
         is_external = .false.
       end where
 
-      ! integration loop
-      do
+      INTEGRATION_LOOP: do
         ! next computational time step
         if (t_end - t >= dt_comp) then
-          dt = dt_comp
           is_last = .false.
+          dt = dt_comp
           diag_factor = 1.0_dp
         else
-          ! last step will be shorter, diag vector is rescaled
+          ! last step will be shorter
+          is_last = .true.
           dt = t_end - t
-          if (dt <= DT_MIN) error stop &
+          if (dt <= dt_min_tol) error stop &
             'integrate_pde - dt too small (internal error)'
           diag_factor = dt_comp / dt
-          is_last = .true.
         end if
 
         ! update x
@@ -1625,9 +1641,6 @@ if (mod(iface,2)==0) avec = -avec
         call conjugate_gradient(this%graph_t, x_new, position_conductance, &
             is_external, emask0, iflag, diag=diag*diag_factor, &
             rtol_l2=rtol_l2, rtol_linf=rtol_linf)
-       !call conjugate_gradient(this%graph_t, x_new, position_conductance, &
-       !    is_external, emask0, iflag, diag=diag*diag_factor, x_old=x_old, &
-       !    rtol_l2=rtol_l2, rtol_linf=rtol_linf)
         if (iflag/=CG_OK .and. iflag/=CG_MAXITER) then
           print *, 'conjugate_gradient iflag = ',iflag, t
           error stop 'integration_pde - could not solve step'
@@ -1643,32 +1656,34 @@ if (mod(iface,2)==0) avec = -avec
         end if
         icomp = icomp + 1
 
-        ! write output and update "iout"
-        if (t >= t_start + real(iout,dp)*dt_out) then
-          finterpol = (t - (t_start + real(iout,dp)*dt_out)) / dt
-          iout = iout + 1
-          t_out(iout) = t - finterpol*dt
-          x_out(:,iout) = (1.0_dp-finterpol)*x_new + finterpol*x_old
-          is_out = .true.
-        else
-          is_out = .false.
-        end if
+        ! store output and advance "iout"
+        associate (next_tout => t_start + real(iout,dp)*dt_out)
+          if (t >= next_tout) then
+            finterpol = (t - next_tout) / dt
+            iout = iout + 1
+            t_out(iout) = t - finterpol*dt
+            x_out(:,iout) = (1.0_dp-finterpol)*x_new + finterpol*x_old
+            is_out = .true.
+          else
+            is_out = .false.
+          end if
+        end associate
 
-        ! if end of loop, update "t_end" and write last "x_out" column
-        if (t >= t_end - dt_min) then
+        ! if end of loop, store last output column if not yet stored
+        if (t >= t_end - dt_min_tol) then
           if (.not. is_out) then
             iout = iout + 1
             t_out(iout) = t
             x_out(:,iout) = x_new
           end if
-          exit
+          exit INTEGRATION_LOOP
         end if
 
         ! swap x_old with x_new
         call move_alloc(x_old, tmp)
         call move_alloc(x_new, x_old)
         call move_alloc(tmp, x_new)
-      end do
+      end do INTEGRATION_LOOP
 
       if (iout /= size(x_out,2)) error stop &
         'integrate_pde - not all positions written'
