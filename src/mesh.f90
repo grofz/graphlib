@@ -81,6 +81,8 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
           ! .true. = tetrahedral mesh (cell defined from 4 points)
       type(queue_t), private :: free_phandles, free_chandles
       integer, allocatable :: v2c_index(:)
+!TODO add flag if v2c index is valid, it each vertex addition/removal
+! would invalidate it, must override remove_vertex, add_vertex from graph_t
     contains
       ! these procedures override procedures from graph_t class (note)
       procedure :: initialize => mesh_initialize
@@ -1496,6 +1498,7 @@ if (mod(iface,2)==0) avec = -avec
 
       ! get edge conductance and store it to "edges/rpar" array
       ! get vertex capacitance and consturct diag(:)
+!TODO factor out to a separate procedure
       GEOM_BLOCK: block
         type(cell_geometry_t), allocatable :: geometry(:)
 !       integer, allocatable :: cell_index(:)

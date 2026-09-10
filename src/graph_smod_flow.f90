@@ -1206,6 +1206,10 @@
 !       rtol_l2, rtol_linf, rtol_bounds)
 ! -----------------------------------------------------------------------------
     module procedure conjugate_gradient
+!TODO - remove x_old as an argument; the initial value of x can be used during
+!       construction of b_vectro instead of x_old. We probably do not need
+!       different values for old time step and the initial guess: "x" can serve
+!       both purposes
       real(dp), allocatable :: y(:), r(:), rnew(:), p(:), b(:)
       real(dp) :: alfa, beta, tol_linf, tol_l2, denom, b2
       integer :: k, maxiter
