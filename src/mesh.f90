@@ -1441,16 +1441,15 @@ if (mod(iface,2)==0) avec = -avec
     ! ------------------------------------------------
     subroutine integrate_pde(this, t_start, t_end, dt_comp, dt_out, &
         position_conductivity, position_capacity, position_conductance, &
-        bc_label, x_init, x_out, &
+        bc_label, x_init, t_out, x_out, &
         vmask, emask, vselector, eselector, rtol_l2, rtol_linf)
       class(mesh_t), intent(inout) :: this
-      real(dp), intent(in) :: t_start, dt_comp, dt_out
-      real(dp), intent(inout) :: t_end
+      real(dp), intent(in) :: t_start, t_end, dt_comp, dt_out
       integer, intent(in) :: position_capacity, position_conductivity
       integer, intent(in) :: position_conductance
       integer, intent(in) :: bc_label(:)
       real(dp), intent(in) :: x_init(:)
-      real(dp), intent(out), allocatable :: x_out(:,:)
+      real(dp), intent(out), allocatable :: x_out(:,:), t_out(:)
       logical, intent(in), optional :: vmask(:), emask(:)
       procedure(is_vertex_selected), optional :: vselector
       procedure(is_edge_selected), optional :: eselector
@@ -1462,10 +1461,10 @@ if (mod(iface,2)==0) avec = -avec
           ! TODO import from graph_smod_flow
       integer, parameter :: BC_NONE = 0
       logical, allocatable :: vmask0(:), emask0(:), is_external(:)
-      integer :: iout, iflag, icomp
-      real(dp) :: t, dt, finterpol
+      integer :: iout, iflag, icomp, ivertex
+      real(dp) :: t, dt, finterpol, diag_factor, dt_min
       real(dp), allocatable :: x_old(:), x_new(:), tmp(:), diag(:)
-      logical :: is_out
+      logical :: is_out, is_last
 
       if (this%is_directed()) error stop &
         'integrate_pde - undirected graph required'
@@ -1481,6 +1480,10 @@ if (mod(iface,2)==0) avec = -avec
         'integrate_pde - size of x_init is invalid'
       if (t_end <= t_start) error stop &
         'integrate_pde - t_end <= t_start'
+      if (dt_comp <= 0.0_dp .or. dt_out <= 0.0_dp) error stop &
+        'integrate_pde - dt_comp and dt_out must be positive'
+      if (dt_comp > dt_out) error stop &
+        'integrate_pde - dt_out must not be smaller than dt_comp'
 
       call this%build_selection_masks(vmask0, emask0, vmask_provided=vmask, &
           emask_provided=emask, vselector=vselector, eselector=eselector)
@@ -1488,21 +1491,23 @@ if (mod(iface,2)==0) avec = -avec
       allocate(x_old(this%nvertices), x_new(this%nvertices))
       associate (nout => ceiling((t_end-t_start)/dt_out) + 1)
         ! nout >= 2 if t_end > t_start
+        allocate(t_out(nout))
         allocate(x_out(this%nvertices, nout))
       end associate
       iout = 1
       icomp = 1
+      t_out(iout) = t_start
       x_out(:,iout) = x_init
       x_old = x_init
       t = t_start
+      dt_min = max(1.0_dp, abs(t_start), abs(t_end)) * 10.0 * epsilon(1.0_dp)
 
       ! get edge conductance and store it to "edges/rpar" array
       ! get vertex capacitance and consturct diag(:)
 !TODO factor out to a separate procedure
       GEOM_BLOCK: block
         type(cell_geometry_t), allocatable :: geometry(:)
-!       integer, allocatable :: cell_index(:)
-        integer :: icell, iedge, cids(2), vids(2), fids(2), itmp, ivertex, cid
+        integer :: icell, iedge, cids(2), vids(2), fids(2), itmp, cid
         real(dp) :: lambda_1, lambda_2, area, conductance, edis_1, edis_2
 
         allocate(geometry(this%ncells))
@@ -1599,43 +1604,66 @@ if (mod(iface,2)==0) avec = -avec
         is_external = .false.
       end where
 
+      ! integration loop
       do
+        ! next computational time step
+        if (t_end - t >= dt_comp) then
+          dt = dt_comp
+          is_last = .false.
+          diag_factor = 1.0_dp
+        else
+          ! last step will be shorter, diag vector is rescaled
+          dt = t_end - t
+          if (dt <= DT_MIN) error stop &
+            'integrate_pde - dt too small (internal error)'
+          diag_factor = dt_comp / dt
+          is_last = .true.
+        end if
+
         ! update x
         x_new = x_old
         call conjugate_gradient(this%graph_t, x_new, position_conductance, &
-            is_external, emask0, iflag, diag=diag, x_old=x_old, &
+            is_external, emask0, iflag, diag=diag*diag_factor, &
             rtol_l2=rtol_l2, rtol_linf=rtol_linf)
+       !call conjugate_gradient(this%graph_t, x_new, position_conductance, &
+       !    is_external, emask0, iflag, diag=diag*diag_factor, x_old=x_old, &
+       !    rtol_l2=rtol_l2, rtol_linf=rtol_linf)
         if (iflag/=CG_OK .and. iflag/=CG_MAXITER) then
           print *, 'conjugate_gradient iflag = ',iflag, t
           error stop 'integration_pde - could not solve step'
         else if (iflag==CG_MAXITER) then
           print *, 'conjugate_gradient WARNING tolerance not met ', t
         end if
+
         ! update time
-        t = t_start + real(icomp,dp)*dt_comp
+        if (.not. is_last) then
+          t = t_start + real(icomp,dp)*dt_comp
+        else
+          t = t_start + real(icomp-1,dp)*dt_comp + dt
+        end if
         icomp = icomp + 1
+
         ! write output and update "iout"
         if (t >= t_start + real(iout,dp)*dt_out) then
-          finterpol = (t - (t_start+real(iout,dp)*dt_out)) / dt_comp
+          finterpol = (t - (t_start + real(iout,dp)*dt_out)) / dt
           iout = iout + 1
+          t_out(iout) = t - finterpol*dt
           x_out(:,iout) = (1.0_dp-finterpol)*x_new + finterpol*x_old
           is_out = .true.
         else
           is_out = .false.
         end if
+
         ! if end of loop, update "t_end" and write last "x_out" column
-        if (t >= t_end) then
-          t_end = t
+        if (t >= t_end - dt_min) then
           if (.not. is_out) then
             iout = iout + 1
-            if (iout /= size(x_out,2)) then
-              print *, iout, shape(x_out)
-              error stop 'integrate_pde - internal errro'
-            end if
+            t_out(iout) = t
             x_out(:,iout) = x_new
           end if
           exit
         end if
+
         ! swap x_old with x_new
         call move_alloc(x_old, tmp)
         call move_alloc(x_new, x_old)
@@ -1645,7 +1673,6 @@ if (mod(iface,2)==0) avec = -avec
       if (iout /= size(x_out,2)) error stop &
         'integrate_pde - not all positions written'
 
-    contains
     end subroutine integrate_pde
 
 

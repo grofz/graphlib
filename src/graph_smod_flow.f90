@@ -1206,10 +1206,6 @@
 !       rtol_l2, rtol_linf, rtol_bounds)
 ! -----------------------------------------------------------------------------
     module procedure conjugate_gradient
-!TODO - remove x_old as an argument; the initial value of x can be used during
-!       construction of b_vectro instead of x_old. We probably do not need
-!       different values for old time step and the initial guess: "x" can serve
-!       both purposes
       real(dp), allocatable :: y(:), r(:), rnew(:), p(:), b(:)
       real(dp) :: alfa, beta, tol_linf, tol_l2, denom, b2
       integer :: k, maxiter
@@ -1220,8 +1216,13 @@
       end associate
 
       ! b-vector
-      call b_vector(g, position_conductance, is_external, emask, x, b, &
-          diag, x_old, source)
+      if (present(diag) .and. .not. present(x_old)) then
+        call b_vector(g, position_conductance, is_external, emask, x, b, &
+            diag, x, source) ! "x" argument used twice, but it should be ok
+      else
+        call b_vector(g, position_conductance, is_external, emask, x, b, &
+            diag, x_old, source)
+      end if
       b2 = dot_product(b, b)
       if (b2 <= tiny(1.0_dp)) then
         ! Vector b contains only zeros. This could mean no internal node has
@@ -1456,6 +1457,10 @@
             b(i) = b(i) + diag(i)*x_old(i)
           end do
         end block
+#ifdef DEBUG
+      else if (present(diag) .or. present(x_old)) then
+        error stop 'b_vector - diag and x_old: both or none must be present'
+#endif
       end if
       if (present(source)) then
         if (size(source) /= size(b)) error stop &

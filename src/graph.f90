@@ -549,33 +549,44 @@
 !   position_conductance - position of g_ij in edges/rpar array
 !   is_external - .true. marks external nodes
 !   emask       - .true. marks selected (open for flow) edges
-!   diag        - (optional) diagonal elements contributions to A
-!   xold        - (optional) potential at the previous time-step
-!   source      - (optional) fixed size source/sink
-!   rtol_l2, rtol_linf, rtol_bounds - optional tolerance setting
+!   diag        - (optional) diagonal contributions to A
+!   xold        - (optional) potential ftom the previous time step used for
+!                 constructing the right-hand side when "diag" is present.
+!                 If absent, the initial values of x are used instead.
+!   source      - (optional) fixed source/sink term
+!   rtol_l2, rtol_linf, rtol_bounds - optional tolerance settings
 !
 ! OUT:
 !   x           - solution for internal nodes
 !   iflag       - output flag:
 !                 - CG_OK if solved successfully
 !                 - CG_MAXITER if convergence tolerances not met after the
-!                   set maximum number of iterations.
-!                 - CG_TRIVIAL if vector b is zero (non-percolating network).
-!                 - CG_OUT_VALID_RANGE if, after leaving iteration loop, some
-!                   x values are out of (x_low,x_high) range
-!                 - CG_NOT_POSDEF_MATRIX if matrix is not positive definite.
+!                   set maximum number of iterations
+!                 - CG_TRIVIAL if vector b is zero (non-percolating network)
+!                 - CG_OUT_VALID_RANGE if, after leaving the iteration loop,
+!                   some x values are outside the (x_low,x_high) range
+!                 - CG_NOT_POSDEF_MATRIX if matrix is not positive definite
+! REMARKS
+! 1. If "diag" is present and "xold" is absent, the initial values of "x" are
+!    used as the previous-state values when constructing the right-hand side.
+!    These values are captured before x is modified by the CG iteration.
 !
-! Remark:
+! 2. Equation being solved
+!
 !   transient transport equation
 !         c_i * (x_i-xold_i)/dt + sum_j g_ij (x_i-x_j) = s_i
+!   with
 !         d_i = c_i / dt
-!   then
+!
+!   or
 !         d_i*x_i + sum_j g_ij (x_i-x_j) = d_i*xold_i + s_i
+!
+!   hence
 !         (d_i+sum_j g_ij)*x_i - sum_j g_ij x_j = d_i*xold_i + s_i
 !
-!         ==============================================
-!         (D+L)*x = D*xold + S + b_boundary  --> A*x = b
-!         ==============================================
+!   ==============================================
+!   (D+L)*x = D*xold + S + b_boundary  --> A*x = b
+!   ==============================================
 !
       end subroutine conjugate_gradient
 
