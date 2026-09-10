@@ -1476,23 +1476,11 @@
     end subroutine b_vector
 
 
-    pure subroutine flow_accumulation(g, position_conductance, emask, x, &
-        accumulation, flow)
-      class(graph_t), intent(in) :: g
-      integer, intent(in) :: position_conductance
-      logical, intent(in) :: emask(:)
-      real(dp), intent(in) :: x(:)
-      real(dp), intent(out), allocatable :: accumulation(:)
-      real(dp), intent(out), allocatable, optional :: flow(:)
-!
-! Compute accumulation at each vertex and optionally flow along each edge
-! for the actual potential field "x" using the conductance in edges/rpar
-! array at position_conductance. Only edges selected by emask are considered.
-!
-! For each i-j edge:
-!   flow_ij = g_ij * (x_i - x_j) if emask_ij is .TRUE.
-!   flow_ij = 0                  if emask_ij is .FALSE.
-!
+! -----------------------------------------------------------------------------
+!   module pure subroutine flow_accumulation(g, position_conductance, &
+!       emask, x, & accumulation, flow)
+! -----------------------------------------------------------------------------
+    module procedure flow_accumulation
       integer :: iedge, ivertices(2)
       real(dp) :: flow_current
 
@@ -1515,6 +1503,6 @@
           if (present(flow)) flow(iedge) = flow_current
         end associate
       end do
-    end subroutine flow_accumulation
+    end procedure flow_accumulation
 
   end submodule graph_smod_flow

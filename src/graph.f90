@@ -32,7 +32,7 @@
     implicit none (type, external)
     private
 
-    public conjugate_gradient
+    public conjugate_gradient, flow_accumulation
     public is_vertex_selected, is_edge_selected
 
     ! Workaround to gfortran bug (procedures used by submodules)
@@ -589,6 +589,26 @@
 !   ==============================================
 !
       end subroutine conjugate_gradient
+
+
+      module pure subroutine flow_accumulation(g, position_conductance, &
+          emask, x, accumulation, flow)
+        class(graph_t), intent(in) :: g
+        integer, intent(in) :: position_conductance
+        logical, intent(in) :: emask(:)
+        real(dp), intent(in) :: x(:)
+        real(dp), intent(out), allocatable :: accumulation(:)
+        real(dp), intent(out), allocatable, optional :: flow(:)
+!
+! Compute accumulation at each vertex and optionally flow along each edge
+! for the actual potential field "x" using the conductance in edges/rpar
+! array at position_conductance. Only edges selected by emask are considered.
+!
+! For each i-j edge:
+!   flow_ij = g_ij * (x_i - x_j) if emask_ij is .TRUE.
+!   flow_ij = 0                  if emask_ij is .FALSE.
+!
+      end subroutine flow_accumulation
 
     end interface ! submodules
 
