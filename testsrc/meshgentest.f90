@@ -4,9 +4,10 @@
 
     integer :: fid
     real(dp) :: conductivity, capacity
-   !real(dp), parameter :: h(*) = real([0.5,0.25,0.125,0.0625,0.03125],dp)
-    real(dp), parameter :: h(*) = real([0.5,0.25,0.125,0.0625],dp)
-    real(dp), parameter :: dt(*)= real([1.0, 0.5, 0.25, 0.125, 0.0625],dp)
+    real(dp), parameter :: h(*) = real([0.5,0.25,0.125,0.0625,0.03125],dp)
+    real(dp), parameter :: dt(*)= real([1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125],dp)
+   !real(dp), parameter :: h(*) = real([0.25],dp)
+   !real(dp), parameter :: dt(*)= real([0.5],dp)
 
     interface
       subroutine make_timestep_study( &
@@ -19,6 +20,15 @@
     end interface
 
     ! -
+    conductivity = 1.0_dp
+    capacity = 1.0_dp
+    open(newunit=fid, file='a.log', status='replace')
+    call make_timestep_study( &
+      cell_sizes = h, dt_comps = dt, &
+      conductivity = conductivity, capacity = capacity, output_id = fid)
+    close(fid)
+    stop 1
+
     conductivity = 1.0_dp
     capacity = 1.0_dp
     open(newunit=fid, file='convergence11.log', status='replace')
@@ -50,7 +60,8 @@
       output_id)
     use graph_mod, only : graph_handle_t=>handle_t
     use map_mod, only : VPOS_C, VPOS_X, VPOS_RTMP, VPOS_VB, EPOS_RTMP
-    use mesh_mod, only : mesh_t, integrate_pde
+    use mesh_mod, only : mesh_t, integrate_pde, cell_geometry_t, &
+      conservation_test_t
     use vtuio_mod, only : vtuio_write, vtuio_data_t
     use analytical_mod, only : analytical_1d_temperature
     use iso_fortran_env, only : dp=>real64
@@ -77,6 +88,7 @@
     integer, allocatable :: bc_label(:)
     integer, parameter :: NOUTS = 10, ID_AVGERR=1, ID_MAXERR=2
     type(mesh_t) :: m
+    type(conservation_test_t) :: ctest
 
     write(output_id,'("capacity = ",g0,"   conductivity = ",g0)') &
         capacity, conductivity
@@ -96,6 +108,7 @@
         real(dp) :: p0(3), p1(3), p2(3), positions(3,4)
         integer :: boffset(0:4)
         type(graph_handle_t), allocatable :: b(:)
+        type(cell_geometry_t) :: geometry
 
         p0 = 0.0_dp
         p1 = [width, 0.0_dp, 0.0_dp]
@@ -135,7 +148,9 @@
         do i=1, m%nvertices
           if (m%v2c_index(i)<1) cycle
           positions = m%cells(m%v2c_index(i))%point_positions(m)
-          cell_y(i) = sum(positions(2,1:3)) / 3.0_dp
+          geometry = m%cells(m%v2c_index(i))%geometry(m)
+         !cell_y(i) = sum(positions(2,1:3)) / 3.0_dp
+          cell_y(i) = geometry%centre(2)
         end do
 
         print '("Mesh with ",i0," cells and ",i0," vertices generated")', &
@@ -161,7 +176,7 @@
         if (allocated(t_out)) deallocate(t_out)
         call integrate_pde(m, t_start, t_end, dt_comps(idt), dt_out, &
           VPOS_VB, VPOS_RTMP, EPOS_RTMP, &
-          bc_label, u_init, t_out, u_out)
+          bc_label, u_init, t_out, u_out, conservation_test = ctest)
         if (size(u_out,2)/=NOUTS+1) error stop 'size(u_out,2) unexpected'
 
         ! Compare numerical and analytical solution
@@ -204,6 +219,32 @@
             end do
           end block
         end if
+
+        ! evaluate conservation test
+        800 format(2x,6(g12.5,1x))
+        801 format(2x,6(a12,1x))
+        print 801, 'time', 'energy', 'e_delta', 'e_trans', 'diff', 'reldif'
+        802 format(2x,2(13x),4(g12.3,1x))
+        803 format(2x,2(12x),4(a12,1x))
+        print 803, 'e_delta_tot', 'e_trans_tot', 'diff', 'reldif'
+        block
+          real(dp) :: e_dif, dt, err, e_transferred_tot, err_tot
+          e_transferred_tot = 0.0_dp
+          do i=2, size(ctest%t)
+            e_dif = ctest%energy(i) - ctest%energy(i-1)
+            dt = ctest%t(i) - ctest%t(i-1)
+            err = ctest%e_transferred(i) + e_dif
+            e_transferred_tot = e_transferred_tot + ctest%e_transferred(i)
+            err_tot = e_transferred_tot + ctest%energy(i)-ctest%energy(1)
+            print 800, ctest%t(i), ctest%energy(i), &
+              e_dif, ctest%e_transferred(i), &
+              err, err/max(tiny(1.0_dp),abs(e_dif))
+
+            print 802, ctest%energy(i)-ctest%energy(1), e_transferred_tot, &
+              err_tot, err_tot/max(tiny(1.0_dp),abs(ctest%energy(i)-ctest%energy(1)))
+            print *
+          end do
+        end block
       end do RUN_LOOP
     end do MESH_LOOP
 

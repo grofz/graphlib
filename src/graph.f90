@@ -114,9 +114,9 @@
       procedure :: print => graph_print
       procedure :: npoints_per_cell => graph_npoints_per_cell
       procedure, non_overridable :: is_initialized => graph_is_initialized
-      procedure, non_overridable :: add_vertex => graph_add_vertex
+      procedure :: add_vertex => graph_add_vertex
       procedure, non_overridable :: add_edge   => graph_add_edge
-      procedure, non_overridable :: remove_vertex => graph_remove_vertex
+      procedure :: remove_vertex => graph_remove_vertex
       procedure, non_overridable :: remove_edge => graph_remove_edge
       procedure, non_overridable :: &
           remove_orphaned_edges => graph_remove_orphaned_edges
@@ -597,8 +597,8 @@
         integer, intent(in) :: position_conductance
         logical, intent(in) :: emask(:)
         real(dp), intent(in) :: x(:)
-        real(dp), intent(out), allocatable :: accumulation(:)
-        real(dp), intent(out), allocatable, optional :: flow(:)
+        real(dp), intent(inout), allocatable :: accumulation(:)
+        real(dp), intent(inout), allocatable, optional :: flow(:)
 !
 ! Compute accumulation at each vertex and optionally flow along each edge
 ! for the actual potential field "x" using the conductance in edges/rpar

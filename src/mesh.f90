@@ -19,7 +19,8 @@
   module mesh_mod
     use iso_fortran_env, only : dp=>real64, I1B=>int8
     use graph_mod, only : graph_t, graph_handle_t=>handle_t, MAP_NULL, &
-        NOT_INITIALIZED, is_vertex_selected, is_edge_selected, conjugate_gradient
+        NOT_INITIALIZED, is_vertex_selected, is_edge_selected, &
+        conjugate_gradient, flow_accumulation
     use graph_adjlist_mod, only : adjlist_t, iterator_t
     use graph_user_mod, only : VSIZE_IPAR, VSIZE_RPAR, ESIZE_IPAR, ESIZE_RPAR
     use conts_mod, only : queue_t, stack_t, INTEGER_MOLD
@@ -81,6 +82,7 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
           ! .true. = tetrahedral mesh (cell defined from 4 points)
       type(queue_t), private :: free_phandles, free_chandles
       integer, allocatable :: v2c_index(:)
+      logical :: v2c_valid
 !TODO add flag if v2c index is valid, it each vertex addition/removal
 ! would invalidate it, must override remove_vertex, add_vertex from graph_t
     contains
@@ -89,6 +91,8 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
       procedure :: index_from_handle => mesh_index_from_handle
       procedure :: print => mesh_print
       procedure :: npoints_per_cell => mesh_npoints_per_cell
+      procedure :: add_vertex => mesh_add_vertex
+      procedure :: remove_vertex => mesh_remove_vertex
 ! TODO - override these or make them non-overridable in graph_t
      !procedure :: copy
      !procedure :: build_selection_masks
@@ -104,7 +108,46 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
       procedure, non_overridable :: build_v2c_index => mesh_build_v2c_index
     end type mesh_t
 
+    type, public ::  conservation_test_t
+      real(dp), allocatable :: t(:)
+        ! t(k) is the time at the start of the "k"-th computational step
+        ! (and also the time at the end of the "k-1"-th computational step
+      real(dp), allocatable :: energy(:)
+        ! energy(k) is system energy at t(k), calculated as:
+        !   SUM_{i is internal vertex} C_i * x_{i,k}
+      real(dp), allocatable :: e_transferred(:)
+        ! e_transferred(k) is energy transferred through the boundary outside
+        ! the system during the computational step
+        ! (i.e. between times t(k-1) and t(k)) and e_transferred(1) is zero),
+        ! calculated as:
+        !   dt * SUM_{j is boundary edge} flux_j
+    end type conservation_test_t
+
   contains
+
+    function mesh_add_vertex(this, ipar, rpar) result(handle)
+      class(mesh_t), intent(inout) :: this
+      integer, intent(in) :: ipar(:)
+      real(dp), intent(in) :: rpar(:)
+      type(graph_handle_t) :: handle
+!
+! Over-ride graph_t just to allow invalidation of "v2c_index"
+!
+      this%v2c_valid = .false.
+      handle = this%graph_t%add_vertex(ipar, rpar)
+    end function mesh_add_vertex
+
+
+    subroutine mesh_remove_vertex(this, handle)
+      class(mesh_t), intent(inout) :: this
+      type(graph_handle_t), intent(in) :: handle
+!
+! Over-ride graph_t just to allow invalidation of "v2c_index"
+!
+      this%v2c_valid = .false.
+      call this%graph_t%remove_vertex(handle)
+    end subroutine mesh_remove_vertex
+
 
     elemental function mesh_index_from_handle(this, handle) result(id)
       class(mesh_t), intent(in) :: this
@@ -257,6 +300,8 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
         if (present(ccapacity)) new_capacity = ccapacity
         call increase_cells_capacity(this, new_capacity)
       end block
+
+      this%v2c_valid = .false.
     end subroutine mesh_initialize
 
 
@@ -702,6 +747,10 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
 ! cell.
 !
       integer :: i, j
+
+      ! Return if nothing needs to be done
+      if (this%v2c_valid) return
+
       ! Make sure size of "v2c_index" matches "nvertices"
       if (allocated(this%v2c_index)) then
         if (size(this%v2c_index)/=this%nvertices) deallocate(this%v2c_index)
@@ -717,6 +766,7 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
           'mesh_build_v2c_index - dual vertex not present'
         this%v2c_index(j) = i
       end do
+      this%v2c_valid = .true.
     end subroutine mesh_build_v2c_index
 
 
@@ -1525,7 +1575,8 @@ if (mod(iface,2)==0) avec = -avec
     subroutine integrate_pde(this, t_start, t_end, dt_comp, dt_out, &
         position_conductivity, position_capacity, position_conductance, &
         bc_label, x_init, t_out, x_out, &
-        vmask, emask, vselector, eselector, rtol_l2, rtol_linf)
+        vmask, emask, vselector, eselector, rtol_l2, rtol_linf, &
+        conservation_test)
       class(mesh_t), intent(inout) :: this
       real(dp), intent(in) :: t_start, t_end, dt_comp, dt_out
       integer, intent(in) :: position_capacity, position_conductivity
@@ -1537,6 +1588,7 @@ if (mod(iface,2)==0) avec = -avec
       procedure(is_vertex_selected), optional :: vselector
       procedure(is_edge_selected), optional :: eselector
       real(dp), intent(in), optional :: rtol_l2, rtol_linf
+      type(conservation_test_t), intent(out), optional :: conservation_test
 !
 ! TODO Documentation block
 !
@@ -1546,7 +1598,8 @@ if (mod(iface,2)==0) avec = -avec
       logical, allocatable :: vmask0(:), emask0(:), is_external(:)
       integer :: iout, iflag, icomp, ivertex
       real(dp) :: t, dt, finterpol, diag_factor, dt_min_tol
-      real(dp), allocatable :: x_old(:), x_new(:), tmp(:), diag(:)
+      real(dp), allocatable :: x_old(:), x_new(:), tmp(:), diag(:), &
+        accumulation(:)
       logical :: is_out, is_last
 
       ! Verify arguments
@@ -1568,6 +1621,15 @@ if (mod(iface,2)==0) avec = -avec
         'integrate_pde - dt_comp and dt_out must be positive'
       if (dt_comp > dt_out) error stop &
         'integrate_pde - dt_out must not be smaller than dt_comp'
+
+      ! Arrays for the conservation test data
+      if (present(conservation_test)) then
+        associate(ncomp => ceiling((t_end-t_start)/dt_comp) + 1)
+          allocate(conservation_test%t(ncomp))
+          allocate(conservation_test%energy(ncomp))
+          allocate(conservation_test%e_transferred(ncomp))
+        end associate
+      end if
 
       ! Mark active vertices and edges
       call this%build_selection_masks(vmask0, emask0, vmask_provided=vmask, &
@@ -1621,6 +1683,14 @@ if (mod(iface,2)==0) avec = -avec
         is_external = .false.
       end where
 
+      ! initial point of conservation test data
+      if (present(conservation_test)) then
+        conservation_test%t(icomp) = t
+        conservation_test%energy(icomp) = &
+          sum(x_init * diag*dt_comp, mask = .not. is_external)
+        conservation_test%e_transferred(icomp) = 0.0_dp
+      end if
+
       INTEGRATION_LOOP: do
         ! next computational time step
         if (t_end - t >= dt_comp) then
@@ -1669,6 +1739,17 @@ if (mod(iface,2)==0) avec = -avec
           end if
         end associate
 
+        ! conservation test
+        if (present(conservation_test)) then
+          call flow_accumulation( &
+              this, position_conductance, emask0, x_new, accumulation)
+          conservation_test%t(icomp) = t
+          conservation_test%energy(icomp) = &
+              sum(x_new * diag*dt_comp, mask=.not. is_external)
+          conservation_test%e_transferred(icomp) = &
+              sum(accumulation, mask=is_external) * dt
+        end if
+
         ! if end of loop, store last output column if not yet stored
         if (t >= t_end - dt_min_tol) then
           if (.not. is_out) then
@@ -1687,7 +1768,10 @@ if (mod(iface,2)==0) avec = -avec
 
       if (iout /= size(x_out,2)) error stop &
         'integrate_pde - not all positions written'
-
+      if (present(conservation_test)) then
+        if (icomp /= size(conservation_test%t)) error stop &
+            'integrate_pde - not all icomp written (int.error)'
+      end if
     end subroutine integrate_pde
 
 

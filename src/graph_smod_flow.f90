@@ -1478,7 +1478,7 @@
 
 ! -----------------------------------------------------------------------------
 !   module pure subroutine flow_accumulation(g, position_conductance, &
-!       emask, x, & accumulation, flow)
+!       emask, x, accumulation, flow)
 ! -----------------------------------------------------------------------------
     module procedure flow_accumulation
       integer :: iedge, ivertices(2)
@@ -1489,8 +1489,20 @@
       if (size(x) /= g%nvertices) error stop &
           'flow_accumulation - size of x is invalis'
 
-      allocate(accumulation(g%nvertices), source=0.0_dp)
-      if (present(flow)) allocate(flow(g%nedges), source=0.0_dp)
+      ! verify that output arrays have correct size
+      if (allocated(accumulation)) then
+        if (size(accumulation) /= g%nvertices) deallocate(accumulation)
+      end if
+      if (.not. allocated(accumulation)) allocate(accumulation(g%nvertices))
+      accumulation = 0.0_dp
+
+      if (present(flow)) then
+        if (allocated(flow)) then
+          if (size(flow) /= g%nedges) deallocate(flow)
+        end if
+        if (.not. allocated(flow)) allocate(flow(g%nedges))
+        flow = 0.0_dp
+      end if
 
       do iedge=1, g%nedges
         if (.not. emask(iedge)) cycle
