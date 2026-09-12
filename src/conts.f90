@@ -74,7 +74,8 @@ module conts_mod
   contains
     procedure :: initialize => stack_initialize
     procedure :: push => stack_push
-    procedure :: pop => stack_pop
+    procedure :: pop => stack_pop          ! function (not pure)
+    procedure :: pops => stack_pops        ! pure subroutine
     procedure :: export => stack_export
     procedure :: peek => stack_peek
     procedure :: clear => stack_clear
@@ -88,7 +89,8 @@ module conts_mod
   contains
     procedure :: initialize => queue_initialize
     procedure :: enqueue => queue_enqueue
-    procedure :: dequeue => queue_dequeue
+    procedure :: dequeue => queue_dequeue    ! function (not pure)
+    procedure :: dequeues => queue_dequeues  ! pure subroutine
     procedure :: export => queue_export
     procedure :: peek => queue_peek
     procedure :: clear => queue_clear
@@ -355,24 +357,48 @@ contains
   function stack_pop(this) result(pop_item)
     class(stack_t), intent(inout) :: this
     integer :: pop_item(size(this%values,dim=1))
+!
+! stack_pop function is a wrapper to pure subroutine
+!
+    call stack_pops(this, pop_item)
+  end function stack_pop
+
+
+  pure subroutine stack_pops(this, pop_item)
+    class(stack_t), intent(inout) :: this
+    integer, intent(out) :: pop_item(:)
 
     if (this%n < 1) error stop 'stack_pop - empty stack'
+    if (size(pop_item)/=size(this%values,dim=1)) error stop &
+        'stack_pop - pop_item size invalid'
     pop_item = this%values(:,this%n)
     this%n = this%n - 1
-  end function stack_pop
+  end subroutine stack_pops
 
 
   function queue_dequeue(this) result(pop_item)
     class(queue_t), intent(inout) :: this
     integer :: pop_item(size(this%values,dim=1))
-
-    if (this%n < 1) error stop 'queue_dequeue - empty queue'
-    pop_item = this%values(:, modulo(this%rear-this%n-1, size(this%values,dim=2)) + 1)
-    this%n = this%n - 1
+!
+! queue_dequeue function is a wrapper to pure subroutine
+!
+    call queue_dequeues(this, pop_item)
   end function queue_dequeue
 
 
-  function stack_peek(this) result(item)
+  pure subroutine queue_dequeues(this, pop_item)
+    class(queue_t), intent(inout) :: this
+    integer, intent(out) :: pop_item(:)
+
+    if (this%n < 1) error stop 'queue_dequeue - empty queue'
+    if (size(pop_item)/=size(this%values,dim=1)) error stop &
+        'queue_dequeue - pop_item size invalid'
+    pop_item = this%values(:, modulo(this%rear-this%n-1, size(this%values,dim=2)) + 1)
+    this%n = this%n - 1
+  end subroutine queue_dequeues
+
+
+  pure function stack_peek(this) result(item)
     class(stack_t), intent(in) :: this
     integer :: item(size(this%values,dim=1))
 
@@ -381,7 +407,7 @@ contains
   end function stack_peek
 
 
-  function queue_peek(this) result(item)
+  pure function queue_peek(this) result(item)
     class(queue_t), intent(in) :: this
     integer :: item(size(this%values,dim=1))
 
@@ -394,7 +420,7 @@ contains
     class(stack_t), intent(in) :: this
     integer :: values(size(this%values,dim=1), this%n)
     values = this%values(:,1:this%n)
-  end function
+  end function stack_export
 
 
   pure function queue_export(this) result(values)
@@ -416,7 +442,7 @@ contains
     else
       values(:,1:this%n) = this%values(:,front:this%rear-1)
     end if
-  end function
+  end function queue_export
 
 
   ! --------------
@@ -554,13 +580,18 @@ contains
   end subroutine pqueue_increase_capacity
 
 
-  subroutine borrow_handle(this, handle)
+  pure subroutine borrow_handle(this, handle)
     class(pqueue_t), intent(inout) :: this
     type(handle_t), intent(out) :: handle
 
+    integer, parameter :: n = ceiling(real(sizeof(handle))/real(sizeof(1)))
+    integer :: pop_item(n)
+
     if (this%free_handles%size()==0) call pqueue_increase_capacity(this)
     if (this%free_handles%size()==0) error stop 'borrow_handle - no more handles available'
-    handle = transfer(this%free_handles%dequeue(), handle)
+   !handle = transfer(this%free_handles%dequeue(), handle)
+    call this%free_handles%dequeues(pop_item)
+    handle = transfer(pop_item, handle)
   end subroutine borrow_handle
 
 
@@ -804,7 +835,7 @@ contains
   end function pqueue_priority
 
 
-  subroutine pqueue_update_priority(this, handle, new_priority)
+  pure subroutine pqueue_update_priority(this, handle, new_priority)
     class(pqueue_t), intent(inout) :: this
     type(handle_t), intent(in) :: handle
     real(dp), intent(in) :: new_priority
@@ -907,6 +938,7 @@ contains
   ! OTHER
   ! -----
 
+  ! not used at the moment
   subroutine handle_write_formatted(dtv, unit, iotype, v_list, iostat, iomsg)
     class(handle_t), intent(in) :: dtv
     integer, intent(in) :: unit

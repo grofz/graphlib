@@ -840,8 +840,7 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
     ! ---------------------
 
 
-!TODO when pure stack%pop is ready, make this function pure
-    function mesh_find_cell_id(this, pids) result(cids)
+    pure function mesh_find_cell_id(this, pids) result(cids)
       class(mesh_t), intent(in) :: this
       integer, intent(in) :: pids(:)
       integer, allocatable :: cids(:)
@@ -852,7 +851,7 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
 !
       type(iterator_t) :: iterator
       type(stack_t) :: found_cells
-      integer :: cid_current, pids_current(4), i, j
+      integer :: cid_current, pids_current(4), i, j, tmp(1)
       logical :: has_point(4)
 
       ! Validate input
@@ -891,7 +890,8 @@ public integrate_pde, solve_3x3 ! TODO for testing temporarily
       i = 0
       do while(.not. found_cells%empty())
         i = i + 1
-        cids(i) = transfer(found_cells%pop(), 1)
+        call found_cells%pops(tmp)
+        cids(i) = tmp(1)
       end do
       if (i /= size(cids)) error stop &
           'mesh_find_cell_id - stack consumation irregularity (internal error)'
